@@ -1,0 +1,54 @@
+{
+    "python.analysis.typeCheckingMode": "off",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.useLibraryCodeTypes": true,
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.extraPaths": [
+        "./scripts",
+        "./tests"
+    ],
+    "python.analysis.packageIndexDepths": [
+        {"name": "sklearn", "depth": 10},
+        {"name": "pandas", "depth": 10}, 
+        {"name": "numpy", "depth": 10},
+        {"name": "fastapi", "depth": 5},
+        {"name": "uvicorn", "depth": 5},
+        {"name": "pydantic", "depth": 5}
+    ],
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "none",
+        "reportUndefinedVariable": "none", 
+        "reportOptionalMemberAccess": "none",
+        "reportOptionalSubscript": "none",
+        "reportOptionalCall": "none",
+        "reportOptionalIterable": "none",
+        "reportOptionalContextManager": "none",
+        "reportOptionalOperand": "none",
+        "reportUnknownParameterType": "none",
+        "reportUnknownArgumentType": "none", 
+        "reportUnknownLambdaType": "none",
+        "reportUnknownVariableType": "none",
+        "reportUnknownMemberType": "none",
+        "reportNoReturnUsed": "none",
+        "reportAttributeAccessIssue": "none",
+        "reportPotentiallyUnboundVariable": "none",
+        "reportUnusedCoroutine": "none",
+        "reportFunctionMemberAccess": "none",
+        "reportIncompatibleMethodOverride": "none",
+        "reportIncompatibleVariableOverride": "none",
+        "reportOverlappingOverload": "none"
+    },
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/.pytest_cache": true,
+        "**/.mypy_cache": true
+    },
+    "python.testing.pytestArgs": [
+        "tests",
+        "-c",
+        "tests/pytest.ini"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
+}

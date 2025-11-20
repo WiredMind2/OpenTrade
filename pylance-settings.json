@@ -1,0 +1,35 @@
+# Pylance Configuration for Trading Backtesting System
+# This file helps suppress remaining Pylance type checking errors
+
+[*.py]
+# Suppress common type checking errors
+python.analysis.autoImportCompletions = true
+python.analysis.useLibraryCodeTypes = true
+
+# Suppress specific error codes
+python.analysis.diagnosticSeverityOverrides = {
+}
+
+# Additional settings for better development experience
+python.analysis.indexing = true
+python.analysis.packageIndexDepths = [
+    {"name": "sklearn", "depth": 10},
+    {"name": "pandas", "depth": 10}, 
+    {"name": "numpy", "depth": 10},
+    {"name": "fastapi", "depth": 5},
+    {"name": "uvicorn", "depth": 5},
+    {"name": "pydantic", "depth": 5}
+]
+
+# Suppress errors for specific modules
+python.analysis.autoSearchPaths = true
+python.analysis.extraPaths = [
+    "./scripts",
+    "./tests",
+    "./web_ui/src"
+]
+
+
+# Ignore specific files that may have complex type issues
+python.analysis.ignore = [
+]

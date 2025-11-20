@@ -1,0 +1,220 @@
+// API Response Types
+
+export interface HealthResponse {
+  status: string;
+  timestamp: string;
+  version: string;
+  uptime_seconds: number;
+  services: Record<string, string>;
+  database: string;
+  models_loaded: number;
+}
+
+export interface PredictionRequest {
+  ticker: string;
+  horizon: string;
+  context?: Record<string, any>;
+}
+
+export interface PredictionResponse {
+  ticker: string;
+  horizon: string;
+  predicted_return: number;
+  confidence: number;
+  timestamp: string;
+  model_version: string;
+  features_used: string[];
+  metadata?: Record<string, any>;
+}
+
+export interface BacktestRequest {
+  strategy_name: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  parameters?: Record<string, any>;
+}
+
+export interface BacktestResult {
+  strategy_name: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  final_value: number;
+  total_return: number;
+  annualized_return: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  win_rate: number;
+  total_trades: number;
+  avg_trade_return: number;
+  volatility: number;
+  timestamp: string;
+  metrics: Record<string, any>;
+  equity_curve: Array<Record<string, any>>;
+}
+
+export interface ModelInfo {
+  name: string;
+  version: string;
+  horizon: string;
+  accuracy?: number;
+  last_trained: string;
+  features: string[];
+  status: string;
+}
+
+export interface PortfolioResponse {
+  timestamp: string;
+  total_value: number;
+  cash: number;
+  invested_value: number;
+  exposure: number;
+  positions: Array<Record<string, any>>;
+  pnl: number;
+  daily_return: number;
+}
+
+export interface SystemMetrics {
+  timestamp: string;
+  cpu_percent: number;
+  memory_percent: number;
+  disk_usage_percent: number;
+  database_connections: number;
+  active_models: number;
+  recent_predictions: number;
+  error_rate: number;
+}
+
+export interface PriceData {
+  ticker: string;
+  count: number;
+  data: Array<{
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    adjusted_close: number;
+    volume: number;
+  }>;
+}
+
+// OHLC data structure for historical price data
+export interface HistoricalDataPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number | null;
+}
+
+// OHLC data structure for chart display (extends historical with optional prediction flag)
+export interface CandleData extends HistoricalDataPoint {
+  isPrediction?: boolean;
+}
+
+// Prediction data point from API
+export interface PredictionDataPoint {
+  date: string;
+  predicted_price: number | null;
+  actual_price?: number | null;
+  confidence: number;
+  produced_at?: string;
+}
+
+// Prediction data point for chart display
+export interface PredictionPoint {
+  date: string;
+  predicted: number | null;
+  actual?: number;
+  confidence: number;
+}
+
+// Aggregated prediction data point (when multiple predictions per date)
+export interface AggregatedPredictionPoint extends PredictionPoint {
+  count?: number;
+}
+
+// API response for chart data endpoint
+export interface ChartDataResponse {
+  ticker: string;
+  historical_data: HistoricalDataPoint[];
+  predictions: PredictionDataPoint[];
+  raw_predictions?: PredictionDataPoint[];
+}
+
+
+export interface ScriptExecutionRequest {
+  script_name: string;
+  parameters?: Record<string, any>;
+}
+
+export interface ScriptExecutionResponse {
+  script_name: string;
+  status: string;
+  execution_id: string;
+  start_time: string;
+  end_time?: string;
+  output?: string;
+  error?: string;
+  duration_seconds?: number;
+}
+
+export interface PipelineStatus {
+  execution_id: string;
+  current_step?: string;
+  completed_steps: string[];
+  failed_steps: string[];
+  status: string;
+  start_time: string;
+  estimated_completion?: string;
+}
+
+export interface ScriptExecution {
+  execution_id: string;
+  script_name: string;
+  status: string;
+  start_time: string;
+  end_time?: string;
+  duration_seconds?: number;
+}
+
+// WebSocket Message Types
+
+export interface WebSocketMessage {
+  type: string;
+  data: any;
+}
+
+export interface ScriptStatusMessage extends WebSocketMessage {
+  type: "script_status";
+  data: ScriptExecutionResponse;
+}
+
+export interface PipelineStatusMessage extends WebSocketMessage {
+  type: "pipeline_status";
+  data: PipelineStatus;
+}
+
+export interface BacktestStatusMessage extends WebSocketMessage {
+  type: "backtest_status";
+  data: BacktestResult;
+}
+
+export interface ChartUpdateMessage extends WebSocketMessage {
+  type: "chart_update";
+  data: {
+    symbol: string;
+    resolution: string;
+    bar: {
+      time: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume?: number;
+    };
+  };
+}

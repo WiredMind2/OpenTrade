@@ -1,0 +1,202 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light theme (optional) */
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+    --radius: 0.25rem;
+  }
+
+  .dark {
+    /* TradingView-inspired dark theme */
+    --background: 217 33% 7%;        /* #0D1421 */
+    --foreground: 225 11% 85%;       /* #D1D4DC */
+    
+    --card: 220 20% 18%;             /* #1E222D */
+    --card-foreground: 225 11% 85%;  /* #D1D4DC */
+    
+    --popover: 217 33% 7%;           /* #0D1421 */
+    --popover-foreground: 225 11% 85%;
+    
+    --primary: 221 100% 57%;         /* #2962FF */
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 220 17% 20%;        /* #2A2E39 */
+    --secondary-foreground: 225 11% 85%;
+    
+    --muted: 220 17% 20%;            /* #2A2E39 */
+    --muted-foreground: 225 8% 51%;  /* #787B86 */
+    
+    --accent: 220 17% 20%;           /* #2A2E39 */
+    --accent-foreground: 225 11% 85%;
+    
+    --destructive: 354 85% 57%;      /* #F23645 */
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 220 17% 20%;           /* #2A2E39 */
+    --input: 220 17% 20%;
+    --ring: 221 100% 57%;            /* #2962FF */
+    
+    --radius: 0.25rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  
+  /* Remove default focus outline, we'll use ring instead */
+  *:focus {
+    outline: none;
+  }
+}
+
+html, body, #root { 
+  height: 100%;
+  overflow-x: hidden;
+}
+
+/* TradingView-style scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2A2E39;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #363A45;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2A2E39 transparent;
+}
+
+/* Smooth transitions - more subtle than before */
+@layer utilities {
+  .transition-tv {
+    transition-property: color, background-color, border-color, opacity, transform;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+}
+
+/* Selection color */
+::selection {
+  background-color: rgba(41, 98, 255, 0.3);
+  color: #D1D4DC;
+}
+
+/* Remove default button styles */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Utility classes for TradingView styling */
+@layer utilities {
+  .text-tv-primary {
+    color: #D1D4DC;
+  }
+  
+  .text-tv-secondary {
+    color: #787B86;
+  }
+  
+  .text-tv-tertiary {
+    color: #50535E;
+  }
+  
+  .bg-tv-primary {
+    background-color: #0D1421;
+  }
+  
+  .bg-tv-secondary {
+    background-color: #1E222D;
+  }
+  
+  .bg-tv-tertiary {
+    background-color: #2A2E39;
+  }
+  
+  .border-tv-primary {
+    border-color: #2A2E39;
+  }
+  
+  .border-tv-secondary {
+    border-color: #363A45;
+  }
+  
+  /* Compact spacing for TradingView feel */
+  .compact {
+    @apply p-2 gap-2;
+  }
+  
+  .compact-x {
+    @apply px-2 gap-x-2;
+  }
+  
+  .compact-y {
+    @apply py-2 gap-y-2;
+  }
+}
+
+/* Loading shimmer effect */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.shimmer {
+  animation: shimmer 2s linear infinite;
+  background: linear-gradient(
+    to right,
+    #1E222D 0%,
+    #2A2E39 20%,
+    #1E222D 40%,
+    #1E222D 100%
+  );
+  background-size: 1000px 100%;
+}
