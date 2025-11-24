@@ -71,12 +71,6 @@ trading-backtesting/
 └── README.md                  # This README
 ```
 
-## 🧠 Models
-
-The `models/` directory is currently empty. Models can be generated via scripts in `backend/scripts/` (for example `backend/scripts/train_sentiment_model.py`), and be sure to re-run data ingestion scripts to prepare fresh training data.
-
-To retrain or update models, see the training scripts in `backend/scripts/` (for example `backend/scripts/train_sentiment_model.py`), and be sure to re-run data ingestion scripts to prepare fresh training data.
-
 ## 🖥 Running the Frontend
 
 ```powershell
@@ -87,10 +81,6 @@ python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 cd frontend
 npm run dev
 ```
-
-## ⚠️ Known repo issues / notes
-- There is no `backend/db_migrations.py` module in the repo at the moment — some tests import it. If you rely on a migration manager class, please add a `backend/db_migrations.py` module or update test fixtures.
-- The repo currently does not include GitHub Actions workflows. Add them under `.github/workflows/` for CI/CD.
 
 ## 🛠 Installation & Setup
 
@@ -259,28 +249,6 @@ response = requests.post('http://localhost:8000/backtest', json={
 backtest_id = response.json()['id']
 ```
 
-### Frontend Chart Components
-
-
-#### Advanced OHLC Chart with Features
-
-```tsx
-import OHLCChart from './components/OHLCChart';
-
-function AdvancedChart({ chartData }) {
-  return (
-    <OHLCChart
-      data={chartData}
-      showVolume={true}
-      showConfidence={true}
-      height="500px"
-      bullishColor="#10b981"
-      bearishColor="#ef4444"
-    />
-  );
-}
-```
-
 
 ### Data Quality Monitoring
 
@@ -323,38 +291,6 @@ Configure alerts for:
 - API performance degradation
 - Prediction confidence thresholds
 
-## 🚀 Deployment
-
-### Environment Setup
-
-Production deployments should:
-- Use external databases (PostgreSQL recommended)
-- Configure proper logging aggregation
-- Set up monitoring and alerting
-- Implement proper security measures
-- Configure backup strategies
- - Configure backup strategies
-
-## 📚 Development
-
-### Adding New Features
-
-1. **Create Feature Branch**:
-   ```bash
-   git checkout -b feature/new-feature
-   ```
-
-2. **Implement & Test**:
-   - Write tests first (TDD approach)
-   - Implement functionality
-   - Run full test suite
-   - Update documentation
-
-3. **Deploy via CI/CD**:
-   - Push to GitHub
-   - CI/CD pipeline runs tests
-   - Deploy to staging/production
-
 ### Code Quality Standards
 
 - **Type Hints**: All functions should have type annotations
@@ -363,38 +299,12 @@ Production deployments should:
 - **Logging**: Appropriate logging for debugging and monitoring
 - **Error Handling**: Comprehensive error handling and recovery
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
-
-### Development Guidelines
-
-- Follow PEP 8 style guidelines
-- Write comprehensive tests
-- Update documentation
-- Use semantic versioning for releases
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## 🙏 Acknowledgments
 
 - Built with FastAPI, pandas, scikit-learn, and LightGBM
 - Uses TA-Lib for technical analysis indicators
 - Inspired by modern MLOps best practices
 - Designed for production financial trading systems
-
-## 📞 Support
-
-For questions, issues, or contributions:
-- GitHub Issues: [Repository Issues]
-- Documentation: [Docs Site]
-- Email: support@trading-system.com
 
 ---
 
