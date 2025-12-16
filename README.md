@@ -38,8 +38,53 @@ Still, agent coding is just another powerful tool, that has its pros and cons. B
 ### Security & Deployment
 - **Authentication**: API key and JWT-based authentication
 - **CI/CD Pipeline**: Automated testing, building, and deployment
-  
+
    _Note: This repository does not include a `.github/workflows` directory by default. If you want automated CI, add your GitHub Actions workflows under `.github/workflows/`._
+
+## 🤖 Model System
+
+### Overview
+
+The system features a new modular model architecture that enables seamless integration of various machine learning models for trading predictions. This design supports both pre-trained joblib models and custom Python-based models, providing flexibility for different use cases.
+
+### Model Bundle Canonical Format
+
+All models are stored in a standardized bundle format:
+
+```json
+{
+  "meta": {
+    "name": "str",
+    "type": "str",
+    "version": "str",
+    "description": "str",
+    "config_schema": {}
+  },
+  "model": "estimator",
+  "extras": {}
+}
+```
+
+### Adding a New Model
+
+#### For Joblib Models
+Save your trained model in the canonical format using `joblib.dump()`.
+
+#### For Python Models
+Create a new class in `backend/models/` that inherits from `BaseModel` and implements the required methods (e.g., `predict`, `train`).
+
+### Developer Workflow
+
+- **Model Discovery**: Use the model registry to list available models
+- **API Integration**: Access models through dedicated API endpoints
+- **Version Management**: Track model versions and performance metrics
+
+### Running the Application and Tests
+
+1. Activate the virtual environment: `& .venv\Scripts\Activate.ps1`
+2. Start the backend: `python main.py`
+3. Start the frontend: `cd frontend && npm run dev`
+4. Run tests: `pytest`
 
 ## 📁 Project Structure
 

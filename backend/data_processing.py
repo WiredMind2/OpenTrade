@@ -2,13 +2,15 @@
 Data processing utilities for chart data aggregation and transformations.
 """
 import math
+import os
+import sqlite3
 import pandas as pd
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 
 
 def aggregate_predictions(raw_predictions: List[Dict[str, Any]], aggregate: Optional[str]) -> List[Dict[str, Any]]:
@@ -61,7 +63,8 @@ def aggregate_predictions(raw_predictions: List[Dict[str, Any]], aggregate: Opti
             def _to_dt(v):
                 try:
                     return pd.to_datetime(v).to_datetime64()
-                except Exception:
+                except Exception as e:
+                    logger.warning("Date parsing failed for value %s: %s", v, e)
                     return pd.NaT
 
             latest = max(items, key=lambda it: _to_dt(it.get('produced_at')) if it.get('produced_at') else pd.NaT)
@@ -340,3 +343,78 @@ def timeframe_to_resolution(timeframe: str) -> str:
         '1M': '1M'
     }
     return timeframe_map.get(timeframe, '1D')
+
+
+def connect_to_database(db_path: str) -> sqlite3.Connection:
+    """
+    Establish a connection to the SQLite database with error handling.
+
+    Args:
+        db_path: Path to the SQLite database file
+
+    Returns:
+        SQLite connection object
+
+    Raises:
+        sqlite3.OperationalError: If unable to open database file (incorrect path, permissions, non-existent)
+        ValueError: If db_path is invalid
+    """
+    if not db_path or not isinstance(db_path, str):
+        raise ValueError("Database path must be a non-empty string")
+
+    try:
+        # Ensure the directory exists for the database file
+        db_dir = os.path.dirname(os.path.abspath(db_path))
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+
+        conn = sqlite3.connect(db_path)
+        # Test the connection
+        conn.execute("SELECT 1")
+        return conn
+    except sqlite3.OperationalError as e:
+        logger.error(f"Unable to open database file at {db_path}: {e}")
+        raise
+    except PermissionError as e:
+        logger.error(f"Insufficient permissions to access database at {db_path}: {e}")
+        raise sqlite3.OperationalError(f"Permission denied: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error connecting to database at {db_path}: {e}")
+        raise sqlite3.OperationalError(f"Database connection failed: {e}")
+
+
+def execute_db_query(query: str, db_path: Optional[str] = None) -> List[tuple]:
+    """
+    Execute a database query with proper error handling for connectivity issues.
+
+    Args:
+        query: SQL query string to execute
+        db_path: Optional path to database file, defaults to config path
+
+    Returns:
+        List of tuples containing query results
+
+    Raises:
+        sqlite3.OperationalError: If database operational error occurs (connectivity issues)
+        ValueError: If query is invalid
+    """
+    if not query or not isinstance(query, str):
+        raise ValueError("Query must be a non-empty string")
+
+    if db_path is None:
+        from backend.config import get_config
+        config = get_config()
+        db_path = config.database.path
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute(query)
+        results = cursor.fetchall()
+        conn.close()
+        return results
+    except sqlite3.OperationalError as e:
+        logger.error(f"Database operational error executing query '{query}': {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error executing query '{query}': {e}")
+        raise sqlite3.OperationalError(f"Query execution failed: {e}")

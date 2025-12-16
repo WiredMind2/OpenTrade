@@ -12,10 +12,10 @@ import argparse
 import subprocess
 import sys
 import os
-import logging
 from datetime import datetime
 import io
 from contextlib import redirect_stdout, redirect_stderr
+from script_logger import logger
 
 
 DEFAULT_STEPS = [
@@ -41,7 +41,8 @@ def db_table_count(db_path: str, query: str):
         r = cur.fetchone()
         conn.close()
         return r[0] if r else 0
-    except Exception:
+    except Exception as e:
+        logger.warning("Database query failed in db_table_count: %s", e)
         return 0
 
 
@@ -130,23 +131,29 @@ def postcheck_labeling(args, step_log):
         cnt = cur.fetchone()[0]
         conn.close()
     except Exception as e:
-        logging.warning('Postcheck labeling DB query failed: %s', e)
+        logger.warning('Postcheck labeling DB query failed: %s', e)
         cnt = 0
     if cnt == 0:
-        logging.warning('Labeling produced 0 ground-truth labels. Running label_debug to collect diagnostics.')
-        dbg_cmd = [sys.executable, 'scripts/label_debug.py', '--db', args.db, '--limit', str(args.debug_limit)]
+        logger.warning('Labeling produced 0 ground-truth labels. Running label_debug to collect diagnostics.')
+        debug_script_path = os.path.join(os.path.dirname(__file__), 'label_debug.py')
+        if not os.path.exists(debug_script_path):
+            logger.warning('label_debug.py script not found at %s. Skipping diagnostics.', debug_script_path)
+            return
+        dbg_cmd = [sys.executable, debug_script_path, '--db', args.db, '--limit', str(args.debug_limit)]
         try:
             dbg = subprocess.run(dbg_cmd, capture_output=True, text=True)
-            dbg_log = os.path.join('logs', 'steps', 'label_debug_from_pipeline.log')
+            dbg_log_dir = os.path.join('logs', 'steps')
+            os.makedirs(dbg_log_dir, exist_ok=True)
+            dbg_log = os.path.join(dbg_log_dir, 'label_debug_from_pipeline.log')
             with open(dbg_log, 'w', encoding='utf-8') as f:
                 f.write('COMMAND: ' + ' '.join(dbg_cmd) + '\n\n')
                 f.write('=== STDOUT ===\n')
                 f.write(dbg.stdout or '')
                 f.write('\n=== STDERR ===\n')
                 f.write(dbg.stderr or '')
-            logging.warning('Wrote label debug output to %s', dbg_log)
+            logger.warning('Wrote label debug output to %s', dbg_log)
         except Exception as e:
-            logging.exception('Failed to run label_debug: %s', e)
+            logger.exception('Failed to run label_debug: %s', e)
 
 
 STEP_POSTCHECK = {
@@ -154,21 +161,13 @@ STEP_POSTCHECK = {
 }
 
 
-def setup_logging(log_dir: str):
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(os.path.join(log_dir, 'steps'), exist_ok=True)
-    log_path = os.path.join(log_dir, 'pipeline.log')
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s %(levelname)s: %(message)s',
-        handlers=[logging.FileHandler(log_path, encoding='utf-8'), logging.StreamHandler(sys.stdout)],
-    )
-    return log_path
 
 
 def run_step(name: str, func, args, log_dir: str):
-    step_log = os.path.join(log_dir, 'steps', f'{name}.log')
-    logging.info('Running step %s', name)
+    step_log_dir = os.path.join(log_dir, 'steps')
+    os.makedirs(step_log_dir, exist_ok=True)
+    step_log = os.path.join(step_log_dir, f'{name}.log')
+    logger.info('Running step %s', name)
     try:
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
@@ -190,21 +189,21 @@ def run_step(name: str, func, args, log_dir: str):
         f.write('\n=== STDERR ===\n')
         f.write(stderr or '')
     if returncode == 0:
-        logging.info('Step %s completed successfully', name)
+        logger.info('Step %s completed successfully', name)
         # summarize step log (last few lines) into main log for visibility
         try:
             lines = (stdout + stderr).splitlines()
             tail = '\n'.join(lines[-10:]) if lines else ''
-            logging.info('Step %s log tail:\n%s', name, tail)
-        except Exception:
-            pass
+            logger.info('Step %s log tail:\n%s', name, tail)
+        except Exception as e:
+            logger.warning("Failed to read log tail for step %s: %s", name, e)
         return True, step_log
     else:
-        logging.error('Step %s failed with exception', name)
+        logger.error('Step %s failed with exception', name)
         try:
             lines = (stdout + stderr).splitlines()
             tail = '\n'.join(lines[-40:]) if lines else ''
-            logging.error('Step %s log tail:\n%s', name, tail)
+            logger.error('Step %s log tail:\n%s', name, tail)
         except Exception:
             pass
         return False, step_log
@@ -320,6 +319,7 @@ STEP_COMMANDS = {
 
 
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     parser.add_argument('--csv_dir', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'kaggle_yahoo')))
@@ -338,33 +338,32 @@ def main():
     args = parser.parse_args()
 
     log_dir = 'logs'
-    setup_logging(log_dir)
 
     requested = [s.strip() for s in args.steps.split(',') if s.strip()]
-    logging.info('Pipeline started. Steps: %s', requested)
+    logger.info('Pipeline started. Steps: %s', requested)
     start_time = datetime.utcnow()
     for step in requested:
         if step not in STEP_COMMANDS:
-            logging.warning('Unknown step "%s" - skipping', step)
+            logger.warning('Unknown step "%s" - skipping', step)
             continue
 
         # pre-check: skip steps which appear already completed
         pre = STEP_PRECHECK.get(step)
         try:
             if pre and pre(args):
-                logging.info('Skipping step %s because pre-check indicates it is already completed', step)
+                logger.info('Skipping step %s because pre-check indicates it is already completed', step)
                 continue
         except Exception as e:
-            logging.warning('Pre-check for step %s raised an exception: %s (will attempt to run step)', step, e)
+            logger.warning('Pre-check for step %s raised an exception: %s (will attempt to run step)', step, e)
 
         func = STEP_COMMANDS[step]
         ok, step_log = run_step(step, func, args, log_dir)
         if not ok:
             if not args.continue_on_error:
-                logging.error('Aborting pipeline due to failure in step %s', step)
+                logger.error('Aborting pipeline due to failure in step %s', step)
                 break
             else:
-                logging.warning('Continuing pipeline despite failure in step %s', step)
+                logger.warning('Continuing pipeline despite failure in step %s', step)
         else:
             # run any post-checks for this step
             post = STEP_POSTCHECK.get(step)
@@ -372,9 +371,9 @@ def main():
                 if post:
                     post(args, step_log)
             except Exception as e:
-                logging.exception('Post-check for step %s raised exception: %s', step, e)
+                logger.exception('Post-check for step %s raised exception: %s', step, e)
     end_time = datetime.utcnow()
-    logging.info('Pipeline finished. Duration: %s', end_time - start_time)
+    logger.info('Pipeline finished. Duration: %s', end_time - start_time)
 
 
 if __name__ == '__main__':

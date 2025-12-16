@@ -2,7 +2,9 @@ import React, { useEffect, useState, useRef } from 'react'
 import {
   executeScript,
   listScriptExecutions,
-  runPipeline
+  runPipeline,
+  generateMAPredictions,
+  getMAPredictionStatus
 } from '../services/api'
 import websocketService from '../services/websocket'
 import { ScriptStatusMessage, PipelineStatusMessage } from '../types'
@@ -10,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Badge } from '../components/ui/badge'
+import { Switch } from '../components/ui/switch'
 import Loading from '../components/Loading'
 import ErrorMessage from '../components/ErrorMessage'
 import {
@@ -18,13 +21,7 @@ import {
   CheckCircle,
   XCircle,
   Clock,
-  Settings,
-  Database,
-  Brain,
   TrendingUp,
-  BarChart3,
-  FileText,
-  Download,
   Zap
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
@@ -56,13 +53,18 @@ export default function Scripts() {
 
   // Form states for different scripts
   const [pipelineSteps, setPipelineSteps] = useState('')
-  const [trainingCsv, setTrainingCsv] = useState('data/training_labels_1d_top10.csv')
-  const [modelOutdir, setModelOutdir] = useState('models')
-  const [sentimentHorizon, setSentimentHorizon] = useState('1')
-  const [tradingStart, setTradingStart] = useState('2020-01-01')
-  const [tradingEnd, setTradingEnd] = useState('2025-01-01')
-  const [backtestStart, setBacktestStart] = useState('2023-01-01')
-  const [backtestEnd, setBacktestEnd] = useState('2023-12-31')
+
+  // MA Prediction form states
+  const [maStartDate, setMaStartDate] = useState('2020-01-01')
+  const [maEndDate, setMaEndDate] = useState('2023-12-31')
+  const [skipOptimization, setSkipOptimization] = useState(false)
+  const [shortMaRange, setShortMaRange] = useState('3,5,7')
+  const [mediumMaRange, setMediumMaRange] = useState('15,20,25')
+  const [longMaRange, setLongMaRange] = useState('40,50,60')
+  const [fixedShort, setFixedShort] = useState('5')
+  const [fixedMedium, setFixedMedium] = useState('20')
+  const [fixedLong, setFixedLong] = useState('50')
+  const [maExecution, setMaExecution] = useState<any>(null)
 
   const fetchExecutions = async () => {
     setLoading(true)
@@ -155,6 +157,48 @@ export default function Scripts() {
     }
   }
 
+  const handleGenerateMAPredictions = async () => {
+    try {
+      setError(null)
+      const requestData: any = {
+        start_date: maStartDate,
+        end_date: maEndDate,
+        skip_optimization: skipOptimization
+      }
+
+      if (skipOptimization) {
+        requestData.fixed_short = parseInt(fixedShort)
+        requestData.fixed_medium = parseInt(fixedMedium)
+        requestData.fixed_long = parseInt(fixedLong)
+      } else {
+        requestData.short_ma_range = shortMaRange.split(',').map((s: string) => parseInt(s.trim()))
+        requestData.medium_ma_range = mediumMaRange.split(',').map((s: string) => parseInt(s.trim()))
+        requestData.long_ma_range = longMaRange.split(',').map((s: string) => parseInt(s.trim()))
+      }
+
+      const execution = await generateMAPredictions(requestData)
+      setMaExecution(execution)
+
+      // Register WebSocket listener for MA prediction status
+      const cleanup = websocketService.registerListener('script_status', (message: ScriptStatusMessage) => {
+        if (message.data.execution_id === execution.execution_id) {
+          if (message.data.status !== 'running') {
+            setMaExecution(prev => prev ? { ...prev, ...message.data } : null)
+            cleanup()
+            // Remove from cleanups array
+            scriptCleanupsRef.current = scriptCleanupsRef.current.filter(c => c !== cleanup)
+          }
+        }
+      })
+
+      scriptCleanupsRef.current.push(cleanup)
+
+      await fetchExecutions()
+    } catch (e: any) {
+      setError(e.message || 'Failed to start MA prediction generation')
+    }
+  }
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'running':
@@ -188,7 +232,7 @@ export default function Scripts() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Scripts</h1>
           <p className="text-muted-foreground">
-            Run data processing and machine learning pipeline scripts
+            Execute batch operations and manage automated pipelines for data processing and model training
           </p>
         </div>
         <Button onClick={fetchExecutions} variant="outline">
@@ -294,166 +338,179 @@ export default function Scripts() {
         </Card>
       )}
 
+      {/* MA Predictions Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5" />
+            Moving Average Predictions
+          </CardTitle>
+          <CardDescription>
+            Generate trading predictions using moving average crossover strategies with optional optimization
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-sm font-medium">Start Date</label>
+              <Input
+                type="date"
+                value={maStartDate}
+                onChange={(e) => setMaStartDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">End Date</label>
+              <Input
+                type="date"
+                value={maEndDate}
+                onChange={(e) => setMaEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Switch
+              id="skip-optimization"
+              checked={skipOptimization}
+              onCheckedChange={setSkipOptimization}
+            />
+            <label htmlFor="skip-optimization" className="text-sm font-medium">
+              Skip Optimization (use fixed MA periods)
+            </label>
+          </div>
+
+          {!skipOptimization ? (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium">Short MA Range (comma-separated)</label>
+                <Input
+                  value={shortMaRange}
+                  onChange={(e) => setShortMaRange(e.target.value)}
+                  placeholder="3,5,7"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Medium MA Range (comma-separated)</label>
+                <Input
+                  value={mediumMaRange}
+                  onChange={(e) => setMediumMaRange(e.target.value)}
+                  placeholder="15,20,25"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Long MA Range (comma-separated)</label>
+                <Input
+                  value={longMaRange}
+                  onChange={(e) => setLongMaRange(e.target.value)}
+                  placeholder="40,50,60"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-sm font-medium">Short MA Period</label>
+                <Input
+                  type="number"
+                  value={fixedShort}
+                  onChange={(e) => setFixedShort(e.target.value)}
+                  placeholder="5"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Medium MA Period</label>
+                <Input
+                  type="number"
+                  value={fixedMedium}
+                  onChange={(e) => setFixedMedium(e.target.value)}
+                  placeholder="20"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Long MA Period</label>
+                <Input
+                  type="number"
+                  value={fixedLong}
+                  onChange={(e) => setFixedLong(e.target.value)}
+                  placeholder="50"
+                />
+              </div>
+            </div>
+          )}
+
+          <Button
+            onClick={handleGenerateMAPredictions}
+            disabled={maExecution?.status === 'running'}
+            className="w-full"
+          >
+            <TrendingUp className="h-4 w-4 mr-2" />
+            {maExecution?.status === 'running' ? 'Running Optimization...' : 'Run MA Optimization'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {maExecution && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {getStatusIcon(maExecution.status)}
+              MA Prediction Execution: {maExecution.execution_id}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-sm font-medium">Status</p>
+                {getStatusBadge(maExecution.status)}
+              </div>
+              <div>
+                <p className="text-sm font-medium">Start Time</p>
+                <p className="text-sm text-muted-foreground">
+                  {new Date(maExecution.start_time).toLocaleString()}
+                </p>
+              </div>
+              {maExecution.end_time && (
+                <div>
+                  <p className="text-sm font-medium">End Time</p>
+                  <p className="text-sm text-muted-foreground">
+                    {new Date(maExecution.end_time).toLocaleString()}
+                  </p>
+                </div>
+              )}
+              {maExecution.duration_seconds && (
+                <div>
+                  <p className="text-sm font-medium">Duration</p>
+                  <p className="text-sm text-muted-foreground">
+                    {maExecution.duration_seconds.toFixed(1)}s
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {maExecution.output && (
+              <div>
+                <p className="text-sm font-medium mb-2">Output:</p>
+                <pre className="text-xs bg-muted p-2 rounded overflow-x-auto">
+                  {maExecution.output}
+                </pre>
+              </div>
+            )}
+
+            {maExecution.error && (
+              <div>
+                <p className="text-sm font-medium mb-2 text-red-600">Error:</p>
+                <pre className="text-xs bg-red-50 p-2 rounded overflow-x-auto">
+                  {maExecution.error}
+                </pre>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Separator />
 
-      {/* Individual Scripts Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Brain className="h-5 w-5" />
-              Train Sentiment Model
-            </CardTitle>
-            <CardDescription>
-              Train a LightGBM model to predict stock returns from news sentiment
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">Training Data CSV</label>
-              <Input
-                value={trainingCsv}
-                onChange={(e) => setTrainingCsv(e.target.value)}
-                placeholder="data/training_labels_1d_top10.csv"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Model Output Directory</label>
-              <Input
-                value={modelOutdir}
-                onChange={(e) => setModelOutdir(e.target.value)}
-                placeholder="models"
-              />
-            </div>
-            <Button
-              onClick={() => handleExecuteScript('train_sentiment_model', {
-                csv: trainingCsv,
-                outdir: modelOutdir
-              })}
-              className="w-full"
-            >
-              <Brain className="h-4 w-4 mr-2" />
-              Train Model
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Generate Sentiment Predictions
-            </CardTitle>
-            <CardDescription>
-              Use trained models to predict sentiment for news articles
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">Prediction Horizon (days)</label>
-              <Input
-                type="number"
-                value={sentimentHorizon}
-                onChange={(e) => setSentimentHorizon(e.target.value)}
-                placeholder="1"
-              />
-            </div>
-            <Button
-              onClick={() => handleExecuteScript('generate_sentiment_predictions', {
-                horizon: parseInt(sentimentHorizon)
-              })}
-              className="w-full"
-            >
-              <FileText className="h-4 w-4 mr-2" />
-              Generate Sentiment
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              Generate Trading Predictions
-            </CardTitle>
-            <CardDescription>
-              Convert sentiment scores into trading position recommendations
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-sm font-medium">Start Date</label>
-                <Input
-                  type="date"
-                  value={tradingStart}
-                  onChange={(e) => setTradingStart(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium">End Date</label>
-                <Input
-                  type="date"
-                  value={tradingEnd}
-                  onChange={(e) => setTradingEnd(e.target.value)}
-                />
-              </div>
-            </div>
-            <Button
-              onClick={() => handleExecuteScript('generate_trading_predictions', {
-                start: tradingStart,
-                end: tradingEnd
-              })}
-              className="w-full"
-            >
-              <TrendingUp className="h-4 w-4 mr-2" />
-              Generate Trading Signals
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card className="md:col-span-2 lg:col-span-3">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5" />
-              Run Backtest
-            </CardTitle>
-            <CardDescription>
-              Execute a backtest using the generated trading predictions
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-2 max-w-md">
-              <div>
-                <label className="text-sm font-medium">Start Date</label>
-                <Input
-                  type="date"
-                  value={backtestStart}
-                  onChange={(e) => setBacktestStart(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium">End Date</label>
-                <Input
-                  type="date"
-                  value={backtestEnd}
-                  onChange={(e) => setBacktestEnd(e.target.value)}
-                />
-              </div>
-            </div>
-            <Button
-              onClick={() => handleExecuteScript('backtest_runner', {
-                start: backtestStart,
-                end: backtestEnd
-              })}
-              className="w-full max-w-md"
-            >
-              <BarChart3 className="h-4 w-4 mr-2" />
-              Run Backtest
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
 
       <Separator />
 

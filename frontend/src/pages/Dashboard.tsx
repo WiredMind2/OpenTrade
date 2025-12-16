@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { getHealth } from '../services/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
@@ -182,37 +183,41 @@ export default function Dashboard() {
         </CardHeader>
         <CardContent>
           <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
-            <div className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv cursor-pointer group">
+            <Link to="/predictions" className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv group">
               <TrendingUp className="h-6 w-6 text-primary group-hover:scale-110 transition-transform" />
               <div>
                 <p className="font-medium text-xs text-tv-text-primary">New Prediction</p>
                 <p className="text-xs text-tv-text-tertiary">Generate forecast</p>
               </div>
-            </div>
+              <span className="ml-auto text-xs text-tv-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            </Link>
             
-            <div className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv cursor-pointer group">
+            <Link to="/backtests" className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv group">
               <BarChart3 className="h-6 w-6 text-tv-blue group-hover:scale-110 transition-transform" />
               <div>
                 <p className="font-medium text-xs text-tv-text-primary">Run Backtest</p>
                 <p className="text-xs text-tv-text-tertiary">Test strategy</p>
               </div>
-            </div>
+              <span className="ml-auto text-xs text-tv-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            </Link>
             
-            <div className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv cursor-pointer group">
+            <Link to="/portfolio" className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv group">
               <DollarSign className="h-6 w-6 text-success group-hover:scale-110 transition-transform" />
               <div>
                 <p className="font-medium text-xs text-tv-text-primary">View Portfolio</p>
                 <p className="text-xs text-tv-text-tertiary">Check positions</p>
               </div>
-            </div>
+              <span className="ml-auto text-xs text-tv-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            </Link>
             
-            <div className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv cursor-pointer group">
+            <Link to="/models" className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv group">
               <Activity className="h-6 w-6 text-tv-orange group-hover:scale-110 transition-transform" />
               <div>
                 <p className="font-medium text-xs text-tv-text-primary">Market Data</p>
                 <p className="text-xs text-tv-text-tertiary">Live updates</p>
               </div>
-            </div>
+              <span className="ml-auto text-xs text-tv-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            </Link>
           </div>
         </CardContent>
       </Card>

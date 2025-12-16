@@ -43,8 +43,9 @@ class LoggingConfig:
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     file_path: str = "logs/app.log"
     max_file_size: int = 10 * 1024 * 1024  # 10MB
-    backup_count: int = 5
+    backup_count: int = 7
     structured_logging: bool = True
+    timed_rotation: bool = True
 
 
 @dataclass
@@ -350,7 +351,8 @@ class ConfigManager:
                 'file_path': config.logging.file_path,
                 'max_file_size': config.logging.max_file_size,
                 'backup_count': config.logging.backup_count,
-                'structured_logging': config.logging.structured_logging
+                'structured_logging': config.logging.structured_logging,
+                'timed_rotation': config.logging.timed_rotation
             },
             'model': {
                 'model_dir': config.model.model_dir,
@@ -417,3 +419,7 @@ def reload_config():
     config_manager._config = None
     config = config_manager.config
     return config
+
+
+# Global API key for external services
+API_KEY = os.getenv('API_KEY')

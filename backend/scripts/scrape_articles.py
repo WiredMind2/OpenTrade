@@ -22,6 +22,7 @@ except Exception:
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import os
+from script_logger import logger
 
 load_dotenv()
 
@@ -36,7 +37,7 @@ def fetch_html(url: str, timeout: int = 15):
         resp.raise_for_status()
         return resp.text
     except Exception as e:
-        print(f'Failed to fetch {url}: {e}')
+        logger.error('Failed to fetch %s: %s', url, e)
         return None
 
 
@@ -48,7 +49,7 @@ def extract_main_text(html: str):
         text = soup.get_text(separator='\n').strip()
         return summary_html, text
     except Exception as e:
-        print('Extraction failed:', e)
+        logger.error('Extraction failed: %s', e)
         return None, None
 
 
@@ -62,7 +63,7 @@ def scrape(db_path: str, limit: int = 100, pause: float = 1.0):
         (limit,)
     )
     rows = cur.fetchall()
-    print(f'Found {len(rows)} articles to scrape')
+    logger.info('Found %d articles to scrape', len(rows))
     updated = 0
     for aid, url, content in rows:
         html = fetch_html(url)
@@ -75,15 +76,16 @@ def scrape(db_path: str, limit: int = 100, pause: float = 1.0):
             cur.execute('UPDATE articles SET raw_html = ?, content = ? WHERE id = ?', (summary_html, text, aid))
             conn.commit()
             updated += 1
-            print(f'Updated article {aid} from {url}')
+            logger.info('Updated article %d from %s', aid, url)
         except Exception as e:
-            print('DB update failed for', aid, e)
+            logger.error('DB update failed for %d: %s', aid, e)
         time.sleep(pause)
     conn.close()
-    print(f'Updated {updated} articles')
+    logger.info('Updated %d articles', updated)
 
 
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     parser.add_argument('--limit', type=int, default=200)

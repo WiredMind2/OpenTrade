@@ -1,11 +1,12 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { getPredictions, createPrediction, getTickers } from '../services/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Badge } from '../components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
-import { PredictionResponse } from '../types'
+import { Switch } from '../components/ui/switch'
+import { PredictionResponse, PredictionProjection } from '../types'
 import Loading from '../components/Loading'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
@@ -15,11 +16,16 @@ import {
   Sparkles,
   Clock,
   Target,
-  Activity
+  Activity,
+  Trash2,
+  Eye,
+  EyeOff
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import OHLCChart from '../components/OHLCChart'
+import StrategySelector from '../components/StrategySelector'
+import { getMockPredictionsForTicker } from '../utils/mockPredictions'
 
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
@@ -29,8 +35,20 @@ export default function Predictions() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [selectedTicker, setSelectedTicker] = useState('AAPL')
-  const [activeTab, setActiveTab] = useState('predictions')
+  const [activeTab, setActiveTab] = useState('chart')
   const [availableTickers, setAvailableTickers] = useState<string[]>([])
+
+  // Projection controls state
+  const [projectionStrategy, setProjectionStrategy] = useState('')
+  const [projectionParams, setProjectionParams] = useState<Record<string, any>>({})
+  const [projectionHorizon, setProjectionHorizon] = useState(30)
+  const [projectionMode, setProjectionMode] = useState('interactive')
+
+  // Prediction projections state
+  const [showPredictionProjections, setShowPredictionProjections] = useState(false)
+  const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
+
+  const chartRef = useRef<any>(null)
 
   const fetchPredictions = async () => {
     setLoading(true)
@@ -96,21 +114,161 @@ export default function Predictions() {
     setActiveTab('chart')
   }
 
+  // Generate prediction projections for the selected ticker
+  const generatePredictionProjections = (ticker: string) => {
+    // Get the latest price and time from the chart
+    const latestPrice = chartRef.current?.getLatestPrice();
+    const latestTime = chartRef.current?.getLatestTime();
+    const projections = getMockPredictionsForTicker(ticker, latestPrice || undefined, latestTime ? latestTime * 1000 : undefined)
+    setPredictionProjections(projections)
+  }
+
+  // Handle prediction projections toggle
+  const handlePredictionProjectionsToggle = (enabled: boolean) => {
+    setShowPredictionProjections(enabled)
+    if (enabled && predictionProjections.length === 0) {
+      generatePredictionProjections(selectedTicker)
+    }
+  }
+
+  const handleStrategyChange = (strategy: string, params: Record<string, any>) => {
+    setProjectionStrategy(strategy)
+    setProjectionParams(params)
+    if (chartRef.current) {
+      chartRef.current.setProjectionStrategy(strategy, params, projectionHorizon, projectionMode)
+    }
+  }
+
+  const handleHorizonChange = (value: number) => {
+    setProjectionHorizon(value)
+    if (chartRef.current && projectionStrategy) {
+      chartRef.current.setProjectionStrategy(projectionStrategy, projectionParams, value, projectionMode)
+    }
+  }
+
+  const handleModeChange = (mode: string) => {
+    setProjectionMode(mode)
+    if (chartRef.current && projectionStrategy) {
+      chartRef.current.setProjectionStrategy(projectionStrategy, projectionParams, projectionHorizon, mode)
+    }
+  }
+
+  const clearProjections = () => {
+    setProjectionStrategy('')
+    setProjectionParams({})
+    if (chartRef.current) {
+      chartRef.current.clearProjections()
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Predictions</h2>
         <p className="text-muted-foreground">
-          Generate and track AI-powered stock predictions with interactive visualizations
+          Generate ad-hoc forecasts for individual stocks using trained models
         </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="predictions">Predictions</TabsTrigger>
           <TabsTrigger value="chart">Chart</TabsTrigger>
+          <TabsTrigger value="predictions">Predictions</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="chart">
+          <div className="space-y-4">
+            {/* Projection Controls */}
+            <Card className="border-muted shadow-md">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Target className="h-5 w-5 text-primary" />
+                  Projection Controls
+                </CardTitle>
+                <CardDescription>
+                  Configure strategy projections and prediction overlays for the chart
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <StrategySelector onStrategyChange={handleStrategyChange} />
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Horizon (days)</label>
+                      <Input
+                        type="number"
+                        value={projectionHorizon}
+                        onChange={e => handleHorizonChange(parseInt(e.target.value) || 30)}
+                        min="1"
+                        max="365"
+                        className="font-mono"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Mode</label>
+                      <Select value={projectionMode} onValueChange={handleModeChange}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="interactive">Interactive</SelectItem>
+                          <SelectItem value="server-side">Server-side</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="flex items-end">
+                      <Button
+                        onClick={clearProjections}
+                        variant="outline"
+                        className="w-full"
+                        disabled={!projectionStrategy}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Clear Projections
+                      </Button>
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  {/* Prediction Projections Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <Eye className="h-4 w-4 text-primary" />
+                        <label className="text-sm font-medium">Prediction Projections</label>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Show AI model prediction overlays on the chart
+                      </p>
+                    </div>
+                    <Switch
+                      checked={showPredictionProjections}
+                      onCheckedChange={handlePredictionProjectionsToggle}
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Chart */}
+            <OHLCChart
+              ref={chartRef}
+              symbol={selectedTicker}
+              height="600px"
+              strategyName={projectionStrategy}
+              params={projectionParams}
+              horizon={projectionHorizon}
+              mode={projectionMode}
+              showPredictionProjections={showPredictionProjections}
+              predictionProjections={predictionProjections}
+            />
+          </div>
+        </TabsContent>
 
         <TabsContent value="predictions">
           <div className="space-y-6">
@@ -287,9 +445,6 @@ export default function Predictions() {
           </div>
         </TabsContent>
 
-        <TabsContent value="chart">
-          <OHLCChart symbol={selectedTicker} height="600px" />
-        </TabsContent>
       </Tabs>
     </div>
   )

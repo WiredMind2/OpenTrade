@@ -13,11 +13,11 @@ from fastapi import APIRouter
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
 from backend.schemas import PortfolioResponse
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 router = APIRouter()
 
 

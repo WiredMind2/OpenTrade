@@ -15,13 +15,13 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-from backend.logging_config import get_app_logger
-from backend.schemas import ScriptExecutionRequest, ScriptExecutionResponse, PipelineStatus, PipelineRequest
+from backend.logging_config import get_component_logger
+from backend.schemas import ScriptExecutionRequest, ScriptExecutionResponse, PipelineStatus, PipelineRequest, MAPredictionRequest, MAPredictionResponse
 from backend.config import get_config
 from .websocket import broadcast_websocket_message
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 router = APIRouter()
 
 # Global state for tracking script executions
@@ -209,6 +209,77 @@ async def get_pipeline_status(execution_id: str):
     )
 
 
+@router.post("/scripts/generate-ma-predictions", response_model=MAPredictionResponse, tags=["Scripts"])
+async def generate_ma_predictions(
+    request: MAPredictionRequest,
+    background_tasks: BackgroundTasks
+):
+    """Generate MA crossover trading predictions."""
+    try:
+        config = get_config()
+
+        # Generate execution ID
+        execution_id = f"ma_{uuid.uuid4().hex[:8]}"
+
+        # Initialize execution record
+        script_executions[execution_id] = {
+            "script_name": "generate_ma_predictions",
+            "status": "running",
+            "start_time": datetime.utcnow(),
+            "parameters": request.model_dump(),
+            "output": "",
+            "error": "",
+            "process": None
+        }
+
+        # Start script execution in background
+        background_tasks.add_task(run_script_async, execution_id, "generate_ma_predictions", request.model_dump(), config)
+
+        logger.info(f"Started MA prediction generation: {request.start_date} to {request.end_date}", extra={
+            "execution_id": execution_id,
+            "start_date": request.start_date,
+            "end_date": request.end_date,
+            "skip_optimization": request.skip_optimization
+        })
+
+        return MAPredictionResponse(
+            status="running",
+            execution_id=execution_id,
+            start_time=script_executions[execution_id]["start_time"],
+            output=None,
+            error=None,
+            duration_seconds=None
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to start MA prediction generation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate MA predictions: {str(e)}")
+
+
+@router.get("/scripts/generate-ma-predictions/status/{execution_id}", response_model=MAPredictionResponse, tags=["Scripts"])
+async def get_ma_prediction_status(execution_id: str):
+    """Get the status of MA prediction generation."""
+    if execution_id not in script_executions:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    execution = script_executions[execution_id]
+    end_time = execution.get("end_time")
+    duration = None
+
+    if end_time:
+        duration = (end_time - execution["start_time"]).total_seconds()
+
+    return MAPredictionResponse(
+        status=execution["status"],
+        execution_id=execution_id,
+        start_time=execution["start_time"],
+        end_time=end_time,
+        output=execution["output"] if execution["output"] else None,
+        error=execution["error"] if execution["error"] else None,
+        duration_seconds=duration
+    )
+
+
 async def run_script_async(execution_id: str, script_name: str, parameters: Dict[str, Any], config):
     """Run a script asynchronously."""
     try:
@@ -255,16 +326,35 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
                 cmd.extend(["--start", parameters["start"]])
             if "end" in parameters:
                 cmd.extend(["--end", parameters["end"]])
+        elif script_name == "generate_ma_predictions":
+            if "start_date" in parameters:
+                cmd.extend(["--start", parameters["start_date"]])
+            if "end_date" in parameters:
+                cmd.extend(["--end", parameters["end_date"]])
+            if "short_ma_range" in parameters:
+                cmd.extend(["--short-ma"] + [str(x) for x in parameters["short_ma_range"]])
+            if "medium_ma_range" in parameters:
+                cmd.extend(["--medium-ma"] + [str(x) for x in parameters["medium_ma_range"]])
+            if "long_ma_range" in parameters:
+                cmd.extend(["--long-ma"] + [str(x) for x in parameters["long_ma_range"]])
+            if parameters.get("skip_optimization", False):
+                cmd.append("--skip-optimization")
+                if "fixed_short" in parameters:
+                    cmd.extend(["--fixed-short", str(parameters["fixed_short"])])
+                if "fixed_medium" in parameters:
+                    cmd.extend(["--fixed-medium", str(parameters["fixed_medium"])])
+                if "fixed_long" in parameters:
+                    cmd.extend(["--fixed-long", str(parameters["fixed_long"])])
 
-        # Set working directory to backend
-        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Set working directory to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
         logger.info(f"Running command: {' '.join(cmd)}", extra={"execution_id": execution_id})
 
         # Run the script
         process = await asyncio.create_subprocess_exec(
             *cmd,
-            cwd=backend_dir,
+            cwd=project_root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -293,8 +383,8 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
                 "script_name": execution["script_name"],
                 "status": execution["status"],
                 "execution_id": execution_id,
-                "start_time": execution["start_time"],
-                "end_time": execution["end_time"],
+                "start_time": execution["start_time"].isoformat(),
+                "end_time": execution["end_time"].isoformat(),
                 "output": execution["output"] if execution["output"] else None,
                 "error": execution["error"] if execution["error"] else None,
                 "duration_seconds": (execution["end_time"] - execution["start_time"]).total_seconds()
@@ -315,8 +405,8 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
                 "script_name": execution.get("script_name", script_name),
                 "status": "failed",
                 "execution_id": execution_id,
-                "start_time": execution.get("start_time"),
-                "end_time": execution["end_time"],
+                "start_time": execution.get("start_time").isoformat() if execution.get("start_time") else None,
+                "end_time": execution["end_time"].isoformat(),
                 "output": execution.get("output"),
                 "error": execution["error"],
                 "duration_seconds": (execution["end_time"] - execution["start_time"]).total_seconds() if execution.get("start_time") else None
@@ -334,8 +424,8 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
             logger.info(f"Test mode detected, not executing pipeline")
             # Leave status as "running" for tests to verify
             return
-        
-        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
         for step in steps:
             execution["current_step"] = step
@@ -349,7 +439,7 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
             # Run the step
             process = await asyncio.create_subprocess_exec(
                 *cmd,
-                cwd=backend_dir,
+                cwd=project_root,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -375,7 +465,7 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
                     "completed_steps": execution.get("completed_steps", []),
                     "failed_steps": execution.get("failed_steps", []),
                     "status": execution["status"],
-                    "start_time": execution["start_time"],
+                    "start_time": execution["start_time"].isoformat(),
                     "estimated_completion": None
                 }
             })
@@ -399,7 +489,7 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
                 "completed_steps": execution.get("completed_steps", []),
                 "failed_steps": execution.get("failed_steps", []),
                 "status": execution["status"],
-                "start_time": execution["start_time"],
+                "start_time": execution["start_time"].isoformat(),
                 "estimated_completion": None
             }
         })
@@ -420,7 +510,7 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
                 "completed_steps": execution.get("completed_steps", []),
                 "failed_steps": execution.get("failed_steps", []),
                 "status": "failed",
-                "start_time": execution.get("start_time"),
+                "start_time": execution.get("start_time").isoformat() if execution.get("start_time") else None,
                 "estimated_completion": None
             }
         })
@@ -428,15 +518,16 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
 
 def get_script_path(script_name: str) -> Optional[str]:
     """Get the full path to a script."""
-    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    scripts_dir = os.path.join(backend_dir, "scripts")
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    scripts_dir = os.path.join(project_root, "backend", "scripts")
 
     script_map = {
         "run_pipeline": "run_pipeline.py",
         "train_sentiment_model": "train_sentiment_model.py",
-        "generate_sentiment_predictions": "generate_sentiment_predictions.py",
-        "generate_trading_predictions": "generate_trading_predictions.py",
+        "generate_sentiment_predictions": "predictions/generate_sentiment_predictions.py",
+        "generate_trading_predictions": "predictions/generate_trading_predictions.py",
         "backtest_runner": "backtest_runner.py",
+        "generate_ma_predictions": "predictions/generate_ma_predictions.py",
     }
 
     if script_name in script_map:

@@ -13,10 +13,10 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 router = APIRouter()
 
 

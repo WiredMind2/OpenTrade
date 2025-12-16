@@ -1,9 +1,13 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import type {
   IChartingLibraryWidget,
   ChartingLibraryWidgetOptions,
 } from "../../public/charting_library/charting_library.d.ts";
 import TradingViewUDFDatafeed from "../services/tradingViewUDF";
+import { attachProjectionManager, detachProjectionManager } from "../lib/ChartProjectionManager";
+import { projectStrategy } from "../services/strategyApi";
+import type { ProjectionPoint, PredictionProjection } from "../types";
+import { formatPredictionTooltip } from "../utils/mockPredictions";
 
 /**
  * Candle data point
@@ -22,18 +26,40 @@ interface CandleData {
  * Props for the OHLCChart component
  */
 interface OHLCChartProps {
-  /** Trading symbol (e.g., 'AAPL') */
-  symbol?: string;
-  /** Show volume histogram */
-  showVolume?: boolean;
-  /** Show confidence bands */
-  showConfidence?: boolean;
-  /** Chart height as CSS string. Default: '400px' */
-  height?: string;
-  /** Color for bullish candles */
-  bullishColor?: string;
-  /** Color for bearish candles */
-  bearishColor?: string;
+   /** Trading symbol (e.g., 'AAPL') */
+   symbol?: string;
+   /** Show volume histogram */
+   showVolume?: boolean;
+   /** Show confidence bands */
+   showConfidence?: boolean;
+   /** Chart height as CSS string. Default: '400px' */
+   height?: string;
+   /** Color for bullish candles */
+   bullishColor?: string;
+   /** Color for bearish candles */
+   bearishColor?: string;
+   /** Strategy name for projections */
+   strategyName?: string;
+   /** Strategy parameters */
+   params?: Record<string, any>;
+   /** Projection horizon in days */
+   horizon?: number;
+   /** Projection mode */
+   mode?: string;
+   /** Show prediction projections */
+   showPredictionProjections?: boolean;
+   /** Prediction projection data */
+   predictionProjections?: PredictionProjection[];
+}
+
+/**
+ * Public API exposed via ref
+ */
+export interface OHLCChartRef {
+  setProjectionStrategy: (strategyName: string, params?: Record<string, any>, horizon?: number, mode?: string) => void;
+  clearProjections: () => void;
+  getLatestPrice: () => number | null;
+  getLatestTime: () => number | null;
 }
 
 /**
@@ -53,22 +79,187 @@ interface OHLCChartProps {
  * />
  * ```
  */
-const OHLCChart = React.memo<OHLCChartProps>(
-  ({
-    symbol = "AAPL",
-    showVolume = false,
-    showConfidence = false,
-    height = "400px",
-    bullishColor = "#10b981",
-    bearishColor = "#ef4444",
-  }) => {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const widgetRef = useRef<IChartingLibraryWidget | null>(null);
-    const containerIdRef = useRef<string>(
-      `tradingview_${Math.random().toString(36).substr(2, 9)}`
-    );
+const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
+   ({
+     symbol = "AAPL",
+     showVolume = false,
+     showConfidence = false,
+     height = "400px",
+     bullishColor = "#10b981",
+     bearishColor = "#ef4444",
+     strategyName = "moving_average",
+     params = {},
+     horizon = 30,
+     mode = "price",
+     showPredictionProjections = false,
+     predictionProjections = [],
+   }, ref) => {
+       const containerRef = useRef<HTMLDivElement>(null);
+       const widgetRef = useRef<IChartingLibraryWidget | null>(null);
+       const containerIdRef = useRef<string>(
+         `tradingview_${Math.random().toString(36).substr(2, 9)}`
+       );
+       const projectionEntitiesRef = useRef<any[]>([]);
+       const predictionEntitiesRef = useRef<any[]>([]);
 
-    useEffect(() => {
+       // State for projection settings
+       const [projectionSettings, setProjectionSettings] = useState({
+         strategyName,
+         params,
+         horizon,
+         mode,
+       });
+
+       // State for prediction projections
+       const [predictionSettings, setPredictionSettings] = useState({
+         showPredictionProjections,
+         predictionProjections,
+       });
+
+       /**
+        * Render prediction projections on the chart
+        */
+       const renderPredictionProjections = () => {
+         if (!widgetRef.current || !predictionSettings.showPredictionProjections) return;
+
+         const chart = widgetRef.current.chart();
+         if (!chart) return;
+
+         // Clear existing prediction entities
+         predictionEntitiesRef.current.forEach(entityId => {
+           try {
+             chart.removeEntity(entityId);
+           } catch (e) {
+             console.warn("[OHLCChart] Failed to remove existing prediction entity:", e);
+           }
+         });
+         predictionEntitiesRef.current = [];
+
+         // Filter projections for current symbol
+         const relevantProjections = predictionSettings.predictionProjections.filter(
+           p => p.ticker === symbol
+         );
+
+         relevantProjections.forEach(projection => {
+           // Create main prediction line
+           const linePoints: any[] = projection.points.map(point => ({
+             time: point.time,
+             price: point.price
+           }));
+
+           const lineEntityId = chart.createMultipointShape(linePoints, {
+             shape: 'polyline',
+             lock: true,
+             disableSelection: true,
+             disableSave: true,
+             overrides: {
+               linestyle: 0, // SOLID
+               linewidth: 2,
+               linecolor: projection.color,
+               transparency: 0
+             }
+           });
+
+           if (lineEntityId) {
+             predictionEntitiesRef.current.push(lineEntityId);
+           }
+
+           // Create confidence bands if upper/lower bounds exist
+           if (projection.points.some(p => p.upperBound && p.lowerBound)) {
+             const upperBandPoints: any[] = projection.points.map(point => ({
+               time: point.time,
+               price: point.upperBound || point.price
+             }));
+
+             const lowerBandPoints: any[] = projection.points.map(point => ({
+               time: point.time,
+               price: point.lowerBound || point.price
+             }));
+
+             // Upper band
+             const upperBandId = chart.createMultipointShape(upperBandPoints, {
+               shape: 'polyline',
+               lock: true,
+               disableSelection: true,
+               disableSave: true,
+               overrides: {
+                 linestyle: 1, // DASHED
+                 linewidth: 1,
+                 linecolor: projection.color,
+                 transparency: 40
+               }
+             });
+
+             // Lower band
+             const lowerBandId = chart.createMultipointShape(lowerBandPoints, {
+               shape: 'polyline',
+               lock: true,
+               disableSelection: true,
+               disableSave: true,
+               overrides: {
+                 linestyle: 1, // DASHED
+                 linewidth: 1,
+                 linecolor: projection.color,
+                 transparency: 40
+               }
+             });
+
+             if (upperBandId) predictionEntitiesRef.current.push(upperBandId);
+             if (lowerBandId) predictionEntitiesRef.current.push(lowerBandId);
+           }
+
+           // Add tooltips for prediction points (every 3rd point to avoid clutter)
+           projection.points.forEach((point, index) => {
+             if (index % 3 === 0 || index === projection.points.length - 1) {
+               const tooltipText = formatPredictionTooltip(point);
+               const tooltipId = chart.createShape({
+                 time: point.time,
+                 price: point.price
+               }, {
+                 shape: 'anchored_text',
+                 lock: true,
+                 disableSelection: true,
+                 disableSave: true,
+                 text: `$${point.price.toFixed(2)}`,
+                 overrides: {
+                   color: projection.color,
+                   transparency: 20,
+                   fontsize: 10
+                 }
+               });
+
+               if (tooltipId) {
+                 predictionEntitiesRef.current.push(tooltipId);
+               }
+             }
+           });
+
+           // Add start marker for each projection
+           if (projection.points.length > 0) {
+             const startPoint = projection.points[0];
+             const startMarkerId = chart.createShape({
+               time: startPoint.time,
+               price: startPoint.price
+             }, {
+               shape: 'arrow_right',
+               lock: true,
+               disableSelection: true,
+               disableSave: true,
+               overrides: {
+                 color: projection.color,
+                 transparency: 0,
+                 size: 1
+               }
+             });
+
+             if (startMarkerId) {
+               predictionEntitiesRef.current.push(startMarkerId);
+             }
+           }
+         });
+       };
+
+     useEffect(() => {
       if (!containerRef.current) return;
 
       const initializeChart = async () => {
@@ -151,7 +342,169 @@ const OHLCChart = React.memo<OHLCChartProps>(
 // Create the chart widget
 widgetRef.current = new TradingView.widget(widgetOptions);
 
-          
+          // Attach projection manager when chart is ready
+          widgetRef.current.onChartReady(() => {
+            console.log("[OHLCChart] Chart ready, attaching projection manager");
+
+            const projectionOptions = {
+              onProjectionRequest: async (startPoint: { time: number; price: number }) => {
+                try {
+                  console.log("[OHLCChart] Requesting projection:", startPoint, projectionSettings);
+
+                  const response = await projectStrategy(
+                    projectionSettings.strategyName,
+                    symbol,
+                    new Date(startPoint.time * 1000).toISOString(),
+                    startPoint.price,
+                    projectionSettings.params,
+                    projectionSettings.horizon
+                  );
+
+                  // Convert response to ProjectionPoint format
+                  const points: ProjectionPoint[] = response.map((point: any) => ({
+                    time: new Date(point.time).getTime() / 1000,
+                    open: point.price,
+                    high: point.price,
+                    low: point.price,
+                    close: point.price,
+                    predicted: true,
+                  }));
+
+                  return points;
+                } catch (error) {
+                  console.error("[OHLCChart] Projection request failed:", error);
+                  throw error;
+                }
+              },
+              onProjectionRendered: (points: ProjectionPoint[]) => {
+                console.log("[OHLCChart] Rendering projection points:", points);
+
+                if (!widgetRef.current) return;
+
+                const chart = widgetRef.current.chart();
+                if (!chart) return;
+
+                // Clear existing projection entities
+                projectionEntitiesRef.current.forEach(entityId => {
+                  try {
+                    chart.removeEntity(entityId);
+                  } catch (e) {
+                    console.warn("[OHLCChart] Failed to remove existing projection entity:", e);
+                  }
+                });
+                projectionEntitiesRef.current = [];
+
+                // Convert ProjectionPoint[] to ShapePoint[] for the line
+                const linePoints: any[] = points.map(point => ({
+                  time: point.time,
+                  price: point.close
+                }));
+
+                // Create the projection line as a polyline with dashed style
+                const lineEntityId = chart.createMultipointShape(linePoints, {
+                  shape: 'polyline',
+                  lock: true,
+                  disableSelection: true,
+                  disableSave: true,
+                  overrides: {
+                    linestyle: 2, // DASHED
+                    linewidth: 2,
+                    linecolor: '#FF6B35', // Orange color for projections
+                    transparency: 0
+                  }
+                });
+
+                if (lineEntityId) {
+                  projectionEntitiesRef.current.push(lineEntityId);
+                }
+
+                // Add start point marker
+                if (points.length > 0) {
+                  const startPoint = points[0];
+                  const startMarkerId = chart.createShape({
+                    time: startPoint.time,
+                    price: startPoint.close
+                  }, {
+                    shape: 'arrow_up',
+                    lock: true,
+                    disableSelection: true,
+                    disableSave: true,
+                    overrides: {
+                      color: '#10B981', // Green for start
+                      transparency: 0
+                    }
+                  });
+
+                  if (startMarkerId) {
+                    projectionEntitiesRef.current.push(startMarkerId);
+                  }
+                }
+
+                // Add tooltips for each point (show every 5th point to avoid clutter)
+                points.forEach((point, index) => {
+                  if (index % 5 === 0 || index === points.length - 1) {
+                    const priceText = `$${point.close.toFixed(2)}`; // Format with 2 decimals
+                    const tooltipId = chart.createShape({
+                      time: point.time,
+                      price: point.close
+                    }, {
+                      shape: 'anchored_text',
+                      lock: true,
+                      disableSelection: true,
+                      disableSave: true,
+                      text: priceText,
+                      overrides: {
+                        color: '#FF6B35',
+                        transparency: 20,
+                        fontsize: 10
+                      }
+                    });
+
+                    if (tooltipId) {
+                      projectionEntitiesRef.current.push(tooltipId);
+                    }
+                  }
+                });
+
+                // Add buy/sell signal markers (simplified: mark significant price changes)
+                for (let i = 1; i < points.length; i++) {
+                  const current = points[i];
+                  const previous = points[i - 1];
+                  const priceChange = current.close - previous.close;
+                  const threshold = Math.abs(previous.close * 0.005); // 0.5% change threshold
+
+                  if (Math.abs(priceChange) > threshold) {
+                    const signalShape = priceChange > 0 ? 'arrow_up' : 'arrow_down';
+                    const signalColor = priceChange > 0 ? '#10B981' : '#EF4444'; // Green for buy, red for sell
+
+                    const signalId = chart.createShape({
+                      time: current.time,
+                      price: current.close
+                    }, {
+                      shape: signalShape,
+                      lock: true,
+                      disableSelection: true,
+                      disableSave: true,
+                      overrides: {
+                        color: signalColor,
+                        transparency: 0
+                      }
+                    });
+
+                    if (signalId) {
+                      projectionEntitiesRef.current.push(signalId);
+                    }
+                  }
+                }
+              },
+            };
+
+            attachProjectionManager(widgetRef.current, projectionOptions);
+
+            // Render prediction projections if enabled
+            renderPredictionProjections();
+          });
+
         } catch (error) {
           console.error("Failed to initialize TradingView chart:", error);
         }
@@ -161,6 +514,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
 
       return () => {
         if (widgetRef.current) {
+          detachProjectionManager();
           widgetRef.current.remove();
           widgetRef.current = null;
         }
@@ -172,7 +526,110 @@ widgetRef.current = new TradingView.widget(widgetOptions);
       height,
       bullishColor,
       bearishColor,
+      projectionSettings.strategyName,
+      projectionSettings.params,
+      projectionSettings.horizon,
+      projectionSettings.mode,
     ]);
+
+    // Update prediction settings when props change
+    useEffect(() => {
+      setPredictionSettings({
+        showPredictionProjections,
+        predictionProjections,
+      });
+    }, [showPredictionProjections, predictionProjections]);
+
+    // Re-render prediction projections when settings change
+    useEffect(() => {
+      renderPredictionProjections();
+    }, [predictionSettings, symbol]);
+
+    // Expose public API via ref
+    useImperativeHandle(ref, () => ({
+      setProjectionStrategy: (strategyName: string, params?: Record<string, any>, horizon?: number, mode?: string) => {
+        setProjectionSettings({
+          strategyName,
+          params: params || {},
+          horizon: horizon || 30,
+          mode: mode || "price",
+        });
+      },
+      clearProjections: () => {
+        // Clear interactive projections
+        if (projectionEntitiesRef.current.length > 0 && widgetRef.current) {
+          const chart = widgetRef.current.chart();
+          if (chart) {
+            projectionEntitiesRef.current.forEach(entityId => {
+              try {
+                chart.removeEntity(entityId);
+              } catch (e) {
+                console.warn("[OHLCChart] Failed to remove projection entity:", e);
+              }
+            });
+            projectionEntitiesRef.current = [];
+          }
+        }
+
+        // Clear prediction projections
+        if (predictionEntitiesRef.current.length > 0 && widgetRef.current) {
+          const chart = widgetRef.current.chart();
+          if (chart) {
+            predictionEntitiesRef.current.forEach(entityId => {
+              try {
+                chart.removeEntity(entityId);
+              } catch (e) {
+                console.warn("[OHLCChart] Failed to remove prediction entity:", e);
+              }
+            });
+            predictionEntitiesRef.current = [];
+          }
+        }
+      },
+      getLatestPrice: () => {
+        if (!widgetRef.current) return null;
+
+        try {
+          const chart = widgetRef.current.chart();
+          if (!chart) return null;
+
+          // Get the last bar from the chart
+          const lastBar = chart.lastBar();
+          if (lastBar && typeof lastBar.close === 'number') {
+            return lastBar.close;
+          }
+
+          // Fallback: try to get price from the price scale
+          const priceScale = chart.priceScale();
+          if (priceScale) {
+            // This might not be the most recent price, but it's a fallback
+            return null; // For now, return null if we can't get the last bar
+          }
+        } catch (error) {
+          console.warn("[OHLCChart] Failed to get latest price:", error);
+        }
+
+        return null;
+      },
+      getLatestTime: () => {
+        if (!widgetRef.current) return null;
+
+        try {
+          const chart = widgetRef.current.chart();
+          if (!chart) return null;
+
+          // Get the last bar from the chart
+          const lastBar = chart.lastBar();
+          if (lastBar && typeof lastBar.time === 'number') {
+            return lastBar.time;
+          }
+        } catch (error) {
+          console.warn("[OHLCChart] Failed to get latest time:", error);
+        }
+
+        return null;
+      },
+    }));
 
     return (
       <div>

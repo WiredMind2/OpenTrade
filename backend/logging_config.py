@@ -16,6 +16,62 @@ from dataclasses import dataclass, field
 from contextlib import contextmanager
 import psutil
 import traceback
+import logging
+
+
+# Component to category mapping
+COMPONENT_LOGGER_MAPPING = {
+    # Routes
+    "backend.routes.backtest_engine": "routes",
+    "backend.routes.backtests": "routes",
+    "backend.routes.data_endpoints": "routes",
+    "backend.routes.health": "routes",
+    "backend.routes.models_endpoints": "routes",
+    "backend.routes.monitoring": "routes",
+    "backend.routes.portfolio": "routes",
+    "backend.routes.predictions": "routes",
+    "backend.routes.scripts": "routes",
+    "backend.routes.udf": "routes",
+    "backend.routes.websocket": "routes",
+    # Scripts
+    "backend.scripts.apply_schema": "scripts",
+    "backend.scripts.backtest_runner": "scripts",
+    "backend.scripts.download_kaggle": "scripts",
+    "backend.scripts.predictions.generate_sentiment_predictions": "scripts",
+    "backend.scripts.predictions.generate_trading_predictions": "scripts",
+    "backend.scripts.ingest_minute_prices": "scripts",
+    "backend.scripts.ingest_news": "scripts",
+    "backend.scripts.ingest_prices": "scripts",
+    "backend.scripts.labeling": "scripts",
+    "backend.scripts.map_articles_to_tickers": "scripts",
+    "backend.scripts.run_pipeline": "scripts",
+    "backend.scripts.scan_csvs": "scripts",
+    "backend.scripts.scrape_articles": "scripts",
+    "backend.scripts.train_sentiment_model": "scripts",
+    # Core
+    "backend.data_processing": "core",
+    "backend.feature_engineering": "core",
+    "backend.cache": "core",
+    "backend.config": "core",
+    "backend.error_handling": "core",
+    "backend.logging_config": "core",
+    "backend.schemas": "core",
+    # Auth
+    "backend.auth_utils": "auth",
+    # Main
+    "backend.main": "main",
+    "main": "main",
+    "backend.__init__": "main",
+}
+
+# Category to file mapping
+CATEGORY_FILE_MAPPING = {
+    "routes": "logs/routes.log",
+    "scripts": "logs/scripts.log",
+    "core": "logs/core.log",
+    "auth": "logs/auth.log",
+    "main": "logs/main.log",
+}
 
 
 @dataclass
@@ -92,7 +148,36 @@ class JSONFormatter(logging.Formatter):
             except Exception:
                 pass
         
-        return json.dumps(log_entry, default=str)
+        def json_serializer(obj):
+            """Custom JSON serializer for non-serializable objects."""
+            if hasattr(obj, 'isoformat'):  # datetime objects
+                return obj.isoformat()
+            elif hasattr(obj, '__dict__'):  # objects with attributes
+                return str(obj)
+            else:
+                return str(obj)
+
+        return json.dumps(log_entry, default=json_serializer)
+
+
+class SafeTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """Custom TimedRotatingFileHandler that handles permission errors during rollover."""
+
+    def doRollover(self):
+        """Perform rollover, handling permission errors gracefully."""
+        try:
+            super().doRollover()
+        except PermissionError as e:
+            # Log the error but don't crash the application
+            logging.getLogger('logging_config').warning(
+                f"Failed to rotate log file {self.baseFilename}: {e}. "
+                "Log file may be locked by another process."
+            )
+        except Exception as e:
+            # For other errors, still log but don't crash
+            logging.getLogger('logging_config').error(
+                f"Unexpected error during log rotation for {self.baseFilename}: {e}"
+            )
 
 
 class TradingLogger:
@@ -130,7 +215,7 @@ class TradingLogger:
         log_dir.mkdir(parents=True, exist_ok=True)
         
         if self.config.get('timed_rotation', False):
-            file_handler = TimedRotatingFileHandler(
+            file_handler = SafeTimedRotatingFileHandler(
                 log_file,
                 when='midnight',
                 interval=1,
@@ -157,42 +242,42 @@ class TradingLogger:
         # Prevent duplicate logs
         self.logger.propagate = False
     
-    def _log(self, level: int, message: str, **kwargs):
+    def _log(self, level: int, message: str, *args, **kwargs):
         """Internal logging method with context."""
         # Merge context with additional fields
         log_data = {**self._context, **kwargs}
-        
+
         # Create log record with extra data
         extra = {}
         for key, value in log_data.items():
             if value is not None:
                 extra[key] = value
-        
-        self.logger.log(level, message, extra=extra)
+
+        self.logger.log(level, message, *args, extra=extra)
     
-    def debug(self, message: str, **kwargs):
+    def debug(self, message: str, *args, **kwargs):
         """Log debug message."""
-        self._log(logging.DEBUG, message, **kwargs)
-    
-    def info(self, message: str, **kwargs):
+        self._log(logging.DEBUG, message, *args, **kwargs)
+
+    def info(self, message: str, *args, **kwargs):
         """Log info message."""
-        self._log(logging.INFO, message, **kwargs)
-    
-    def warning(self, message: str, **kwargs):
+        self._log(logging.INFO, message, *args, **kwargs)
+
+    def warning(self, message: str, *args, **kwargs):
         """Log warning message."""
-        self._log(logging.WARNING, message, **kwargs)
-    
-    def warn(self, message: str, **kwargs):
+        self._log(logging.WARNING, message, *args, **kwargs)
+
+    def warn(self, message: str, *args, **kwargs):
         """Alias for warning."""
-        self.warning(message, **kwargs)
-    
-    def error(self, message: str, **kwargs):
+        self.warning(message, *args, **kwargs)
+
+    def error(self, message: str, *args, **kwargs):
         """Log error message."""
-        self._log(logging.ERROR, message, **kwargs)
-    
-    def critical(self, message: str, **kwargs):
+        self._log(logging.ERROR, message, *args, **kwargs)
+
+    def critical(self, message: str, *args, **kwargs):
         """Log critical message."""
-        self._log(logging.CRITICAL, message, **kwargs)
+        self._log(logging.CRITICAL, message, *args, **kwargs)
     
     def exception(self, message: str, **kwargs):
         """Log exception with traceback."""
@@ -311,27 +396,51 @@ class TradingLogger:
 _loggers: Dict[str, TradingLogger] = {}
 
 
+def _normalize_component_path(component_path: str) -> str:
+    """Normalize component path to match mapping keys."""
+    # Convert full path to relative component path
+    # Remove .py extension and convert path separators to dots
+    normalized = component_path.replace(os.sep, '.')
+    if normalized.endswith('.py'):
+        normalized = normalized[:-3]  # Remove .py
+
+    # Extract the backend.* part if present
+    if 'backend.' in normalized:
+        # Find the backend. part and take from there
+        backend_idx = normalized.find('backend.')
+        normalized = normalized[backend_idx:]
+
+    return normalized
+
+
 def get_logger(name: str, config: Optional[Dict[str, Any]] = None) -> TradingLogger:
     """Get or create a logger instance."""
     if name not in _loggers:
-        from config import config as global_config
-        
+        from backend.config import config as global_config
+
+        # Normalize the component path for mapping lookup
+        normalized_name = _normalize_component_path(name)
+
+        # Determine category and file based on logger name
+        category = COMPONENT_LOGGER_MAPPING.get(normalized_name, "main")
+        file_path = CATEGORY_FILE_MAPPING.get(category, "logs/app.log")
+
         # Merge global logging config with local config
         log_config = {
             'level': getattr(global_config.logging, 'level', 'INFO'),
             'format': getattr(global_config.logging, 'format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s'),
-            'file_path': getattr(global_config.logging, 'file_path', 'logs/app.log'),
+            'file_path': file_path,
             'max_file_size': getattr(global_config.logging, 'max_file_size', 10*1024*1024),
             'backup_count': getattr(global_config.logging, 'backup_count', 5),
             'structured_logging': getattr(global_config.logging, 'structured_logging', True),
-            'timed_rotation': False  # Default to size-based rotation
+            'timed_rotation': getattr(global_config.logging, 'timed_rotation', False)
         }
-        
+
         if config:
             log_config.update(config)
-        
+
         _loggers[name] = TradingLogger(name, log_config)
-    
+
     return _loggers[name]
 
 
@@ -339,6 +448,11 @@ def get_logger(name: str, config: Optional[Dict[str, Any]] = None) -> TradingLog
 def get_app_logger() -> TradingLogger:
     """Get the main application logger."""
     return get_logger("trading_backtester")
+
+
+def get_component_logger(component_path: str) -> TradingLogger:
+    """Get a logger for a specific component path."""
+    return get_logger(component_path)
 
 
 # Specialized logger functions

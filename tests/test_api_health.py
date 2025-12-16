@@ -120,6 +120,20 @@ class TestAPIHealthEndpoints:
             'lightgbm_7d': {'lgbm': Mock(), 'embedder': 'all-MiniLM-L6-v2'}
         }
 
+        # Set up model registry with mock models
+        from backend.models.registry import ModelRegistry
+        registry = ModelRegistry()
+        for model_name in ['lightgbm_1d', 'lightgbm_3d', 'lightgbm_7d']:
+            mock_model = Mock()
+            mock_model.name = model_name
+            mock_model.type = 'lightgbm'
+            mock_model.version = '1.0.0'
+            mock_model.description = f'{model_name} model'
+            mock_model.capabilities = ['predict']
+            mock_model.get_config_schema.return_value.model_json_schema.return_value = {"type": "object"}
+            registry.register(mock_model)
+        app_state['model_registry'] = registry
+
         # Create test client
         self.client = TestClient(app)
 
@@ -159,7 +173,7 @@ class TestAPIHealthEndpoints:
 
     def test_models_endpoint(self):
         """Test models information endpoint."""
-        response = self.client.get("/models")
+        response = self.client.get("/api/models")
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)

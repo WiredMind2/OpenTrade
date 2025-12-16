@@ -8,7 +8,7 @@ import os
 # Add the parent directory to sys.path to allow relative imports when running directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -17,8 +17,13 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.config import get_config
-from backend.logging_config import get_app_logger
-from backend.error_handling import TradingBacktesterError, handle_errors, ErrorRecovery
+from backend.logging_config import get_component_logger
+from backend.error_handling import TradingBacktesterError
+from backend.models import ModelRegistry
+from backend.strategies import strategy_registry
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 # Import route modules (package-relative)
 from backend.routes.health import router as health_router
@@ -31,17 +36,19 @@ from backend.routes.data_endpoints import router as data_router
 from backend.routes.websocket import websocket_endpoint, broadcast_chart_update
 from backend.routes.scripts import router as scripts_router
 from backend.routes.udf import router as udf_router
+from backend.routes.strategies import router as strategies_router
 
-from backend.schemas import HealthResponse, PredictionRequest, PredictionResponse, BacktestRequest, BacktestResult, ModelInfo, PortfolioResponse, SystemMetrics, ScriptExecutionRequest, ScriptExecutionResponse, PipelineStatus
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 
 
 # Global state
 app_state = {
     "start_time": datetime.utcnow(),
-    "models_loaded": {},
+    "models_loaded": {},  # Keep for backward compatibility
+    "model_registry": ModelRegistry(),
+    "strategy_registry": strategy_registry,
     "database_path": None,
     "active_websockets": set(),
     "chart_broadcast_task": None
@@ -97,6 +104,12 @@ app = FastAPI(
     lifespan=lifespan  # type: ignore[type-abstract]
 )
 
+# Initialize rate limiter
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -106,12 +119,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add rate limiting middleware
+app.add_middleware(SlowAPIMiddleware)
+
+# Add rate limit exceeded handler
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Include route modules
 app.include_router(health_router)
 app.include_router(monitoring_router)
 app.include_router(predictions_router)
+logger.info(f"Predictions router included, routes: {[route.path for route in predictions_router.routes]}")
 app.include_router(backtests_router)
-app.include_router(models_router)
+app.include_router(models_router, prefix="/api")
+app.include_router(strategies_router, prefix="/api", tags=["strategies"])
 app.include_router(portfolio_router)
 app.include_router(data_router)
 app.include_router(scripts_router)
@@ -137,26 +158,22 @@ async def init_database():
 
 
 async def load_models():
-    """Load trained models into memory."""
-    import joblib
-
+    """Load trained models into memory using the model registry."""
     config = get_config()
     models_dir = Path(config.model.model_dir)
+    models_pkg_dir = Path(__file__).parent / "models"
 
-    if not models_dir.exists():
-        logger.warning(f"Models directory not found: {models_dir}")
-        return
+    # Discover and register models
+    app_state["model_registry"].discover(models_dir, models_pkg_dir)
 
-    for model_file in models_dir.glob("*.joblib"):
-        try:
-            model_data = joblib.load(model_file)
-            model_name = model_file.stem
-            app_state["models_loaded"][model_name] = model_data
-            logger.info(f"Loaded model: {model_name}")
-        except Exception as e:
-            logger.error(f"Failed to load model {model_file}: {e}")
+    # For backward compatibility, populate the old models_loaded dict
+    registry = app_state["model_registry"]
+    for model in registry.list():
+        if hasattr(model, '_model_data'):
+            # For joblib models, keep the old format
+            app_state["models_loaded"][model.name] = model._model_data
 
-    logger.info(f"Loaded {len(app_state['models_loaded'])} models")
+    logger.info(f"Loaded {len(registry.list())} models via registry")
 
 
 async def cleanup_resources():
@@ -265,9 +282,6 @@ async def http_exception_handler(request, exc):
 
 
 # Utility functions
-def create_app() -> FastAPI:
-    """Create and configure FastAPI application."""
-    return app
 
 
 if __name__ == "__main__":

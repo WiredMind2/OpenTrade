@@ -6,15 +6,35 @@ This script converts sentiment scores from news articles into concrete trading d
 ticker on a given day and converts to a suggested position percentage.
 
 Usage:
-  python scripts/generate_trading_predictions.py --db data/backtest.db --start 2020-01-01 --end 2025-01-01
+   python scripts/generate_trading_predictions.py --db data/backtest.db --start 2020-01-01 --end 2025-01-01
 
 Outputs:
-  Rows in trading_model_predictions table with suggested_position_pct values.
+   Rows in trading_model_predictions table with suggested_position_pct values.
 """
+import sys
+import os
+# Add project root to path so we can import backend modules
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import argparse
 import sqlite3
 from datetime import datetime, timedelta
 from collections import defaultdict
+import logging
+import sys
+
+# Set up standalone logger configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+# Create the logger instance
+logger = logging.getLogger('generate_trading_predictions')
+logger.setLevel(logging.INFO)
 
 
 def get_next_trading_day(conn, date_str):
@@ -103,9 +123,9 @@ def generate_predictions(conn, start_date, end_date):
     cur = conn.cursor()
     
     # Delete existing predictions in the date range
-    cur.execute('DELETE FROM trading_model_predictions WHERE dt >= ? AND dt <= ?', 
+    cur.execute('DELETE FROM trading_model_predictions WHERE dt >= ? AND dt <= ?',
                 (start_date, end_date))
-    print(f'Deleted existing predictions in range {start_date} to {end_date}')
+    logger.info('Deleted existing predictions in range %s to %s', start_date, end_date)
     
     # Get all unique dates from articles with model predictions
     cur.execute('''
@@ -118,7 +138,7 @@ def generate_predictions(conn, start_date, end_date):
     ''', (start_date, end_date))
     
     article_dates = [r[0] for r in cur.fetchall()]
-    print(f'Found {len(article_dates)} dates with articles')
+    logger.info('Found %d dates with articles', len(article_dates))
     
     inserted_count = 0
     
@@ -158,19 +178,21 @@ def generate_predictions(conn, start_date, end_date):
                 inserted_count += 1
     
     conn.commit()
-    print(f'Inserted {inserted_count} trading predictions')
+    logger.info('Inserted %d trading predictions', inserted_count)
 
 
 if __name__ == '__main__':
-    import os
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
+    # Find project root by going up from script location
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
+    default_db_path = os.path.join(project_root, 'data', 'backtest.db')
+    parser.add_argument('--db', default=default_db_path)
     parser.add_argument('--start', default='2020-01-01')
     parser.add_argument('--end', default='2025-01-01')
     args = parser.parse_args()
-    
+
     conn = sqlite3.connect(args.db)
     generate_predictions(conn, args.start, args.end)
     conn.close()
-    print('Done')
+    logger.info('Done')

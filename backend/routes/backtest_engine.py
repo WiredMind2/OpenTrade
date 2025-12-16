@@ -9,11 +9,12 @@ import backtrader as bt
 from datetime import datetime
 from typing import Dict, Any
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
+from backend.strategies import StrategyRegistry
 from .websocket import broadcast_websocket_message
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 
 
 async def run_backtest_background(
@@ -29,99 +30,14 @@ async def run_backtest_background(
     try:
         logger.info(f"Running background backtest: {strategy_name} (ID: {backtest_id})")
 
-        # Create Backtrader strategy class
-        class SentimentStrategy(bt.Strategy):
-            params = (
-                ('initial_capital', initial_capital),
-                ('max_position_pct', parameters.get('max_position_pct', 0.1)),
-                ('stop_loss_pct', parameters.get('stop_loss_pct', 0.05)),
-                ('take_profit_pct', parameters.get('take_profit_pct', 0.15)),
-            )
-
-            def __init__(self):
-                self.equity_curve = []
-                self.trades = []
-                self.predictions = {}
-
-            def next(self):
-                # Get predictions for current date
-                current_date = self.datas[0].datetime.date(0).isoformat()
-
-                # Load predictions from database for this date
-                conn = sqlite3.connect(app_state["database_path"])
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT ticker, suggested_position_pct
-                    FROM trading_model_predictions
-                    WHERE dt = ?
-                """, (current_date,))
-                preds = cur.fetchall()
-                conn.close()
-
-                if not preds:
-                    return
-
-                # Calculate target allocations
-                allocations = {}
-                for ticker, pct in preds:
-                    allocations[ticker] = pct
-
-                # Enforce position limits
-                total_exposure = sum(abs(pct) for pct in allocations.values())
-                if total_exposure > self.params.max_position_pct:
-                    scale = self.params.max_position_pct / total_exposure
-                    allocations = {t: v * scale for t, v in allocations.items()}
-
-                # Execute trades
-                for ticker, target_pct in allocations.items():
-                    # Find data feed for this ticker
-                    data = None
-                    for d in self.datas:
-                        if hasattr(d, '_name') and d._name == ticker:
-                            data = d
-                            break
-
-                    if data is None:
-                        continue
-
-                    current_position = self.getposition(data).size
-                    current_value = current_position * data.close[0]
-                    portfolio_value = self.broker.getvalue()
-                    target_value = target_pct * portfolio_value
-
-                    if abs(current_value - target_value) < 100:  # Minimum trade size
-                        continue
-
-                    if target_value > current_value:
-                        # Buy
-                        shares_to_buy = int((target_value - current_value) / data.close[0])
-                        if shares_to_buy > 0:
-                            self.buy(data=data, size=shares_to_buy)
-                    elif target_value < current_value:
-                        # Sell
-                        shares_to_sell = int((current_value - target_value) / data.close[0])
-                        if shares_to_sell > 0:
-                            self.sell(data=data, size=shares_to_sell)
-
-                # Record equity curve
-                self.equity_curve.append({
-                    'date': current_date,
-                    'value': self.broker.getvalue()
-                })
-
-            def notify_trade(self, trade):
-                if trade.isclosed:
-                    self.trades.append({
-                        'size': trade.size,
-                        'price': trade.price,
-                        'value': trade.value,
-                        'pnl': trade.pnl,
-                        'pnlcomm': trade.pnlcomm
-                    })
+        # Get strategy from registry
+        registry = app_state["strategy_registry"]
+        strategy = registry.get(strategy_name)
+        strategy_class = strategy.create_backtrader_strategy(parameters)
 
         # Set up Backtrader
         cerebro = bt.Cerebro()
-        cerebro.addstrategy(SentimentStrategy)
+        cerebro.addstrategy(strategy_class, **parameters)
 
         # Add data feeds for tickers that have predictions
         conn = sqlite3.connect(app_state["database_path"])
@@ -152,10 +68,10 @@ async def run_backtest_background(
             # Create pandas DataFrame
             df = pd.DataFrame(price_data, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
             df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
+            df = df.sort_values('date')
 
             # Create Backtrader data feed
-            data = bt.feeds.PandasData(dataname=df, name=ticker)
+            data = bt.feeds.PandasData(dataname=df, datetime=0, open=1, high=2, low=3, close=4, volume=5, name=ticker)
             cerebro.adddata(data)
 
         conn.close()

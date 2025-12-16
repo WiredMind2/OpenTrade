@@ -19,6 +19,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sentence_transformers import SentenceTransformer
 import lightgbm as lgb
 import joblib
+from script_logger import logger
 
 
 def load_csv(csv_path):
@@ -39,17 +40,17 @@ def train(csv_path, outdir='models', model_name='all-MiniLM-L6-v2'):
     os.makedirs(outdir, exist_ok=True)
     df = load_csv(csv_path)
     if df.empty:
-        print('No training rows found in', csv_path)
+        logger.warning('No training rows found in %s', csv_path)
         return
     X_text = df['text'].tolist()
     y = df['label'].astype(float).values
-    print('Rows:', len(y))
+    logger.info('Rows: %d', len(y))
     # embed
     emb = embed_texts(X_text, model_name=model_name)
     X_train, X_test, y_train, y_test = train_test_split(emb, y, test_size=0.2, random_state=42)
 
     # use sklearn API for LightGBM for simpler early-stopping handling
-    print('Training LightGBM (sklearn API)...')
+    logger.info('Training LightGBM (sklearn API)...')
     gbm = lgb.LGBMRegressor(n_estimators=200)
     # use callbacks for early stopping and disable logging
     callbacks = [lgb.early_stopping(stopping_rounds=20), lgb.log_evaluation(period=0)]
@@ -63,7 +64,7 @@ def train(csv_path, outdir='models', model_name='all-MiniLM-L6-v2'):
         preds = np.asarray(preds).ravel()  # type: ignore[arg-type]
     rmse = mean_squared_error(y_test, preds) ** 0.5  # type: ignore[arg-type]
     mae = mean_absolute_error(y_test, preds)  # type: ignore[arg-type]
-    print(f'RMSE: {rmse:.6f}, MAE: {mae:.6f}')
+    logger.info('RMSE: %.6f, MAE: %.6f', rmse, mae)
 
     # Derive model name from CSV filename
     import re
@@ -77,10 +78,11 @@ def train(csv_path, outdir='models', model_name='all-MiniLM-L6-v2'):
         topn = 'top10'
     out_model = os.path.join(outdir, f'lightgbm_{horizon}_{topn}.joblib')
     joblib.dump({'lgbm': gbm, 'embedder': model_name}, out_model)
-    print('Saved model to', out_model)
+    logger.info('Saved model to %s', out_model)
 
 
 if __name__ == '__main__':
+
     p = argparse.ArgumentParser()
     p.add_argument('--csv', required=True)
     p.add_argument('--outdir', default='models')

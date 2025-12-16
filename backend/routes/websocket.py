@@ -5,10 +5,10 @@ import json
 from typing import Dict, Set, Tuple
 from fastapi import WebSocket, WebSocketDisconnect
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 
 # Active WebSocket connections (for tests to access directly)
 active_connections = set()
@@ -19,26 +19,30 @@ chart_subscriptions: Dict[WebSocket, Set[Tuple[str, str, str]]] = {}
 
 async def broadcast_websocket_message(message: dict):
     """Broadcast a message to all connected WebSocket clients.
-    
+
     Returns a dict with broadcast statistics for testing/monitoring.
     """
     from backend.main import app_state
 
     # Use module-level set or app_state set (whichever has connections)
     connections = active_connections or app_state.get("active_websockets", set())
-    
+
     if not connections:
-        return {"sent": True, "clients": 0, "failed": 0}
+        return {"sent": False, "clients": 0, "failed": 0}
+
+    # Log message content for debugging
+    logger.debug(f"Broadcasting websocket message: {message}")
 
     sent_count = 0
     failed_count = 0
     disconnected = set()
-    
+
     for websocket in connections:
         try:
             await websocket.send_json(message)
             sent_count += 1
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to send websocket message", websocket=websocket, error=e)
             disconnected.add(websocket)
             failed_count += 1
 

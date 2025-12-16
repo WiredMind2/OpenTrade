@@ -12,8 +12,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 from backend.config import get_config
+from backend.logging_config import get_component_logger
 from backend.schemas import HealthResponse
-
 
 router = APIRouter()
 
@@ -22,6 +22,8 @@ router = APIRouter()
 async def health_check():
     """Health check endpoint."""
     from backend.main import app_state  # Import here to avoid circular imports
+
+    logger = get_component_logger(__file__)
 
     config = get_config()
     uptime = (datetime.utcnow() - app_state["start_time"]).total_seconds()
@@ -39,8 +41,9 @@ async def health_check():
         conn.execute("SELECT 1")
         conn.close()
         services["database"] = "healthy"
-    except Exception:
+    except Exception as e:
         services["database"] = "unhealthy"
+        logger.warning("Database health check failed", error=e)
 
     return HealthResponse(
         status="healthy",

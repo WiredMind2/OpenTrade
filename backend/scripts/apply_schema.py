@@ -9,6 +9,7 @@ import argparse
 import os
 import sqlite3
 import sys
+from script_logger import logger
 
 
 def apply_schema(db_path: str, schema_path: str):
@@ -18,12 +19,20 @@ def apply_schema(db_path: str, schema_path: str):
     try:
         conn.executescript(sql)
         conn.commit()
-        print(f"Schema applied to {db_path}")
+        logger.info('Schema applied to %s', db_path)
     finally:
         conn.close()
 
 
 def main():
+    # Set up logger
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+    logger = logging.getLogger(__name__)
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', required=False, default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')), help='SQLite DB path')
     parser.add_argument('--schema', required=False, default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'db', 'schema.sql')), help='Path to SQL schema file')

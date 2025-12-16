@@ -1,14 +1,15 @@
 import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { 
-  LayoutDashboard, 
-  TrendingUp, 
-  BarChart3, 
+import {
+  LayoutDashboard,
+  TrendingUp,
+  BarChart3,
   Wallet,
   Menu,
   X,
   Activity,
-  Settings
+  Settings,
+  Brain
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
@@ -24,6 +25,7 @@ const navigation = [
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
   { name: 'Portfolio', href: '/portfolio', icon: Wallet },
+  { name: 'Strategies', href: '/strategies', icon: Brain },
   { name: 'Scripts', href: '/scripts', icon: Settings },
 ]
 

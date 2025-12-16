@@ -60,6 +60,13 @@ class BacktestRequest(BaseModel):
     initial_capital: float = Field(default=100000.0, description="Initial capital amount")
     parameters: Optional[Dict[str, Any]] = Field(default={}, description="Strategy parameters")
 
+    @field_validator('initial_capital')
+    @classmethod
+    def validate_initial_capital(cls, v):
+        if v <= 0:
+            raise ValueError('initial_capital must be positive')
+        return v
+
     @field_validator('end_date')
     @classmethod
     def validate_end_date(cls, v, info):
@@ -97,6 +104,16 @@ class ModelInfo(BaseModel):
     last_trained: datetime
     features: List[str]
     status: str = "active"
+
+
+class ModelSummary(BaseModel):
+    """Summary information about available models."""
+    name: str
+    type: str
+    version: str
+    description: str
+    capabilities: List[str]
+    config_schema: Dict[str, Any]
 
 
 class PortfolioResponse(BaseModel):
@@ -213,3 +230,55 @@ class ChartDataResponse(BaseModel):
         if not v or len(v.strip()) == 0:
             raise ValueError('ticker cannot be empty')
         return v.upper().strip()
+
+
+class MAPredictionRequest(BaseModel):
+    """Request model for generating MA predictions."""
+    start_date: str = Field(..., description="Start date for prediction generation (YYYY-MM-DD)")
+    end_date: str = Field(..., description="End date for prediction generation (YYYY-MM-DD)")
+    short_ma_range: Optional[List[int]] = Field(default=[3, 5, 7], description="Range of short MA periods for optimization")
+    medium_ma_range: Optional[List[int]] = Field(default=[15, 20, 25], description="Range of medium MA periods for optimization")
+    long_ma_range: Optional[List[int]] = Field(default=[40, 50, 60], description="Range of long MA periods for optimization")
+    skip_optimization: bool = Field(default=False, description="Skip optimization and use fixed MA periods")
+    fixed_short: Optional[int] = Field(default=5, description="Fixed short MA period when skip_optimization is true")
+    fixed_medium: Optional[int] = Field(default=20, description="Fixed medium MA period when skip_optimization is true")
+    fixed_long: Optional[int] = Field(default=50, description="Fixed long MA period when skip_optimization is true")
+
+    @field_validator('start_date', 'end_date')
+    @classmethod
+    def validate_date(cls, v):
+        try:
+            datetime.fromisoformat(v)
+            return v
+        except ValueError:
+            raise ValueError('Date must be in YYYY-MM-DD format')
+
+    @field_validator('end_date')
+    @classmethod
+    def validate_end_date(cls, v, info):
+        if 'start_date' in info.data and v <= info.data['start_date']:
+            raise ValueError('end_date must be after start_date')
+        return v
+
+
+class MAPredictionResponse(BaseModel):
+    """Response model for MA prediction generation."""
+    status: str  # 'running', 'completed', 'failed'
+    execution_id: str
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    output: Optional[str] = None
+    error: Optional[str] = None
+    duration_seconds: Optional[float] = None
+
+
+class ModelPredictRequest(BaseModel):
+    """Request model for model predictions."""
+    inputs: Dict[str, Any]
+    config: Dict[str, Any]
+
+
+class ModelPredictResponse(BaseModel):
+    """Response model for model predictions."""
+    predictions: List[Dict[str, Any]]
+    meta: Dict[str, Any]

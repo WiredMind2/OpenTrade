@@ -11,6 +11,10 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 import sqlite3
 
+from backend.logging_config import get_component_logger
+
+logger = get_component_logger(__file__)
+
 # Password hashing context
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
@@ -73,7 +77,8 @@ def verify_token(token: str) -> Optional[TokenData]:
             return None
 
         return TokenData(user_id=user_id, email=email, role=role)
-    except JWTError:
+    except JWTError as e:
+        logger.warning("JWT token verification failed", error=e)
         return None
 
 
@@ -178,6 +183,16 @@ def check_role_access(user_role: str, required_role: str) -> bool:
     required_level = role_hierarchy.get(required_role, 0)
 
     return user_level >= required_level
+
+
+def validate_api_key(api_key: str) -> bool:
+    """Validate API key for external services."""
+    from backend.config import API_KEY
+
+    if not api_key or api_key != API_KEY:
+        raise ValueError("Invalid API key")
+
+    return True
 
 
 def log_user_activity(user_id: int, action: str, details: Optional[str], db_path: str,

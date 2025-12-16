@@ -227,10 +227,9 @@ class TestAPIEndpoints:
         data = response.json()
         assert "timestamp" in data
 
-    @patch('main.app_state', {'models_loaded': {'test_model': Mock()}})
     def test_models_endpoint(self):
         """Test models listing endpoint."""
-        response = self.client.get("/models")
+        response = self.client.get("/api/models")
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)

@@ -18,6 +18,13 @@ class TestIntegrationWorkflow:
 
     def setup_method(self):
         """Set up test environment."""
+        import sys
+        from pathlib import Path
+        backend_path = str(Path(__file__).parent.parent / 'backend')
+        # Ensure backend package is preferred on import path
+        if backend_path not in sys.path:
+            sys.path.insert(0, backend_path)
+
         # Create temporary database
         self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.temp_db.close()
@@ -64,12 +71,43 @@ class TestIntegrationWorkflow:
                 metadata TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS model_jobs (
+                id TEXT PRIMARY KEY,
+                model_name TEXT,
+                status TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                config TEXT,
+                result TEXT,
+                error TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trading_model_predictions (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT,
+                suggested_position_pct REAL,
+                dt TEXT,
+                confidence REAL,
+                predicted_return REAL,
+                enter_prob REAL,
+                exit_prob REAL,
+                model TEXT
+            )
+        """)
         conn.commit()
         conn.close()
 
         # Set up app state
         from main import app_state
+        from backend.strategies import strategy_registry
         app_state['database_path'] = self.temp_db.name
+        # Re-discover strategies after sys.path is set
+        from pathlib import Path
+        strategies_pkg_dir = Path(__file__).parent.parent / 'backend' / 'strategies'
+        strategy_registry.discover(strategies_pkg_dir)
+        app_state['strategy_registry'] = strategy_registry
         app_state['models_loaded'] = {
             'lightgbm_1d': {'lgbm': MagicMock(), 'embedder': 'all-MiniLM-L6-v2'},
         }
@@ -385,6 +423,348 @@ class TestIntegrationWorkflow:
         finally:
             active_connections.clear()
             received_messages.clear()
+
+    def test_strategy_train_api_job_creation(self):
+        """Test POST /api/strategies/{name}/train endpoint for job creation."""
+        # Test training a strategy that supports training
+        payload = {
+            "config": {
+                "csv_path": "data/test_training_data.csv",
+                "outdir": "models",
+                "embedder": "all-MiniLM-L6-v2"
+            }
+        }
+
+        # Mock authentication and strategy.train method
+        with patch('backend.auth_utils.get_user_from_token') as mock_auth, \
+             patch('backend.strategies.sentiment_ml.SentimentMLStrategy.train') as mock_train:
+
+            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+            mock_train.return_value = {"job_id": "test_job_123", "status": "queued"}
+
+            response = self.client.post("/api/strategies/sentiment_ml/train", json=payload)
+            assert response.status_code == 200
+
+            data = response.json()
+            assert "job_id" in data
+            assert data["job_id"] == "test_job_123"
+
+    def test_strategy_train_api_unsupported_strategy(self):
+        """Test training a strategy that doesn't support training."""
+        payload = {"config": {}}
+
+        # Mock authentication
+        with patch('backend.auth_utils.get_user_from_token') as mock_auth:
+            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+
+            # Try to train a rule-based strategy (assuming moving_average doesn't support training)
+            response = self.client.post("/api/strategies/moving_average/train", json=payload)
+            assert response.status_code == 400
+
+            data = response.json()
+            assert "detail" in data
+            assert "does not support training" in data["detail"]
+
+    def test_get_model_job_status(self):
+        """Test GET /api/model_jobs/{job_id} endpoint."""
+        # Insert a test job
+        conn = sqlite3.connect(self.temp_db.name)
+        conn.execute("""
+            INSERT INTO model_jobs (id, model_name, status, created_at, config)
+            VALUES (?, ?, ?, ?, ?)
+        """, ("test_job_456", "sentiment_ml", "completed", "2024-01-01T10:00:00", '{"param": "value"}'))
+        conn.commit()
+        conn.close()
+
+        # Mock authentication
+        with patch('backend.auth_utils.get_user_from_token') as mock_auth:
+            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+
+            # Test getting job status
+            response = self.client.get("/api/model_jobs/test_job_456")
+            assert response.status_code == 200
+
+            data = response.json()
+            assert data["job_id"] == "test_job_456"
+            assert data["model_name"] == "sentiment_ml"
+            assert data["status"] == "completed"
+            assert data["config"] == '{"param": "value"}'
+
+    def test_get_model_job_status_not_found(self):
+        """Test GET /api/model_jobs/{job_id} for non-existent job."""
+        # Mock authentication
+        with patch('backend.auth_utils.get_user_from_token') as mock_auth:
+            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+
+            response = self.client.get("/api/model_jobs/non_existent_job")
+            assert response.status_code == 404
+
+            data = response.json()
+            assert "detail" in data
+            assert "not found" in data["detail"]
+
+    @pytest.mark.asyncio
+    async def test_full_training_workflow_integration(self):
+        """Test full training workflow: queue job, run training, check model saving and registry refresh."""
+        from unittest.mock import AsyncMock, patch
+        import asyncio
+
+        # Step 1: Mock the training subprocess to succeed quickly
+        with patch('backend.strategies.sentiment_ml.subprocess.run') as mock_subprocess, \
+             patch('backend.strategies.sentiment_ml.broadcast_websocket_message') as mock_broadcast, \
+             patch('backend.strategies.sentiment_ml.psutil.cpu_percent', return_value=50.0), \
+             patch('backend.strategies.sentiment_ml.psutil.virtual_memory') as mock_memory:
+
+            # Mock memory
+            mock_memory.return_value.percent = 60.0
+
+            # Mock successful training
+            mock_process = MagicMock()
+            mock_process.returncode = 0
+            mock_process.communicate.return_value = ("RMSE: 0.123\nMAE: 0.089", "")
+            mock_subprocess.return_value = mock_process
+
+            # Step 2: Start training
+            strategy = self.registry.get("sentiment_ml")
+            config = {
+                "csv_path": "data/test_training.csv",
+                "outdir": "models",
+                "embedder": "all-MiniLM-L6-v2"
+            }
+
+            result = strategy.train(config)
+            job_id = result["job_id"]
+
+            # Step 3: Wait for background task to complete
+            await asyncio.sleep(0.1)  # Allow background task to run
+
+            # Step 4: Check job status
+            response = self.client.get(f"/api/model_jobs/{job_id}")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "completed"
+            assert data["results"] is not None
+
+            # Step 5: Verify model was versioned and registry refreshed
+            # Check that versions were loaded
+            strategy._load_versions()
+            assert len(strategy.versions) > 0
+
+            # Verify WebSocket messages were sent
+            assert mock_broadcast.call_count >= 2  # running and completed messages
+
+    def test_sentiment_ml_backtest_end_to_end(self):
+        """End-to-end integration test for sentiment_ml strategy backtest."""
+        import time
+
+        # Step 1: Verify that the sentiment_ml strategy is registered
+        from main import app_state
+        registry = app_state.get("strategy_registry")
+        assert registry is not None, "Strategy registry not found in app_state"
+        strategy = registry.get("sentiment_ml")
+        assert strategy is not None, "sentiment_ml strategy not registered"
+        assert strategy.name == "sentiment_ml"
+        assert strategy.type == "ml"
+
+        # Step 2: Insert test data for trading_model_predictions and price_daily
+        conn = sqlite3.connect(self.temp_db.name)
+
+        # Insert test predictions for AAPL with sentiment data
+        test_date = "2024-01-15"
+        conn.execute("""
+            INSERT INTO trading_model_predictions
+            (ticker, suggested_position_pct, dt, confidence, predicted_return, enter_prob, exit_prob, model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, ("AAPL", 0.1, test_date, 0.8, 0.025, 0.7, 0.1, "sentiment_ml"))
+
+        # Insert price data for AAPL over a period
+        price_data = []
+        base_price = 150.0
+        for i in range(60):  # 60 days of data
+            date = (datetime(2024, 1, 1) + timedelta(days=i)).date().isoformat()
+            open_price = base_price + (i * 0.5)
+            high_price = open_price + 2.0
+            low_price = open_price - 2.0
+            close_price = open_price + 1.0
+            volume = 1000000
+            price_data.append((date, open_price, high_price, low_price, close_price, volume))
+
+        conn.executemany("""
+            INSERT INTO price_daily
+            (ticker, date, open, high, low, close, adjusted_close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [("AAPL", date, open_p, high_p, low_p, close_p, close_p, vol) for date, open_p, high_p, low_p, close_p, vol in price_data])
+
+        conn.commit()
+        conn.close()
+
+        # Step 3: Simulate POST request to /backtest endpoint with sentiment_ml strategy
+        payload = {
+            "strategy_name": "sentiment_ml",
+            "start_date": "2024-01-01T00:00:00",
+            "end_date": "2024-02-29T00:00:00",  # About 60 days
+            "initial_capital": 100000.0,
+            "parameters": {
+                "model_name": "sentiment_ml",
+                "prediction_threshold": 0.5,
+                "max_position_pct": 0.1
+            }
+        }
+        response = self.client.post("/backtest", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        backtest_id = data.get("metrics", {}).get("backtest_id")
+        assert backtest_id is not None
+
+        # Step 4: Poll for backtest completion
+        max_attempts = 30  # 30 seconds max
+        attempt = 0
+        while attempt < max_attempts:
+            response = self.client.get(f"/backtest/{backtest_id}")
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("completed_at") is not None:
+                    break
+            time.sleep(1)
+            attempt += 1
+
+        assert attempt < max_attempts, "Backtest did not complete within timeout"
+
+        # Step 5: Assert backtest results
+        assert result["strategy_name"] == "sentiment_ml"
+        assert result["initial_capital"] == 100000.0
+        assert result["final_value"] > 0
+        assert isinstance(result["equity_curve"], list)
+        assert len(result["equity_curve"]) > 0
+        assert result["total_trades"] >= 0  # May be 0 if no trades trigger
+
+    def test_moving_average_backtest_end_to_end(self):
+        """End-to-end integration test for moving_average strategy backtest."""
+        import time
+        import json
+
+        # Step 1: Verify that the moving_average strategy is registered
+        from main import app_state
+        registry = app_state.get("strategy_registry")
+        assert registry is not None, "Strategy registry not found in app_state"
+        strategies_list = registry.list()
+        print(f"Registered strategies: {[s['name'] for s in strategies_list]}")
+        strategy = registry.get("moving_average")
+        assert strategy is not None, "moving_average strategy not registered"
+        assert strategy.name == "moving_average"
+        assert strategy.description == "Simple moving average crossover strategy"
+
+        # Step 2: Insert test data for trading_model_predictions and price_daily
+        conn = sqlite3.connect(self.temp_db.name)
+
+        # Add backtest_runs table if not exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_runs (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                params TEXT,
+                started_at TEXT,
+                completed_at TEXT,
+                initial_capital REAL,
+                final_value REAL,
+                total_return REAL,
+                annualized_return REAL,
+                sharpe_ratio REAL,
+                max_drawdown REAL,
+                win_rate REAL,
+                total_trades INTEGER,
+                avg_trade_return REAL,
+                volatility REAL,
+                equity_curve TEXT,
+                metrics TEXT
+            )
+        """)
+
+        # Add trading_model_predictions table if not exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trading_model_predictions (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT,
+                suggested_position_pct REAL,
+                dt TEXT,
+                confidence REAL
+            )
+        """)
+
+        # Insert test predictions for AAPL
+        test_date = "2024-01-15"
+        conn.execute("""
+            INSERT INTO trading_model_predictions
+            (ticker, suggested_position_pct, dt, confidence)
+            VALUES (?, ?, ?, ?)
+        """, ("AAPL", 0.1, test_date, 0.8))
+
+        # Insert price data for AAPL over a period
+        price_data = []
+        base_price = 150.0
+        for i in range(60):  # 60 days of data
+            date = (datetime(2024, 1, 1) + timedelta(days=i)).date().isoformat()
+            open_price = base_price + (i * 0.5)
+            high_price = open_price + 2.0
+            low_price = open_price - 2.0
+            close_price = open_price + 1.0
+            volume = 1000000
+            price_data.append((date, open_price, high_price, low_price, close_price, volume))
+
+        conn.executemany("""
+            INSERT INTO price_daily
+            (ticker, date, open, high, low, close, adjusted_close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [("AAPL", date, open_p, high_p, low_p, close_p, close_p, vol) for date, open_p, high_p, low_p, close_p, vol in price_data])
+
+        conn.commit()
+        conn.close()
+
+        # Step 3: Simulate POST request to /backtest endpoint
+        payload = {
+            "strategy_name": "moving_average",
+            "start_date": "2024-01-01T00:00:00",
+            "end_date": "2024-02-29T00:00:00",  # About 60 days
+            "initial_capital": 100000.0,
+            "parameters": {
+                "short_window": 10,
+                "long_window": 30,
+                "max_position_pct": 0.1
+            }
+        }
+        response = self.client.post("/backtest", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        backtest_id = data.get("metrics", {}).get("backtest_id")
+        assert backtest_id is not None
+
+        # Step 4: Poll for backtest completion
+        max_attempts = 30  # 30 seconds max
+        attempt = 0
+        while attempt < max_attempts:
+            response = self.client.get(f"/backtest/{backtest_id}")
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("completed_at") is not None:
+                    break
+            time.sleep(1)
+            attempt += 1
+
+        assert attempt < max_attempts, "Backtest did not complete within timeout"
+
+        # Step 5: Assert backtest results
+        assert result["strategy_name"] == "moving_average"
+        assert result["initial_capital"] == 100000.0
+        assert result["final_value"] > 0
+        assert isinstance(result["equity_curve"], list)
+        assert len(result["equity_curve"]) > 0
+        assert result["total_trades"] >= 0  # May be 0 if no trades
+
+        # Check that trades are recorded if any
+        if result["total_trades"] > 0:
+            # Since trades are not directly returned in the result, check metrics
+            assert "total_trades" in result
+            assert result["total_trades"] > 0
             # Clean up script executions
             if execution_id in script_executions:
                 del script_executions[execution_id]

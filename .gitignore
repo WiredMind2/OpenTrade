@@ -27,10 +27,9 @@ dist/
 .coverage
 .pytest_cache/
 .hypothesis/
-data/backtest.db
-data/kaggle_yahoo/
-data/training_labels_*.csv
-models/*.joblib
+.benchmarks/
+/models/
 .venv/
 frontend/node_modules/
-backend/models/
+data/
+htmlcov/

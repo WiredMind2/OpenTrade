@@ -8,9 +8,11 @@ Notes:
 import os
 import sqlite3
 import argparse
+import time
 from datetime import datetime
 from newsapi import NewsApiClient
 from dotenv import load_dotenv
+from .script_logger import logger
 
 load_dotenv()
 
@@ -21,7 +23,7 @@ class NewsAPIConnector:
     def __init__(self, api_key: str):
         self.client = NewsApiClient(api_key=api_key)
 
-    def fetch_headlines(self, query: str, from_dt: str | None = None, to_dt: str | None = None, page=1, page_size=100):
+    def fetch_headlines(self, query: str, from_dt: str | None = None, to_dt: str | None = None, page=1, page_size=100, max_retries=3):
         # returns list of article dicts
         params = {
             'q': query,
@@ -35,35 +37,87 @@ class NewsAPIConnector:
         if to_dt:
             # NewsApiClient uses 'to' for the end date
             params['to'] = to_dt
-        # pass all params through to the underlying client
-        result = self.client.get_everything(**params)
-        return result.get('articles', [])
+
+        for attempt in range(max_retries):
+            try:
+                logger.info('Fetching headlines, attempt %d/%d', attempt + 1, max_retries)
+                result = self.client.get_everything(**params)
+                if not isinstance(result, dict):
+                    raise ValueError('API response is not a valid dictionary')
+                articles = result.get('articles', [])
+                if not isinstance(articles, list):
+                    raise ValueError('Articles in API response is not a list')
+                logger.info('Successfully fetched %d articles', len(articles))
+                return articles
+            except Exception as e:
+                logger.warning('Failed to fetch headlines on attempt %d: %s', attempt + 1, e)
+                if attempt < max_retries - 1:
+                    sleep_time = 2 ** attempt  # exponential backoff
+                    logger.info('Retrying in %d seconds', sleep_time)
+                    time.sleep(sleep_time)
+                else:
+                    logger.error('Failed to fetch headlines after %d attempts', max_retries)
+                    raise
 
 
 def store_articles(db_path: str, articles: list):
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    inserted = 0
-    for a in articles:
-        url = a.get('url')
-        title = a.get('title')
-        author = a.get('author')
-        published_at = a.get('publishedAt')
-        content = a.get('content') or a.get('description') or ''
-        try:
-            cur.execute(
-                'INSERT OR IGNORE INTO articles (source, url, canonical_timestamp, title, author, content, raw_html, fingerprint, lang) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                ('newsapi', url, published_at, title, author, content, None, None, 'en')
-            )
-            inserted += cur.rowcount
-        except Exception as e:
-            print('Failed to insert', url, e)
-    conn.commit()
-    conn.close()
-    print(f'Inserted {inserted} articles')
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        inserted = 0
+        for a in articles:
+            if not isinstance(a, dict):
+                logger.warning('Skipping invalid article: not a dict')
+                continue
+            url = a.get('url')
+            title = a.get('title')
+            author = a.get('author')
+            published_at = a.get('publishedAt')
+            content = a.get('content') or a.get('description') or ''
+            if not url or not title:
+                logger.warning('Skipping article with missing url or title: %s', a)
+                continue
+            try:
+                cur.execute(
+                    'INSERT OR IGNORE INTO articles (source, url, canonical_timestamp, title, author, content, raw_html, fingerprint, lang) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    ('newsapi', url, published_at, title, author, content, None, None, 'en')
+                )
+                inserted += cur.rowcount
+            except Exception as e:
+                logger.error('Failed to insert %s: %s', url, e)
+        conn.commit()
+        logger.info('Inserted %d articles', inserted)
+    except sqlite3.Error as e:
+        logger.error('Database error while storing articles: %s', e)
+        raise
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+
+def ingest_news_data(db_path: str = None, query: str = 'stock OR company OR earnings', from_dt: str = None, to_dt: str = None):
+    """
+    Ingest news data from NewsAPI and store in database.
+    Returns True on success, raises exception on failure.
+    """
+    if db_path is None:
+        db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db'))
+
+    if not NEWSAPI_KEY:
+        raise ValueError('NEWSAPI_KEY not set in environment. Export it or add to .env file.')
+
+    try:
+        conn = NewsAPIConnector(api_key=NEWSAPI_KEY)
+        articles = conn.fetch_headlines(query=query, from_dt=from_dt, to_dt=to_dt)
+        store_articles(db_path, articles)
+        return True
+    except Exception as e:
+        logger.error('Failed to ingest news data: %s', e)
+        raise
 
 
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     parser.add_argument('--query', default='stock OR company OR earnings')
@@ -71,13 +125,11 @@ def main():
     parser.add_argument('--to', dest='to_dt', default=None)
     args = parser.parse_args()
 
-    if not NEWSAPI_KEY:
-        print('NEWSAPI_KEY not set in environment. Export it or add to .env file.')
-        return
-
-    conn = NewsAPIConnector(api_key=NEWSAPI_KEY)
-    articles = conn.fetch_headlines(query=args.query, from_dt=args.from_dt, to_dt=args.to_dt)
-    store_articles(args.db, articles)
+    try:
+        ingest_news_data(db_path=args.db, query=args.query, from_dt=args.from_dt, to_dt=args.to_dt)
+    except Exception as e:
+        logger.error('News ingestion failed: %s', e)
+        exit(1)
 
 
 if __name__ == '__main__':

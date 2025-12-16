@@ -23,7 +23,7 @@ except ImportError:
     YFINANCE_AVAILABLE = False
     yf = None
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
 from backend.config import get_config
 from backend.schemas.udf import DatafeedConfiguration, Exchange, DatafeedSymbolType, SymbolInfo
 from backend.data_processing import resample_ohlc_data, parse_resolution, resolution_to_timeframe
@@ -31,7 +31,7 @@ from backend.data_validation import DataValidator
 from backend.cache import udf_history_cache
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 router = APIRouter()
 
 
@@ -47,17 +47,6 @@ def invalidate_symbol_cache(symbol: str) -> None:
     except Exception as e:
         logger.error(f"Failed to invalidate cache for symbol {symbol}: {e}")
 
-
-def invalidate_all_cache() -> None:
-    """Invalidate all UDF cache entries.
-
-    Use sparingly, typically after major data updates.
-    """
-    try:
-        udf_history_cache.invalidate_all()
-        logger.info("Invalidated all UDF cache entries")
-    except Exception as e:
-        logger.error(f"Failed to invalidate all cache: {e}")
 
 
 def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: datetime) -> bool:

@@ -12,6 +12,7 @@ import argparse
 import sqlite3
 import os
 from datetime import datetime, timedelta
+from script_logger import logger
 
 
 def load_trading_predictions(conn, date_str):
@@ -28,6 +29,8 @@ def get_open_price(conn, ticker, date_str):
 
 
 def run_backtest(db_path: str, start_date: str, end_date: str, initial_capital: float = 100000.0, commission_per_share: float = 0.005, slippage_pct: float = 0.0002, exposure_cap: float = 0.5):
+
+    print("DEBUG: Starting backtest")
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     capital = initial_capital
@@ -35,8 +38,10 @@ def run_backtest(db_path: str, start_date: str, end_date: str, initial_capital: 
     # iterate dates (naive daily loop using price_daily dates from the DB)
     cur.execute('SELECT DISTINCT date FROM price_daily WHERE date >= ? AND date <= ? ORDER BY date ASC', (start_date, end_date))
     dates = [r[0] for r in cur.fetchall()]
+    print(f"DEBUG: Found dates: {dates}")
     for dt in dates:
         preds = load_trading_predictions(conn, dt)
+        print(f"DEBUG: Processing {dt}, preds: {preds}")
         if not preds:
             # nothing to do for this day
             continue
@@ -73,12 +78,21 @@ def run_backtest(db_path: str, start_date: str, end_date: str, initial_capital: 
             if r and r[0] is not None:
                 market_value += pos['qty'] * r[0]
         total_value = capital + market_value
-        # print daily snapshot
+        # log daily snapshot
         print(f'{dt} total_value={total_value:.2f} cash={capital:.2f} market_value={market_value:.2f}')
+        logger.info(f'{dt} total_value={total_value:.2f} cash={capital:.2f} market_value={market_value:.2f}')
     conn.close()
 
 
 def main():
+    # Set up logger
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+    logger = logging.getLogger(__name__)
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     parser.add_argument('--start', required=True)

@@ -17,11 +17,11 @@ import json
 from pathlib import Path
 
 from config import get_config
-from logging_config import get_app_logger
+from logging_config import get_component_logger
 from error_handling import handle_data_errors, DataIngestionError
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 
 
 class DataQualityLevel(Enum):
@@ -758,8 +758,26 @@ def create_data_quality_monitor(db_path: str = None) -> DataQualityMonitor:
     if db_path is None:
         config = get_config()
         db_path = config.database.path
-    
+
     return DataQualityMonitor(db_path)
+
+
+def validate_date_range(start_date: datetime, end_date: datetime) -> bool:
+    """Validate that start date is before end date.
+
+    Args:
+        start_date: Start date as datetime object
+        end_date: End date as datetime object
+
+    Returns:
+        True if validation passes
+
+    Raises:
+        ValueError: If start date is not before end date
+    """
+    if start_date >= end_date:
+        raise ValueError("Start date must be before end date")
+    return True
 
 
 # Example usage and testing

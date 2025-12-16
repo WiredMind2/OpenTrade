@@ -1,6 +1,6 @@
-import { WebSocketMessage, ScriptStatusMessage, PipelineStatusMessage, BacktestStatusMessage, ChartUpdateMessage } from '../types'
+import { WebSocketMessage, ScriptStatusMessage, PipelineStatusMessage, BacktestStatusMessage, ChartUpdateMessage, TrainingProgressMessage } from '../types'
 
-type MessageType = 'script_status' | 'pipeline_status' | 'backtest_status' | 'chart_update'
+type MessageType = 'script_status' | 'pipeline_status' | 'backtest_status' | 'chart_update' | 'training_progress'
 type MessageListener<T = any> = (message: WebSocketMessage & { data: T }) => void
 
 interface ListenerMap {
@@ -8,6 +8,7 @@ interface ListenerMap {
   pipeline_status: MessageListener<PipelineStatusMessage['data']>[]
   backtest_status: MessageListener<BacktestStatusMessage['data']>[]
   chart_update: MessageListener<ChartUpdateMessage['data']>[]
+  training_progress: MessageListener<TrainingProgressMessage['data']>[]
 }
 
 class WebSocketService {
@@ -22,7 +23,8 @@ class WebSocketService {
     script_status: [],
     pipeline_status: [],
     backtest_status: [],
-    chart_update: []
+    chart_update: [],
+    training_progress: []
   }
 
   private getWebSocketUrl(): string {
@@ -175,7 +177,8 @@ class WebSocketService {
         script_status: [],
         pipeline_status: [],
         backtest_status: [],
-        chart_update: []
+        chart_update: [],
+        training_progress: []
       }
     }
   }

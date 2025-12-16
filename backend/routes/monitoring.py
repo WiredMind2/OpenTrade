@@ -11,11 +11,11 @@ from fastapi import APIRouter
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
-from backend.logging_config import get_app_logger  # noqa: E402
+from backend.logging_config import get_component_logger  # noqa: E402
 from backend.schemas import SystemMetrics  # noqa: E402
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 router = APIRouter()
 
 

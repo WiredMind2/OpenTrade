@@ -7,9 +7,9 @@ from typing import Any, Dict, Optional
 from threading import Lock
 import json
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 
 
 class TTLCache:
@@ -107,8 +107,8 @@ class UDFHistoryCache(TTLCache):
         try:
             symbol = key.split(':', 1)[0].upper()
             self.symbol_last_update[symbol] = time.time()
-        except (IndexError, AttributeError):
-            pass  # If we can't parse symbol, skip update
+        except (IndexError, AttributeError) as e:
+            logger.warning("Failed to parse symbol from cache key %s: %s", key, e)
 
     def invalidate_symbol(self, symbol: str) -> None:
         """Invalidate all cache entries for a specific symbol."""
@@ -120,7 +120,8 @@ class UDFHistoryCache(TTLCache):
                 try:
                     if key.split(':', 1)[0].upper() == symbol:
                         keys_to_remove.append(key)
-                except (IndexError, AttributeError):
+                except (IndexError, AttributeError) as e:
+                    logger.warning("Failed to parse symbol from cache key %s during invalidation: %s", key, e)
                     continue
 
             for key in keys_to_remove:

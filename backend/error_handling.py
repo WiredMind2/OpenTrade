@@ -16,6 +16,10 @@ import sqlite3
 import requests
 import pandas as pd
 
+from backend.logging_config import get_component_logger
+
+logger = get_component_logger(__file__)
+
 
 class ErrorSeverity(Enum):
     """Error severity levels."""
@@ -179,7 +183,7 @@ class RetryHandler:
                         break
                     
                     delay = self._calculate_delay(attempt)
-                    logging.warning(
+                    logger.warning(
                         f"Attempt {attempt + 1} failed for {func.__name__}, "
                         f"retrying in {delay:.2f}s: {str(e)}"
                     )
@@ -232,7 +236,7 @@ class DatabaseRetryHandler(RetryHandler):
                         break
                     
                     delay = self._calculate_delay(attempt)
-                    logging.warning(
+                    logger.warning(
                         f"Database operation attempt {attempt + 1} failed, "
                         f"retrying in {delay:.2f}s: {str(e)}"
                     )
@@ -286,7 +290,7 @@ class APITimeoutHandler(RetryHandler):
                         break
                     
                     delay = self._calculate_delay(attempt)
-                    logging.warning(
+                    logger.warning(
                         f"API request attempt {attempt + 1} failed, "
                         f"retrying in {delay:.2f}s: {str(e)}"
                     )
@@ -322,7 +326,7 @@ class ErrorHandler:
             try:
                 return self.handlers[error_type](error, context)
             except Exception as handler_error:
-                logging.error(f"Error handler failed: {handler_error}")
+                logger.error(f"Error handler failed: {handler_error}")
         
         # Default error handling
         return self._default_error_handling(error, context)
@@ -339,16 +343,16 @@ class ErrorHandler:
         recoverable = self._is_recoverable_error(error, context)
         
         if not recoverable:
-            logging.critical(
+            logger.critical(
                 f"Non-recoverable error in {context.component}:{context.operation} - {str(error)}",
-                extra={"error_type": type(error).__name__, "context": context}
+                error_type=type(error).__name__, context=context
             )
             return False
         
         # Log recoverable error
-        logging.warning(
+        logger.warning(
             f"Recoverable error in {context.component}:{context.operation} - {str(error)}",
-            extra={"error_type": type(error).__name__, "context": context}
+            error_type=type(error).__name__, context=context
         )
         
         return True
@@ -533,7 +537,7 @@ class GracefulDegradation:
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                logging.warning(f"Function {func.__name__} failed, using fallback: {e}")
+                logger.warning(f"Function {func.__name__} failed, using fallback: {e}")
                 return fallback_value
         return wrapper
     
@@ -558,7 +562,7 @@ class ErrorRecovery:
         """Reset all circuit breakers."""
         external_api_circuit_breaker.state = "CLOSED"
         external_api_circuit_breaker.failure_count = 0
-        logging.info("All circuit breakers reset")
+        logger.info("All circuit breakers reset")
     
     @staticmethod
     def get_system_health() -> Dict[str, Any]:
@@ -594,12 +598,12 @@ def setup_error_handlers():
     # Register custom handlers for specific error types
     error_handler.register_handler(
         sqlite3.OperationalError,
-        lambda e, ctx: logging.error(f"Database operational error: {e}")
+        lambda e, ctx: logger.error(f"Database operational error: {e}")
     )
-    
+
     error_handler.register_handler(
         requests.exceptions.RequestException,
-        lambda e, ctx: logging.warning(f"API request error: {e}")
+        lambda e, ctx: logger.warning(f"API request error: {e}")
     )
 
 

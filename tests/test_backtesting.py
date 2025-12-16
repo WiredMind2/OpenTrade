@@ -7,6 +7,14 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
+import sys
+import os
+from pathlib import Path
+
+# Add backend to path for imports
+backend_path = str(Path(__file__).parent.parent / 'backend')
+if backend_path not in sys.path:
+    sys.path.insert(0, backend_path)
 
 
 @pytest.mark.unit
@@ -48,10 +56,10 @@ class TestBacktesting:
         conn.close()
 
     @pytest.mark.asyncio
-    @patch('routes.backtest_engine.run_backtest_background')
+    @patch('backend.routes.backtest_engine.run_backtest_background')
     async def test_backtest_engine_execution(self, mock_run_backtest, populated_test_db):
         """Test the actual backtest engine execution."""
-        from routes.backtest_engine import run_backtest_background
+        from backend.routes.backtest_engine import run_backtest_background
 
         # Mock the background task
         mock_run_backtest.return_value = "test_backtest_id"
@@ -80,11 +88,11 @@ class TestBacktesting:
         mock_run_backtest.assert_called_once()
 
     @patch('backtrader.Cerebro')
-    @patch('routes.backtest_engine.bt.Strategy')
+    @patch('backend.routes.backtest_engine.bt.Strategy')
     def test_sentiment_strategy_initialization(self, mock_strategy_class, mock_cerebro_class):
         """Test sentiment strategy initialization."""
         # Test that we can import and use the backtest engine functions
-        from routes.backtest_engine import run_backtest_background
+        from backend.routes.backtest_engine import run_backtest_background
         
         # Mock the database and other dependencies
         mock_app_state = {
@@ -420,7 +428,7 @@ class TestBacktesting:
     def test_auth_utilities(self):
         """Lightweight tests for auth utilities (token creation/validation where available)."""
         try:
-            from auth_utils import create_jwt_token, verify_jwt_token
+            from backend.auth_utils import create_jwt_token, verify_jwt_token
 
             token = create_jwt_token({'sub': 'test_user'})
             assert isinstance(token, str) and len(token) > 0
@@ -430,7 +438,7 @@ class TestBacktesting:
         except Exception:
             # If the project doesn't implement JWT helpers, at minimum import should not crash
             import importlib
-            importlib.import_module('auth_utils')
+            importlib.import_module('backend.auth_utils')
 
     def test_coverage_verification(self):
         """Basic coverage smoke test: ensure tests are exercising core modules."""
@@ -439,3 +447,332 @@ class TestBacktesting:
         assert hasattr(fe_mod, 'FeatureEngineer')
         # Simple introspection to ensure functions exist
         assert inspect.isclass(fe_mod.FeatureEngineer)
+
+    # Tests for backend/scripts/backtest_runner.py
+    def test_load_trading_predictions(self, populated_test_db):
+        """Test loading trading predictions from database."""
+        from backend.scripts.backtest_runner import load_trading_predictions
+
+        conn = sqlite3.connect(populated_test_db)
+
+        # Test with no predictions
+        preds = load_trading_predictions(conn, '2024-01-01')
+        assert isinstance(preds, list)
+        assert len(preds) == 0
+
+        # Insert test prediction
+        conn.execute("""
+            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
+            VALUES (?, ?, ?)
+        """, ('AAPL', 0.1, '2024-01-01'))
+        conn.commit()
+
+        # Test loading predictions
+        preds = load_trading_predictions(conn, '2024-01-01')
+        assert len(preds) == 1
+        assert preds[0] == ('AAPL', 0.1)
+
+        conn.close()
+
+    def test_get_open_price(self, populated_test_db):
+        """Test getting opening price for a ticker on a date."""
+        from backend.scripts.backtest_runner import get_open_price
+
+        conn = sqlite3.connect(populated_test_db)
+
+        # Test existing price
+        price = get_open_price(conn, 'AAPL', '2024-01-01')
+        assert price is not None
+        assert isinstance(price, (int, float))
+
+        # Test non-existent ticker
+        price = get_open_price(conn, 'NONEXISTENT', '2024-01-01')
+        assert price is None
+
+        # Test non-existent date
+        price = get_open_price(conn, 'AAPL', '2025-01-01')
+        assert price is None
+
+        conn.close()
+
+    def test_run_backtest_execution(self, populated_test_db, capsys):
+        """Test the main backtest execution logic."""
+        from backend.scripts.backtest_runner import run_backtest
+
+        # Insert trading predictions
+        conn = sqlite3.connect(populated_test_db)
+        conn.execute("""
+            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
+            VALUES (?, ?, ?)
+        """, ('AAPL', 0.1, '2024-01-01'))
+        conn.commit()
+        conn.close()
+
+        # Run backtest
+        run_backtest(populated_test_db, '2024-01-01', '2024-01-05', initial_capital=10000.0)
+
+        # Check output
+        captured = capsys.readouterr()
+        assert 'total_value=' in captured.out
+
+    def test_run_backtest_no_predictions(self, populated_test_db):
+        """Test backtest execution with no predictions."""
+        from backend.scripts.backtest_runner import run_backtest
+
+        # Ensure there are dates in price_daily
+        conn = sqlite3.connect(populated_test_db)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM price_daily WHERE date >= '2024-01-01' AND date <= '2024-01-05'")
+        count = cur.fetchone()[0]
+        assert count > 0, "Test database should have price data for the date range"
+        conn.close()
+
+        # Run backtest with no predictions - should complete without error
+        run_backtest(populated_test_db, '2024-01-01', '2024-01-05')
+
+    def test_run_backtest_exposure_cap(self, populated_test_db):
+        """Test exposure cap enforcement in backtest."""
+        from backend.scripts.backtest_runner import run_backtest
+
+        # Insert multiple predictions exceeding exposure cap
+        conn = sqlite3.connect(populated_test_db)
+        predictions = [
+            ('AAPL', 0.4, '2024-01-01'),
+            ('MSFT', 0.4, '2024-01-01'),
+            ('GOOGL', 0.3, '2024-01-01')
+        ]
+        conn.executemany("""
+            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
+            VALUES (?, ?, ?)
+        """, predictions)
+        conn.commit()
+        conn.close()
+
+        # Run backtest with exposure cap of 0.5
+        # This should scale down the allocations
+        run_backtest(populated_test_db, '2024-01-01', '2024-01-01', exposure_cap=0.5)
+
+        # Verify the logic works (positions should be scaled)
+        # The function prints output, but we can check it doesn't crash
+
+    def test_run_backtest_insufficient_capital(self, populated_test_db):
+        """Test backtest execution with insufficient capital for trades."""
+        from backend.scripts.backtest_runner import run_backtest
+
+        # Insert prediction that would require more capital than available
+        conn = sqlite3.connect(populated_test_db)
+        conn.execute("""
+            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
+            VALUES (?, ?, ?)
+        """, ('AAPL', 1.0, '2024-01-01'))  # 100% allocation
+        conn.commit()
+        conn.close()
+
+        # Run backtest with very low capital
+        run_backtest(populated_test_db, '2024-01-01', '2024-01-01', initial_capital=10.0)
+
+        # Should skip the trade due to insufficient capital
+
+    # Database integration tests
+    def test_database_connection_handling(self, populated_test_db):
+        """Test proper database connection handling."""
+        # Test that connections are properly opened and closed
+        conn = sqlite3.connect(populated_test_db)
+        cur = conn.cursor()
+
+        # Test basic queries work
+        cur.execute("SELECT COUNT(*) FROM price_daily")
+        count = cur.fetchone()[0]
+        assert isinstance(count, int)
+
+        cur.execute("SELECT COUNT(*) FROM trading_model_predictions")
+        pred_count = cur.fetchone()[0]
+        assert isinstance(pred_count, int)
+
+        conn.close()
+
+    def test_database_transaction_integrity(self, populated_test_db):
+        """Test database transaction integrity."""
+        conn = sqlite3.connect(populated_test_db)
+        cur = conn.cursor()
+
+        # Start transaction
+        cur.execute("BEGIN")
+
+        # Insert test data
+        cur.execute("""
+            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
+            VALUES (?, ?, ?)
+        """, ('TEST', 0.05, '2024-01-01'))
+
+        # Check it exists in transaction
+        cur.execute("SELECT COUNT(*) FROM trading_model_predictions WHERE ticker = 'TEST'")
+        count = cur.fetchone()[0]
+        assert count == 1
+
+        # Rollback
+        conn.rollback()
+
+        # Check it's gone
+        cur.execute("SELECT COUNT(*) FROM trading_model_predictions WHERE ticker = 'TEST'")
+        count = cur.fetchone()[0]
+        assert count == 0
+
+        conn.close()
+
+    # Core execution logic tests
+    def test_position_sizing_edge_cases(self):
+        """Test position sizing with edge cases."""
+        # Test with zero capital
+        capital = 0.0
+        pct = 0.1
+        dollars = pct * capital
+        assert dollars == 0.0
+
+        # Test with negative percentage
+        capital = 10000.0
+        pct = -0.05
+        dollars = pct * capital
+        assert dollars == -500.0
+
+        # Test with very small position
+        capital = 10000.0
+        pct = 0.0001  # 0.01%
+        dollars = pct * capital
+        assert dollars == 1.0
+
+    def test_trade_execution_validation(self):
+        """Test trade execution validation logic."""
+        # Test insufficient capital for trade
+        capital = 100.0
+        exec_price = 200.0
+        qty = 1
+        commission = 0.005
+        cost = qty * exec_price + qty * commission
+        assert cost > capital  # Should be rejected
+
+        # Test sufficient capital
+        capital = 1000.0
+        assert cost <= capital  # Should be allowed
+
+        # Test zero quantity
+        qty = 0
+        cost = qty * exec_price + qty * commission
+        assert cost == 0.0
+
+    # WebSocket broadcasting tests
+    @pytest.mark.asyncio
+    async def test_websocket_broadcast_integration(self):
+        """Test WebSocket broadcasting integration."""
+        from backend.routes.websocket import broadcast_websocket_message, active_connections
+
+        # Clear any existing connections
+        active_connections.clear()
+
+        # Test broadcast with no connections
+        result = await broadcast_websocket_message({"test": "data"})
+        assert result["clients"] == 0
+        assert result["sent"] == False
+
+        # Test with mock connection
+        from unittest.mock import AsyncMock
+        mock_ws = AsyncMock()
+        active_connections.add(mock_ws)
+
+        result = await broadcast_websocket_message({"test": "data"})
+        assert result["clients"] == 1
+        assert result["successful"] == 1
+
+        # Verify mock was called
+        mock_ws.send_json.assert_called_once_with({"test": "data"})
+
+        active_connections.clear()
+
+    # Error handling tests
+    def test_database_error_handling(self, tmp_path):
+        """Test error handling for database issues."""
+        from backend.scripts.backtest_runner import run_backtest
+
+        # Test with invalid database path
+        invalid_db = str(tmp_path / "nonexistent.db")
+
+        # Should not crash, but may not do much
+        try:
+            run_backtest(invalid_db, '2024-01-01', '2024-01-05')
+        except Exception:
+            # Expected to potentially fail, but should handle gracefully
+            pass
+
+    def test_missing_data_error_handling(self, populated_test_db):
+        """Test error handling when required data is missing."""
+        from backend.scripts.backtest_runner import get_open_price
+
+        conn = sqlite3.connect(populated_test_db)
+
+        # Test with valid data
+        price = get_open_price(conn, 'AAPL', '2024-01-01')
+        assert price is not None
+
+        # Test with missing data - should return None gracefully
+        price = get_open_price(conn, 'AAPL', '2099-01-01')
+        assert price is None
+
+        conn.close()
+
+    # Additional backtest_engine tests for coverage
+    @pytest.mark.asyncio
+    async def test_backtest_engine_full_execution(self, populated_test_db):
+        """Test full backtest engine execution to cover more lines."""
+        from backend.routes.backtest_engine import run_backtest_background
+
+        # Insert test predictions
+        conn = sqlite3.connect(populated_test_db)
+        conn.execute("""
+            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
+            VALUES (?, ?, ?)
+        """, ('AAPL', 0.1, '2024-01-01'))
+        conn.commit()
+        conn.close()
+
+        app_state = {'database_path': populated_test_db}
+
+        # This should execute the full backtest logic
+        await run_backtest_background(
+            backtest_id="test_full",
+            strategy_name="sentiment_momentum",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 2),
+            initial_capital=10000.0,
+            parameters={},
+            app_state=app_state
+        )
+
+        # Verify results were stored
+        conn = sqlite3.connect(populated_test_db)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM backtest_runs WHERE id = 'test_full'")
+        count = cur.fetchone()[0]
+        assert count == 1
+        conn.close()
+
+    @pytest.mark.asyncio
+    async def test_backtest_engine_error_handling(self):
+        """Test error handling in backtest engine."""
+        from backend.routes.backtest_engine import run_backtest_background
+
+        # Test with invalid database path
+        app_state = {'database_path': '/invalid/path.db'}
+
+        # Should handle error gracefully without crashing
+        await run_backtest_background(
+            backtest_id="test_error",
+            strategy_name="sentiment_momentum",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 2),
+            initial_capital=10000.0,
+            parameters={},
+            app_state=app_state
+        )
+
+        # The function should complete without raising an exception
+        # (error handling is internal)

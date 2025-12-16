@@ -5,18 +5,37 @@ This script loads articles, embeds their text using the trained sentence transfo
 and predicts returns using the saved LightGBM models for different horizons.
 
 Usage:
-  python scripts/generate_sentiment_predictions.py --db data/backtest.db --horizon 1 --model models/lightgbm_1d_top10.joblib
+   python scripts/generate_sentiment_predictions.py --db data/backtest.db --horizon 1 --model models/lightgbm_1d_top10.joblib
 
 Outputs:
-  Rows in sentiment_predictions table with predicted_return values from the actual model.
+   Rows in sentiment_predictions table with predicted_return values from the actual model.
 """
+import sys
+import os
+# Add project root to path so we can import backend modules
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import argparse
 import sqlite3
 import pandas as pd
-import os
 import joblib
 from datetime import datetime, timedelta
 from sentence_transformers import SentenceTransformer
+import logging
+import sys
+
+# Set up standalone logger configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+# Create the logger instance
+logger = logging.getLogger('generate_sentiment_predictions')
+logger.setLevel(logging.INFO)
 
 
 def load_unlabeled_articles(conn, ticker):
@@ -51,7 +70,7 @@ def embed_and_predict(model_path, articles):
     embedder_name = bundle['embedder']
     
     # Load embedder
-    print(f'Loading embedder: {embedder_name}')
+    logger.info('Loading embedder: %s', embedder_name)
     embedder = SentenceTransformer(embedder_name)
     
     # Prepare texts
@@ -64,11 +83,11 @@ def embed_and_predict(model_path, articles):
             texts.append('')
     
     # Embed texts
-    print(f'Embedding {len(texts)} texts...')
+    logger.info('Embedding %d texts...', len(texts))
     emb = embedder.encode(texts, show_progress_bar=True)
-    
+
     # Predict
-    print('Predicting...')
+    logger.info('Predicting...')
     preds = lgbm.predict(emb)
     
     return preds
@@ -81,16 +100,16 @@ def generate_predictions(conn, model_path, horizon):
     # Get list of tickers we're modeling
     cur.execute('SELECT DISTINCT ticker FROM article_ticker ORDER BY ticker LIMIT 10')
     tickers = [r[0] for r in cur.fetchall()]
-    print(f'Processing {len(tickers)} tickers: {tickers}')
+    logger.info('Processing %d tickers: %s', len(tickers), tickers)
     
     inserted_count = 0
     
     for ticker in tickers:
-        print(f'\nProcessing ticker: {ticker}')
-        
+        logger.info('Processing ticker: %s', ticker)
+
         # Get articles for this ticker
         articles = load_unlabeled_articles(conn, ticker)
-        print(f'Found {len(articles)} unlabeled articles for {ticker}')
+        logger.info('Found %d unlabeled articles for %s', len(articles), ticker)
         
         if not articles:
             continue
@@ -123,17 +142,21 @@ def generate_predictions(conn, model_path, horizon):
                 inserted_count += 1
     
     conn.commit()
-    print(f'\nInserted {inserted_count} sentiment predictions')
+    logger.info('Inserted %d sentiment predictions', inserted_count)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
+    # Find project root by going up from script location
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
+    default_db_path = os.path.join(project_root, 'data', 'backtest.db')
+    parser.add_argument('--db', default=default_db_path)
     parser.add_argument('--horizon', type=int, default=1, choices=[1, 3, 7])
     parser.add_argument('--model', required=True, help='Path to trained model .joblib file')
     args = parser.parse_args()
-    
+
     conn = sqlite3.connect(args.db)
     generate_predictions(conn, args.model, args.horizon)
     conn.close()
-    print('Done')
+    logger.info('Done')

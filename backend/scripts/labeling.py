@@ -9,7 +9,22 @@ Usage:
 import argparse
 import sqlite3
 import os
+import importlib.util
 from datetime import datetime, timedelta
+from script_logger import logger
+
+
+def load_label_debug_module():
+    """
+    Load the label_debug.py module with proper error handling for file existence.
+    """
+    debug_file = os.path.join(os.path.dirname(__file__), 'label_debug.py')
+    if not os.path.exists(debug_file):
+        raise FileNotFoundError(f"Debug file {debug_file} not found")
+    spec = importlib.util.spec_from_file_location("label_debug", debug_file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def get_next_trading_date(conn, ticker, date_str, offset_days):
@@ -92,14 +107,15 @@ def label_articles(db_path: str, horizons):
                 labeled += 1
     conn.commit()
     conn.close()
-    print(f'Inserted {labeled} ground-truth labels (as sentiment_predictions rows)')
-    print(f'Skipped (no entry date): {skipped_no_entry}')
-    print(f'Skipped (no open price): {skipped_no_open}')
-    print(f'Skipped (no exit price): {skipped_no_exit}')
-    print(f'Skipped (article newer than price data): {skipped_too_new}')
+    logger.info('Inserted %d ground-truth labels (as sentiment_predictions rows)', labeled)
+    logger.info('Skipped (no entry date): %d', skipped_no_entry)
+    logger.info('Skipped (no open price): %d', skipped_no_open)
+    logger.info('Skipped (no exit price): %d', skipped_no_exit)
+    logger.info('Skipped (article newer than price data): %d', skipped_too_new)
 
 
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     parser.add_argument('--horizons', nargs='+', type=int, default=[1,3,7])

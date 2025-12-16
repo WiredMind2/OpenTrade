@@ -15,6 +15,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import sys
 import os
+from script_logger import logger
 
 # Add backend to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,7 +38,7 @@ def fetch_minute_data(ticker: str, period: str = "7d", interval: str = "1m"):
         df = stock.history(period=period, interval=interval)
 
         if df.empty:
-            print(f"No data found for {ticker}")
+            logger.warning('No data found for %s', ticker)
             return None
 
         # Reset index to get datetime as column
@@ -62,7 +63,7 @@ def fetch_minute_data(ticker: str, period: str = "7d", interval: str = "1m"):
         return df[['ticker', 'dt', 'open', 'high', 'low', 'close', 'volume']]
 
     except Exception as e:
-        print(f"Error fetching data for {ticker}: {e}")
+        logger.error('Error fetching data for %s: %s', ticker, e)
         return None
 
 
@@ -97,7 +98,7 @@ def insert_minute_data(db_path: str, df: pd.DataFrame):
             ))
             inserted += 1
         except Exception as e:
-            print(f"Error inserting row for {row['ticker']} at {row['dt']}: {e}")
+            logger.error('Error inserting row for %s at %s: %s', row['ticker'], row['dt'], e)
 
     conn.commit()
     conn.close()
@@ -105,6 +106,7 @@ def insert_minute_data(db_path: str, df: pd.DataFrame):
 
 
 def main():
+
     parser = argparse.ArgumentParser(description='Fetch and ingest minute-level price data')
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     parser.add_argument('--tickers', required=True, help='Comma-separated list of tickers (e.g., AAPL,MSFT,GOOGL)')
@@ -116,20 +118,20 @@ def main():
 
     tickers = [t.strip().upper() for t in args.tickers.split(',')]
 
-    print(f"Fetching {args.interval} data for period {args.period}...")
+    logger.info('Fetching %s data for period %s...', args.interval, args.period)
 
     total_inserted = 0
     for ticker in tickers:
-        print(f"Fetching data for {ticker}...")
+        logger.info('Fetching data for %s...', ticker)
         df = fetch_minute_data(ticker, args.period, args.interval)
         if df is not None:
             inserted = insert_minute_data(args.db, df)
-            print(f"Inserted {inserted} rows for {ticker}")
+            logger.info('Inserted %d rows for %s', inserted, ticker)
             total_inserted += inserted
         else:
-            print(f"Failed to fetch data for {ticker}")
+            logger.warning('Failed to fetch data for %s', ticker)
 
-    print(f"Total rows inserted: {total_inserted}")
+    logger.info('Total rows inserted: %d', total_inserted)
 
 
 if __name__ == '__main__':

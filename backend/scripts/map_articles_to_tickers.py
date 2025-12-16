@@ -12,6 +12,7 @@ import sqlite3
 import argparse
 import re
 import os
+from script_logger import logger
 
 
 def load_tickers(conn):
@@ -42,7 +43,7 @@ def map_articles(conn, tickers):
                         mapped += cur.rowcount
                         found_any = True
                     except Exception as e:
-                        print('Insert failed for', aid, ticker_sym, e)
+                        logger.error('Insert failed for %d %s: %s', aid, ticker_sym, e)
             else:
                 # For multi-letter tickers, match whole-word ticker (case-sensitive preferred) or $TICKER
                 pattern = r'\b' + re.escape(ticker_sym) + r'\b'
@@ -54,7 +55,7 @@ def map_articles(conn, tickers):
                         mapped += cur.rowcount
                         found_any = True
                     except Exception as e:
-                        print('Insert failed for', aid, ticker_sym, e)
+                        logger.error('Insert failed for %d %s: %s', aid, ticker_sym, e)
             # Company name matching (if available)
             if name and not found_any:
                 try:
@@ -63,24 +64,25 @@ def map_articles(conn, tickers):
                         mapped += cur.rowcount
                         found_any = True
                 except Exception as e:
-                    print('Insert failed for', aid, ticker_sym, e)
+                    logger.error('Insert failed for %d %s: %s', aid, ticker_sym, e)
         # optional: if no ticker found, leave unmapped for manual review
     conn.commit()
     return mapped
 
 
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     args = parser.parse_args()
     conn = sqlite3.connect(args.db)
     tickers = load_tickers(conn)
     if not tickers:
-        print('No tickers found in DB. Run scripts/scan_csvs.py first to register tickers from your CSVs.')
+        logger.warning('No tickers found in DB. Run scripts/scan_csvs.py first to register tickers from your CSVs.')
     else:
-        print(f'Loaded {len(tickers)} tickers from the DB')
+        logger.info('Loaded %d tickers from the DB', len(tickers))
         mapped = map_articles(conn, tickers)
-        print(f'Inserted {mapped} article->ticker mappings')
+        logger.info('Inserted %d article->ticker mappings', mapped)
     conn.close()
 
 

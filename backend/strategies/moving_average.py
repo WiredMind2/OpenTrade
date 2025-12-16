@@ -1,0 +1,256 @@
+"""
+Moving Average Crossover Strategy
+
+This module implements a simple moving average crossover trading strategy.
+"""
+
+from typing import Dict, Any, Type
+import backtrader as bt
+
+from backend.strategies.base import BaseStrategy
+
+
+class MovingAverageStrategy(BaseStrategy):
+    """Moving average crossover strategy implementation."""
+
+    def __init__(self):
+        parameters_schema = {
+            'short_window': {
+                'type': 'int',
+                'default': 10,
+                'description': 'Short moving average window in days'
+            },
+            'long_window': {
+                'type': 'int',
+                'default': 30,
+                'description': 'Long moving average window in days'
+            },
+            'max_position_pct': {
+                'type': 'float',
+                'default': 0.1,
+                'description': 'Maximum position size as percentage of portfolio value'
+            }
+        }
+
+        super().__init__(
+            name="moving_average",
+            description="Simple moving average crossover strategy",
+            type="rule",
+            parameters_schema=parameters_schema,
+            can_train=False
+        )
+
+    def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
+        """Create and return a Backtrader strategy class with MA crossover logic."""
+
+        class MovingAverageCrossover(bt.Strategy):
+            params = ('short_window', 'long_window', 'max_position_pct')
+
+            def __init__(self):
+                self.equity_curve = []
+                self.trades = []
+
+                # Create indicators for each data feed
+                self.short_mas = [
+                    bt.indicators.SMA(d, period=self.p.short_window)
+                    for d in self.datas
+                ]
+                self.long_mas = [
+                    bt.indicators.SMA(d, period=self.p.long_window)
+                    for d in self.datas
+                ]
+                self.crossovers = [
+                    bt.indicators.CrossOver(short_ma, long_ma)
+                    for short_ma, long_ma in zip(self.short_mas, self.long_mas)
+                ]
+
+            def next(self):
+                allocations = {}
+
+                # Generate signals for each ticker
+                for i, data in enumerate(self.datas):
+                    ticker = data._name
+                    cross = self.crossovers[i][0]
+
+                    if cross > 0:
+                        # Buy signal: allocate max_position_pct
+                        allocations[ticker] = self.p.max_position_pct
+                    elif cross < 0:
+                        # Sell signal: close position
+                        allocations[ticker] = 0.0
+    
+                # Enforce position limits (scale down if total exposure exceeds max)
+                total_exposure = sum(abs(pct) for pct in allocations.values())
+                if total_exposure > self.p.max_position_pct:
+                    scale = self.p.max_position_pct / total_exposure
+                    allocations = {t: v * scale for t, v in allocations.items()}
+
+                # Execute trades
+                for ticker, target_pct in allocations.items():
+                    # Find data feed for this ticker
+                    data = None
+                    for d in self.datas:
+                        if hasattr(d, '_name') and d._name == ticker:
+                            data = d
+                            break
+
+                    if data is None:
+                        continue
+
+                    current_position = self.getposition(data).size
+                    current_value = current_position * data.close[0]
+                    portfolio_value = self.broker.getvalue()
+                    target_value = target_pct * portfolio_value
+
+                    if abs(current_value - target_value) < 100:  # Minimum trade size
+                        continue
+
+                    if target_value > current_value:
+                        # Buy
+                        shares_to_buy = int((target_value - current_value) / data.close[0])
+                        if shares_to_buy > 0:
+                            self.buy(data=data, size=shares_to_buy)
+                    elif target_value < current_value:
+                        # Sell
+                        shares_to_sell = int((current_value - target_value) / data.close[0])
+                        if shares_to_sell > 0:
+                            self.sell(data=data, size=shares_to_sell)
+
+                # Record equity curve
+                current_date = self.datas[0].datetime.date(0).isoformat()
+                self.equity_curve.append({
+                    'date': current_date,
+                    'value': self.broker.getvalue()
+                })
+
+            def notify_trade(self, trade):
+                if trade.isclosed:
+                    self.trades.append({
+                        'size': trade.size,
+                        'price': trade.price,
+                        'value': trade.value,
+                        'pnl': trade.pnl,
+                        'pnlcomm': trade.pnlcomm
+                    })
+
+        return MovingAverageCrossover
+
+    def train(self, config: Dict[str, Any]) -> Any:
+        """Training not supported for rule-based strategies."""
+        raise NotImplementedError("Training not supported for rule-based strategies")
+
+    def project(self, parameters: Dict[str, Any], projection_days: int = 30, initial_capital: float = 100000.0) -> Dict[str, Any]:
+        """Project future performance using recent market data and strategy logic."""
+        from datetime import datetime, timedelta
+        from decimal import Decimal, getcontext
+        import numpy as np
+
+        # Set precision for financial calculations
+        getcontext().prec = 10
+
+        # Get recent price data for projection
+        try:
+            from backend.main import app_state
+            import sqlite3
+
+            db_path = app_state.get("database_path", "data/backtest.db")
+            conn = sqlite3.connect(db_path)
+
+            # Get recent price data (last 90 days for trend analysis)
+            end_date = datetime.utcnow().date()
+            start_date = end_date - timedelta(days=90)
+
+            cur = conn.cursor()
+            # Get data for major tickers to simulate portfolio
+            tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']  # Sample portfolio
+
+            portfolio_data = {}
+            for ticker in tickers:
+                cur.execute("""
+                    SELECT date, close, volume
+                    FROM price_daily
+                    WHERE ticker = ? AND date >= ? AND date <= ?
+                    ORDER BY date DESC
+                    LIMIT 60
+                """, (ticker, start_date.isoformat(), end_date.isoformat()))
+
+                rows = cur.fetchall()
+                if rows:
+                    # Calculate recent returns and volatility
+                    closes = [row[1] for row in rows[::-1]]  # Reverse to chronological order
+                    if len(closes) > 1:
+                        returns = np.diff(closes) / closes[:-1]
+                        avg_return = np.mean(returns) if returns.size > 0 else 0.0
+                        volatility = np.std(returns) if returns.size > 0 else 0.0
+                        current_price = closes[-1]
+
+                        portfolio_data[ticker] = {
+                            'current_price': Decimal(str(current_price)),
+                            'avg_daily_return': Decimal(str(avg_return)),
+                            'volatility': Decimal(str(volatility)),
+                            'weight': Decimal('1') / Decimal(str(len(tickers)))  # Equal weight
+                        }
+
+            conn.close()
+
+            if not portfolio_data:
+                # Fallback projection if no data
+                initial_capital_dec = Decimal(str(initial_capital))
+                projected_return_dec = Decimal('0.02')
+                projected_final_value = initial_capital_dec * (Decimal('1') + projected_return_dec)
+
+                return {
+                    'projected_return': float(projected_return_dec),
+                    'projected_volatility': 0.15,
+                    'confidence': 0.5,
+                    'projection_days': projection_days,
+                    'initial_capital': float(initial_capital_dec),
+                    'projected_final_value': float(projected_final_value.quantize(Decimal('0.01'))),
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+
+            # Calculate portfolio-level projections using Decimal
+            portfolio_return = sum(data['avg_daily_return'] * data['weight'] for data in portfolio_data.values())
+            portfolio_volatility = sum(data['volatility'] * data['weight'] for data in portfolio_data.values())
+
+            # Project forward
+            projection_days_dec = Decimal(str(projection_days))
+            initial_capital_dec = Decimal(str(initial_capital))
+            total_return = portfolio_return * projection_days_dec
+            projected_final_value = initial_capital_dec * (Decimal('1') + total_return)
+
+            # Adjust for strategy (MA crossover typically captures trends)
+            # Assume 70% of market return with lower volatility
+            strategy_multiplier = Decimal('0.7')
+            adjusted_return = total_return * strategy_multiplier
+            adjusted_volatility = float(portfolio_volatility * Decimal('0.8'))  # Lower volatility due to timing
+            projected_final_value = initial_capital_dec * (Decimal('1') + adjusted_return)
+
+            return {
+                'projected_return': float(adjusted_return),
+                'projected_volatility': round(adjusted_volatility, 6),
+                'confidence': 0.7,  # Moderate confidence for rule-based strategy
+                'projection_days': projection_days,
+                'initial_capital': float(initial_capital_dec),
+                'projected_final_value': float(projected_final_value.quantize(Decimal('0.01'))),
+                'market_return': float(total_return),
+                'strategy_multiplier': float(strategy_multiplier),
+                'timestamp': datetime.utcnow().isoformat()
+            }
+
+        except Exception as e:
+            # Fallback on error
+            initial_capital_dec = Decimal(str(initial_capital))
+            fallback_return = Decimal('0.01')
+            projected_final_value = initial_capital_dec * (Decimal('1') + fallback_return)
+
+            return {
+                'projected_return': float(fallback_return),
+                'projected_volatility': 0.12,
+                'confidence': 0.3,
+                'projection_days': projection_days,
+                'initial_capital': float(initial_capital_dec),
+                'projected_final_value': float(projected_final_value.quantize(Decimal('0.01'))),
+                'error': str(e),
+                'timestamp': datetime.utcnow().isoformat()
+            }

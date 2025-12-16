@@ -12,6 +12,7 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 from typing import Optional
+from script_logger import logger
 
 
 def ingest_csv_to_db(db_path: str, csv_path: str, ticker: Optional[str] = None):
@@ -27,21 +28,23 @@ def ingest_csv_to_db(db_path: str, csv_path: str, ticker: Optional[str] = None):
     def safe_float(x):
         try:
             return float(x) if pd.notna(x) else None
-        except Exception:
+        except Exception as e:
+            logger.warning("Data conversion to float failed for value %s: %s", x, e)
             return None
 
     def safe_int(x):
         try:
             return int(x) if pd.notna(x) else None
-        except Exception:
+        except Exception as e:
+            logger.warning("Data conversion to int failed for value %s: %s", x, e)
             return None
 
     # Helper to insert ticker metadata
     def ensure_ticker(tkr: str):
         try:
             cur.execute('INSERT OR IGNORE INTO tickers (ticker, name, exchange) VALUES (?, ?, ?)', (tkr.upper(), None, None))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to insert ticker %s: %s", tkr.upper(), e)
 
     # If dataframe has a symbol/ticker/company column, treat as combined
     symbol_cols = [c for c in df.columns if c.lower() in ('symbol', 'ticker', 'company')]
@@ -76,10 +79,10 @@ def ingest_csv_to_db(db_path: str, csv_path: str, ticker: Optional[str] = None):
                     )
                     total += 1
                 except Exception as e:
-                    print('Insert failed for', t, date, e)
+                    logger.error('Insert failed for %s %s: %s', t, date, e)
         conn.commit()
         conn.close()
-        print(f'Ingested {total} rows from combined CSV for {csv_path}')
+        logger.info('Ingested %d rows from combined CSV for %s', total, csv_path)
         return
 
     # Otherwise, treat file as single-ticker CSV; attempt to infer ticker from filename if not provided
@@ -110,13 +113,14 @@ def ingest_csv_to_db(db_path: str, csv_path: str, ticker: Optional[str] = None):
             )
             inserted += 1
         except Exception as e:
-            print('Insert failed for', t, date, e)
+            logger.error('Insert failed for %s %s: %s', t, date, e)
     conn.commit()
     conn.close()
-    print(f'Ingested {inserted} rows for {t} from {csv_path}')
+    logger.info('Ingested %d rows for %s from %s', inserted, t, csv_path)
 
 
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')))
     parser.add_argument('--csv_dir', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'kaggle_yahoo')))
@@ -129,7 +133,7 @@ def main():
             if f.lower().endswith('.csv'):
                 paths.append(os.path.join(root, f))
     if not paths:
-        print('No CSV files found under', args.csv_dir)
+        logger.warning('No CSV files found under %s', args.csv_dir)
         return
     for p in paths:
         ingest_csv_to_db(args.db, p, None)

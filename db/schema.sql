@@ -233,4 +233,18 @@ CREATE TABLE IF NOT EXISTS user_activity (
 );
 CREATE INDEX IF NOT EXISTS idx_user_activity_user_id ON user_activity(user_id);
 
+-- Model retraining jobs
+CREATE TABLE IF NOT EXISTS model_jobs (
+  id TEXT PRIMARY KEY,
+  model_name TEXT NOT NULL,
+  status TEXT NOT NULL,  -- queued, running, completed, failed
+  created_at DATETIME DEFAULT (datetime('now')),
+  updated_at DATETIME DEFAULT (datetime('now')),
+  config JSON,
+  result JSON,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_model_jobs_model_name ON model_jobs(model_name);
+CREATE INDEX IF NOT EXISTS idx_model_jobs_status ON model_jobs(status);
+
 -- End of schema

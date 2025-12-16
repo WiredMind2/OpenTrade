@@ -7,6 +7,19 @@ const instance = axios.create({
   timeout: 30000
 })
 
+
+// Add response interceptor for logging
+instance.interceptors.response.use(
+  (response) => {
+    console.log(`API ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`)
+    return response
+  },
+  (error) => {
+    console.error(`API Error: ${error.config?.method?.toUpperCase()} ${error.config?.url} - ${error.response?.status || 'Network Error'}`, error)
+    return Promise.reject(error)
+  }
+)
+
 export default instance
 
 // Script execution API functions
@@ -82,6 +95,57 @@ export const runBacktest = async (data: {
   parameters?: Record<string, any>
 }) => {
   const response = await instance.post('/backtest', data)
+  return response.data
+}
+
+// MA Predictions API functions
+export const generateMAPredictions = async (data: {
+  start_date: string
+  end_date: string
+  short_ma_range?: number[]
+  medium_ma_range?: number[]
+  long_ma_range?: number[]
+  skip_optimization?: boolean
+  fixed_short?: number
+  fixed_medium?: number
+  fixed_long?: number
+}) => {
+  const response = await instance.post('/scripts/generate-ma-predictions', data)
+  return response.data
+}
+
+export const getMAPredictionStatus = async (executionId: string) => {
+  const response = await instance.get(`/scripts/generate-ma-predictions/status/${executionId}`)
+  return response.data
+}
+
+// Model API functions
+export const getModels = async () => {
+  console.log('Fetching models from /api/models')
+  const response = await instance.get('/api/models')
+  console.log('Models response:', response.data)
+  return response.data
+}
+
+export const predictWithModel = async (modelName: string, inputs: Record<string, any>, config: Record<string, any>) => {
+  const response = await instance.post(`/api/models/${modelName}/predict`, {
+    inputs,
+    config
+  })
+  return response.data
+}
+
+export const retrainModel = async (modelName: string, trainingPayload: Record<string, any>, config: Record<string, any>, options: Record<string, any>) => {
+  const response = await instance.post(`/api/models/${modelName}/retrain`, {
+    training_payload: trainingPayload,
+    config,
+    options
+  })
+  return response.data
+}
+
+export const getJobStatus = async (jobId: string) => {
+  const response = await instance.get(`/jobs/${jobId}`)
   return response.data
 }
 

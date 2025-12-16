@@ -218,3 +218,118 @@ export interface ChartUpdateMessage extends WebSocketMessage {
     };
   };
 }
+
+export interface TrainingProgressMessage extends WebSocketMessage {
+  type: "training_progress";
+  data: {
+    job_id: string;
+    status: string;
+    progress?: number;
+    logs?: string[];
+    result?: any;
+    error?: string;
+  };
+}
+
+// Model-related types
+export interface ModelSummary {
+  name: string;
+  type: string;
+  version: string;
+  description: string;
+  capabilities: string[];
+  config_schema: Record<string, any>;
+}
+
+export interface ModelPredictRequest {
+  inputs: Record<string, any>;
+  config: Record<string, any>;
+}
+
+export interface ModelPredictResponse {
+  predictions: Array<Record<string, any>>;
+  meta: Record<string, any>;
+}
+
+export interface RetrainRequest {
+  training_payload: Record<string, any>;
+  config: Record<string, any>;
+  options: Record<string, any>;
+}
+
+export interface RetrainResponse {
+  job_id?: string;
+  status: string;
+  model_meta?: Record<string, any>;
+}
+
+export interface JobStatus {
+  id: string;
+  model_name: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  config: string;
+  result: string;
+  error: string;
+}
+export interface StrategyMetadata {
+  name: string;
+  description: string;
+  type: string;
+  parameters_schema: Record<string, any>;
+  can_train: boolean;
+}
+
+export interface ProjectionPoint {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  predicted: boolean;
+}
+
+export interface ProjectionRequest {
+  symbol: string;
+  start_time: number;
+  start_price: number;
+  resolution: string;
+  horizon_steps: number;
+  params: Record<string, any>;
+  mode: string;
+}
+
+export interface ProjectionResponse {
+  strategy: string;
+  points: ProjectionPoint[];
+  precision: number;
+  confidence: number;
+  metadata: StrategyMetadata;
+}
+
+// Prediction Projection Types
+export interface PredictionProjectionPoint {
+  time: number;
+  price: number;
+  confidence: number;
+  upperBound?: number;
+  lowerBound?: number;
+}
+
+export interface PredictionProjection {
+  id: string;
+  ticker: string;
+  modelName: string;
+  horizon: number; // in days
+  points: PredictionProjectionPoint[];
+  confidence: number;
+  color: string;
+  createdAt: string;
+  metadata?: Record<string, any>;
+}
+
+export interface PredictionProjectionData {
+  projections: PredictionProjection[];
+  lastUpdated: string;
+}

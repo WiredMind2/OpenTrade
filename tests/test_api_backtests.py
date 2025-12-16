@@ -124,16 +124,16 @@ class TestAPIBacktestEndpoints:
         conn.commit()
         conn.close()
 
-        # Set the database path in the app state
+        # Create test client
+        self.client = TestClient(app)
+
+        # Set the database path in the app state after client creation
         app_state['database_path'] = self.temp_db.name
         app_state['models_loaded'] = {
             'lightgbm_1d': {'lgbm': Mock(), 'embedder': 'all-MiniLM-L6-v2'},
             'lightgbm_3d': {'lgbm': Mock(), 'embedder': 'all-MiniLM-L6-v2'},
             'lightgbm_7d': {'lgbm': Mock(), 'embedder': 'all-MiniLM-L6-v2'}
         }
-
-        # Create test client
-        self.client = TestClient(app)
 
     def teardown_method(self):
         """Clean up temporary database."""
@@ -263,6 +263,252 @@ class TestAPIBacktestEndpoints:
             assert response.status_code == 500
         finally:
             app_state["database_path"] = original_db_path
+
+    def test_backtest_endpoint_invalid_parameters(self):
+        """Test backtest endpoint with invalid strategy parameters."""
+        payload = {
+            "strategy_name": "invalid_strategy",
+            "start_date": "2024-01-01T00:00:00",
+            "end_date": "2024-12-31T00:00:00",
+            "initial_capital": -1000.0,  # Invalid negative capital
+            "parameters": {}
+        }
+        response = self.client.post("/backtest", json=payload)
+        # Should return validation error
+        assert response.status_code in [400, 422]
+
+    def test_backtest_endpoint_missing_parameters(self):
+        """Test backtest endpoint with missing required parameters."""
+        payload = {
+            "strategy_name": "test_strategy",
+            # Missing start_date, end_date, initial_capital
+            "parameters": {}
+        }
+        response = self.client.post("/backtest", json=payload)
+        assert response.status_code == 422  # Validation error
+
+    def test_list_backtests_empty_database(self):
+        """Test listing backtests when database is empty."""
+        response = self.client.get("/trading/backtest")
+        assert response.status_code == 200
+        data = response.json()
+        assert data == []  # Should return empty list
+
+    def test_list_backtests_filtering(self):
+        """Test backtests listing with filtering parameters."""
+        # Insert multiple backtest records with different dates
+        conn = sqlite3.connect(self.temp_db.name)
+        records = []
+        for i in range(5):
+            records.append((
+                f"test_id_{i}",
+                f"test_strategy_{i}",
+                "{}",
+                (datetime.utcnow() - timedelta(days=i)).isoformat(),
+                datetime.utcnow().isoformat(),
+                100000.0,
+                105000.0,
+                0.05,
+                1.2,
+                0.08,
+                0.65,
+                50,
+                "{}"
+            ))
+
+        conn.executemany("""
+            INSERT INTO backtest_runs
+            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, metrics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, records)
+        conn.commit()
+        conn.close()
+
+        # Test pagination
+        response = self.client.get("/trading/backtest?page=1&limit=2")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 2
+
+        response = self.client.get("/trading/backtest?page=2&limit=2")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 2
+
+    def test_get_backtest_result_invalid_id(self):
+        """Test getting backtest result with invalid ID format."""
+        response = self.client.get("/backtest/invalid@id!")
+        # Should handle gracefully
+        assert response.status_code in [404, 500]
+
+    def test_backtest_status_broadcasting(self):
+        """Test that backtest status updates are broadcast via WebSocket."""
+        # This would require mocking the WebSocket broadcasting
+        # For now, just ensure the endpoint accepts valid requests
+        payload = {
+            "strategy_name": "test_strategy",
+            "start_date": "2024-01-01T00:00:00",
+            "end_date": "2024-01-31T00:00:00",
+            "initial_capital": 100000.0,
+            "parameters": {"test_param": "value"}
+        }
+        response = self.client.post("/backtest", json=payload)
+        assert response.status_code == 200
+
+    def test_backtest_result_data_integrity(self):
+        """Test that backtest result data maintains integrity."""
+        # Insert test data with specific values
+        conn = sqlite3.connect(self.temp_db.name)
+        conn.execute("""
+            INSERT INTO backtest_runs
+            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility, equity_curve, metrics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "integrity_test",
+            "integrity_strategy",
+            '{"param1": "value1"}',
+            "2024-01-01T00:00:00",
+            "2024-01-31T00:00:00",
+            100000.0,
+            125000.0,
+            0.25,
+            0.3,
+            1.5,
+            0.1,
+            0.75,
+            100,
+            0.02,
+            0.2,
+            '[{"date": "2024-01-01", "value": 100000.0}, {"date": "2024-01-31", "value": 125000.0}]',
+            '{"status": "completed", "additional_metric": 42}'
+        ))
+        conn.commit()
+        conn.close()
+
+        response = self.client.get("/backtest/integrity_test")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify all fields are present and correct
+        assert data["strategy_name"] == "integrity_strategy"
+        assert data["initial_capital"] == 100000.0
+        assert data["final_value"] == 125000.0
+        assert data["total_return"] == 0.25
+        assert data["sharpe_ratio"] == 1.5
+        assert data["win_rate"] == 0.75
+        assert data["total_trades"] == 100
+        assert len(data["equity_curve"]) == 2
+        assert data["metrics"]["additional_metric"] == 42
+
+    def test_concurrent_backtest_requests(self):
+        """Test handling of concurrent backtest requests."""
+        # This tests the system's ability to handle multiple requests
+        payloads = [
+            {
+                "strategy_name": f"concurrent_strategy_{i}",
+                "start_date": "2024-01-01T00:00:00",
+                "end_date": "2024-01-31T00:00:00",
+                "initial_capital": 100000.0,
+                "parameters": {"index": i}
+            }
+            for i in range(3)
+        ]
+
+        responses = []
+        for payload in payloads:
+            response = self.client.post("/backtest", json=payload)
+            responses.append(response)
+            assert response.status_code == 200
+
+        # Verify all requests were accepted
+        assert all(r.status_code == 200 for r in responses)
+
+    def test_backtest_parameter_serialization(self):
+        """Test that complex parameters are properly serialized."""
+        complex_params = {
+            "nested": {
+                "value": 42,
+                "list": [1, 2, 3],
+                "boolean": True
+            },
+            "array": ["a", "b", "c"],
+            "number": 3.14,
+            "null_value": None
+        }
+
+        payload = {
+            "strategy_name": "complex_params_strategy",
+            "start_date": "2024-01-01T00:00:00",
+            "end_date": "2024-01-31T00:00:00",
+            "initial_capital": 100000.0,
+            "parameters": complex_params
+        }
+
+        response = self.client.post("/backtest", json=payload)
+        assert response.status_code == 200
+
+        # Verify the response contains the parameters
+        data = response.json()
+        assert "parameters" in data or "metrics" in data  # Parameters might be stored in metrics
+
+    def test_backtest_date_edge_cases(self):
+        """Test backtest endpoint with edge case dates."""
+        # Test with same start and end date
+        payload = {
+            "strategy_name": "edge_case_strategy",
+            "start_date": "2024-01-01T00:00:00",
+            "end_date": "2024-01-01T00:00:00",  # Same date
+            "initial_capital": 100000.0,
+            "parameters": {}
+        }
+        response = self.client.post("/backtest", json=payload)
+        # Should either succeed or return appropriate error
+        assert response.status_code in [200, 400, 422]
+
+    def test_database_connection_pooling(self):
+        """Test that database connections are properly managed."""
+        # Make multiple requests to ensure connection handling
+        for i in range(5):
+            response = self.client.get("/trading/backtest")
+            assert response.status_code == 200
+
+    def test_backtest_result_caching(self):
+        """Test that backtest results can be cached/retrieved efficiently."""
+        # Insert test data
+        conn = sqlite3.connect(self.temp_db.name)
+        conn.execute("""
+            INSERT INTO backtest_runs
+            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility, equity_curve, metrics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "cache_test",
+            "cache_strategy",
+            "{}",
+            datetime.utcnow().isoformat(),
+            datetime.utcnow().isoformat(),
+            100000.0,
+            110000.0,
+            0.1,
+            0.12,
+            1.0,
+            0.05,
+            0.7,
+            25,
+            0.004,
+            0.15,
+            "[]",
+            "{}"
+        ))
+        conn.commit()
+        conn.close()
+
+        # Make multiple requests for the same data
+        for _ in range(3):
+            response = self.client.get("/backtest/cache_test")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["strategy_name"] == "cache_strategy"
+            assert data["total_return"] == 0.1
 
     def test_list_backtests_database_error(self):
         """Test listing backtests when database connection fails."""

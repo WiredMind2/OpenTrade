@@ -9,12 +9,12 @@ from typing import List, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks
 
-from backend.logging_config import get_app_logger
+from backend.logging_config import get_component_logger
 from backend.schemas import BacktestRequest, BacktestResult
 from .backtest_engine import run_backtest_background
 
 
-logger = get_app_logger()
+logger = get_component_logger(__file__)
 router = APIRouter()
 
 
