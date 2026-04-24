@@ -2,12 +2,6 @@
 
 A comprehensive, production-ready algorithmic trading backtesting system with sentiment analysis, machine learning models, and real-time monitoring capabilities.
 
-I had multiple goals when starting this project. First of all, I've wanted to create an "autonomous trading bot" for a very long time, as I've always thought that it would be very interesting for passive income.
-The other main goal was to try to see how far was it possible to push "vibe coding"; how easy would it be to create a new project with high complexity almost completely with agent coding?
-The short answer is, it's very hard ;) . Coding agents are incredible early on in the project, to define the project's boundary a create a code basis with dummy features.
-However, it is incredibly difficult and time consuming to debug an AI-introduced bug, as they often happen in very unnatural places (due to an unclear prompt for example). The colossal amount of code constantly changing is also very challenging to track what is going on in the project.
-Still, agent coding is just another powerful tool, that has its pros and cons. But this project did reassure for one thing, that is that I probably won't be replaced by an AI anytime soon. They are incredibly quick and efficient, but that goes for creating both good and bad code, and we will still need someone to find the mistakes and correct them, at least for the near future ;)
-
 ## 🚀 Features
 
 ### Core Functionality
