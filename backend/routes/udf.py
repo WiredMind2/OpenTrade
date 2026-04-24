@@ -89,6 +89,16 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
             from_date = min_date
             logger.info(f"Limited data fetch start date for {symbol} to 5 years ago: {from_date.date()}")
 
+        # Guarantee valid chronological order after all clamps.
+        if from_date >= to_date:
+            fallback_days = 30 if table == 'price_minute' else 365
+            to_date = current_time
+            from_date = to_date - timedelta(days=fallback_days)
+            logger.warning(
+                f"Adjusted invalid fetch window for {symbol} to recent range: "
+                f"{from_date.date()} to {to_date.date()}"
+            )
+
         logger.info(f"Fetching external data for {symbol} from {from_date.date()} to {to_date.date()}")
 
         # Determine interval based on table
@@ -637,9 +647,19 @@ async def get_historical_data(
                 "errmsg": f"Symbol '{symbol}' not found"
             }
 
-        # Convert timestamps to datetime
-        from_date = datetime.fromtimestamp(from_ts)
-        to_date = datetime.fromtimestamp(to_ts)
+        # Parse resolution early so timestamp normalization can use granularity.
+        table, target_resolution = parse_resolution(resolution)
+        date_col = 'date' if table == 'price_daily' else 'dt'
+
+        # Convert timestamps to datetime (Windows can reject negative Unix timestamps).
+        def _safe_from_timestamp(ts: int) -> datetime:
+            try:
+                return datetime.fromtimestamp(ts)
+            except (OverflowError, OSError, ValueError):
+                return datetime(1970, 1, 1) + timedelta(seconds=ts)
+
+        from_date = _safe_from_timestamp(from_ts)
+        to_date = _safe_from_timestamp(to_ts)
 
         # Ensure we never return future data - cap to_date at current time
         current_time = datetime.now()
@@ -647,12 +667,58 @@ async def get_historical_data(
             to_date = current_time
             logger.info(f"UDF history: capped to_date to current time {to_date}")
 
+        # TradingView can occasionally send malformed mixed-sign epoch ranges
+        # (e.g. negative "from" with tiny positive "to"), but it also legitimately
+        # requests very old/negative ranges while backfilling history. Only
+        # normalize the malformed cases, otherwise we risk infinite backfill loops.
+        stale_cutoff = current_time - timedelta(days=365 * 2)
+        has_invalid_order = from_date >= to_date
+        has_malformed_mixed_sign_epoch = (
+            from_ts < 0 < to_ts and
+            to_date < stale_cutoff
+        )
+        should_normalize_to_recent = has_invalid_order or has_malformed_mixed_sign_epoch
+
+        if countback and countback > 0 and should_normalize_to_recent:
+            timeframe = resolution_to_timeframe(resolution)
+            lookback_bars = max(countback, 1)
+
+            if timeframe.endswith('m'):
+                bar_minutes = int(timeframe[:-1])
+                lookback_delta = timedelta(minutes=bar_minutes * lookback_bars * 3)
+            elif timeframe.endswith('h'):
+                bar_hours = int(timeframe[:-1])
+                lookback_delta = timedelta(hours=bar_hours * lookback_bars * 3)
+            elif timeframe == '1d':
+                lookback_delta = timedelta(days=lookback_bars * 2)
+            elif timeframe == '1w':
+                lookback_delta = timedelta(weeks=lookback_bars * 2)
+            elif timeframe == '1M':
+                lookback_delta = timedelta(days=lookback_bars * 62)
+            else:
+                lookback_delta = timedelta(days=max(lookback_bars * 2, 30))
+
+            to_date = current_time
+            from_date = current_time - lookback_delta
+            logger.warning(
+                f"UDF history: normalized stale/invalid range using countback={countback}: "
+                f"{from_date} to {to_date}"
+            )
+
         logger.info(f"UDF history: date range {from_date} to {to_date}")
 
-        # Parse resolution to determine table and target resolution
-        table, target_resolution = parse_resolution(resolution)
-        date_col = 'date' if table == 'price_daily' else 'dt'
         logger.info(f"UDF history: using table {table}, date_col {date_col}, target_resolution {target_resolution}")
+
+        # Let TradingView stop requesting older chunks naturally.
+        if to_ts < 0 and from_ts < 0:
+            logger.info(
+                f"UDF history: old negative backfill window detected "
+                f"({from_ts} -> {to_ts}), returning no_data"
+            )
+            return {
+                "s": "no_data",
+                "errmsg": "No older historical data available"
+            }
 
         # Check cache first with improved key that includes current date to prevent stale data
         cache_key = f"{symbol.upper()}:{resolution}:{from_ts}:{to_ts}:{countback}:{current_time.date().isoformat()}"
@@ -843,10 +909,21 @@ async def get_historical_data(
         if not df.empty:
             # Ensure dates are datetime objects
             df_copy = df.copy()
-            df_copy['date'] = pd.to_datetime(df_copy['date'], errors='coerce')
+            df_copy['date'] = pd.to_datetime(df_copy['date'], errors='coerce', utc=True)
+            df_copy = df_copy.dropna(subset=['date'])
 
-            # Convert to milliseconds and extract arrays vectorized
-            timestamps = (df_copy['date'].astype('int64') // 10**6).tolist()  # Convert to milliseconds
+            # Normalize epoch scale robustly (s/us/ns -> ms) to satisfy TradingView.
+            epoch_raw = df_copy['date'].astype('int64')
+            abs_max = int(epoch_raw.abs().max()) if not epoch_raw.empty else 0
+            if abs_max < 10**11:  # seconds
+                timestamps = (epoch_raw * 1000).astype('int64').tolist()
+            elif abs_max < 10**14:  # milliseconds
+                timestamps = epoch_raw.astype('int64').tolist()
+            elif abs_max < 10**17:  # microseconds
+                timestamps = (epoch_raw // 1000).astype('int64').tolist()
+            else:  # nanoseconds
+                timestamps = (epoch_raw // 10**6).astype('int64').tolist()
+
             opens = df_copy['open'].astype(float).tolist()
             highs = df_copy['high'].astype(float).tolist()
             lows = df_copy['low'].astype(float).tolist()

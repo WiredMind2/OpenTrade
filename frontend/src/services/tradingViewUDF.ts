@@ -28,6 +28,14 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
   private readonly baseUrl: string
   private chartUpdateUnsubscribe?: () => void
 
+  private normalizeTimestampToMs(value: unknown): number {
+    const ts = Number(value)
+    if (!Number.isFinite(ts)) return 0
+    // TradingView expects bar.time in milliseconds.
+    // Some backend paths still return Unix seconds.
+    return ts < 1e11 ? ts * 1000 : ts
+  }
+
   constructor() {
     this.baseUrl = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
@@ -169,7 +177,7 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
 
          for (let i = 0; i < t.length; i++) {
            bars.push({
-             time: t[i],
+            time: this.normalizeTimestampToMs(t[i]),
              open: o[i],
              high: h[i],
              low: l[i],
@@ -297,7 +305,11 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
           subscription.resolution === resolution) {
         try {
           // Call the onTick callback with the bar data
-          subscription.onTick(bar)
+          const normalizedBar = {
+            ...bar,
+            time: this.normalizeTimestampToMs(bar?.time)
+          }
+          subscription.onTick(normalizedBar)
           console.log(`[TradingViewUDF] Delivered chart update for ${symbol}:${resolution} to listener ${listenerGuid}`)
           deliveredCount++
         } catch (error) {
