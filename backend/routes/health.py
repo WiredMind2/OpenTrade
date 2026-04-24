@@ -21,12 +21,19 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Health check endpoint."""
-    from backend.main import app_state  # Import here to avoid circular imports
+    from backend.main import app_state as backend_app_state  # Import here to avoid circular imports
+    try:
+        # Tests commonly patch `main.app_state`; prefer it when available.
+        from main import app_state as shim_app_state  # type: ignore
+    except Exception:
+        shim_app_state = None
 
     logger = get_component_logger(__file__)
+    app_state = shim_app_state if isinstance(shim_app_state, dict) else backend_app_state
 
     config = get_config()
-    uptime = (datetime.utcnow() - app_state["start_time"]).total_seconds()
+    start_time = app_state.get("start_time") or datetime.utcnow()
+    uptime = (datetime.utcnow() - start_time).total_seconds()
 
     # Check services
     services = {
@@ -37,7 +44,7 @@ async def health_check():
 
     # Test database connection
     try:
-        conn = sqlite3.connect(app_state["database_path"])
+        conn = sqlite3.connect(app_state.get("database_path", "data/backtest.db"))
         conn.execute("SELECT 1")
         conn.close()
         services["database"] = "healthy"

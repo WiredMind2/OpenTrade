@@ -2,10 +2,24 @@ import tempfile
 import os
 import sqlite3
 import json
+import time
+import gc
 from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 
 from backend.main import app, app_state
+
+
+def _safe_unlink(path, retries=5, delay=0.1):
+    """Windows-friendly temp file cleanup with brief retries."""
+    for _ in range(retries):
+        try:
+            os.unlink(path)
+            return
+        except PermissionError:
+            gc.collect()
+            time.sleep(delay)
+    os.unlink(path)
 
 
 def init_schema(db_path: str):
@@ -56,16 +70,15 @@ def test_chart_data_empty_hist_and_preds():
     try:
         init_schema(db)
         app_state['database_path'] = db
-        client = TestClient(app)
-
-        r = client.get('/predictions/chart-data/FOO')
-        assert r.status_code == 200
-        data = r.json()
-        assert data['ticker'] == 'FOO'
-        assert data['historical_data'] == []
-        assert data['predictions'] == []
+        with TestClient(app) as client:
+            r = client.get('/predictions/chart-data/FOO')
+            assert r.status_code == 200
+            data = r.json()
+            assert data['ticker'] == 'FOO'
+            assert data['historical_data'] == []
+            assert data['predictions'] == []
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_chart_data_with_hist_and_raw_predictions_and_include_raw():
@@ -92,21 +105,21 @@ def test_chart_data_with_hist_and_raw_predictions_and_include_raw():
         conn.close()
 
         app_state['database_path'] = db
-        client = TestClient(app)
-        r = client.get('/predictions/chart-data/ABC?include_raw=true')
-        assert r.status_code == 200
-        data = r.json()
-        assert len(data['historical_data']) == 2
-        # Predictions present
-        assert 'predictions' in data
-        assert len(data['predictions']) == 1
-        assert 'raw_predictions' in data
-        assert len(data['raw_predictions']) == 1
-        p = data['predictions'][0]
-        # predicted_price computed from base price (close on produced_at) * (1 + predicted_return)
-        assert p['predicted_price'] is not None
+        with TestClient(app) as client:
+            r = client.get('/predictions/chart-data/ABC?include_raw=true')
+            assert r.status_code == 200
+            data = r.json()
+            assert len(data['historical_data']) == 2
+            # Predictions present
+            assert 'predictions' in data
+            assert len(data['predictions']) == 1
+            assert 'raw_predictions' in data
+            assert len(data['raw_predictions']) == 1
+            p = data['predictions'][0]
+            # predicted_price computed from base price (close on produced_at) * (1 + predicted_return)
+            assert p['predicted_price'] is not None
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_chart_data_aggregation_modes_and_malformed_produced_at():
@@ -137,29 +150,28 @@ def test_chart_data_aggregation_modes_and_malformed_produced_at():
         conn.close()
 
         app_state['database_path'] = db
-        client = TestClient(app)
+        with TestClient(app) as client:
+            # avg
+            r = client.get('/predictions/chart-data/xyz?aggregate=avg')
+            assert r.status_code == 200
+            data = r.json()
+            # There should be at least one aggregated result for the target date
+            assert any('count' in p for p in data['predictions'])
 
-        # avg
-        r = client.get('/predictions/chart-data/xyz?aggregate=avg')
-        assert r.status_code == 200
-        data = r.json()
-        # There should be at least one aggregated result for the target date
-        assert any('count' in p for p in data['predictions'])
+            # latest
+            r = client.get('/predictions/chart-data/xyz?aggregate=latest')
+            assert r.status_code == 200
+            data2 = r.json()
+            assert any('predicted_price' in p for p in data2['predictions'])
 
-        # latest
-        r = client.get('/predictions/chart-data/xyz?aggregate=latest')
-        assert r.status_code == 200
-        data2 = r.json()
-        assert any('predicted_price' in p for p in data2['predictions'])
-
-        # max_conf
-        r = client.get('/predictions/chart-data/xyz?aggregate=max_conf')
-        assert r.status_code == 200
-        data3 = r.json()
-        assert any('predicted_price' in p for p in data3['predictions'])
+            # max_conf
+            r = client.get('/predictions/chart-data/xyz?aggregate=max_conf')
+            assert r.status_code == 200
+            data3 = r.json()
+            assert any('predicted_price' in p for p in data3['predictions'])
 
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_predict_success_with_model_and_data():
@@ -189,13 +201,13 @@ def test_predict_success_with_model_and_data():
         app_state['database_path'] = db
         app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': FakeModel(), 'embedder': 'x'}}
 
-        client = TestClient(app)
-        payload = {"ticker": "MSFT", "horizon": "1d", "context": {}}
-        r = client.post('/predict', json=payload)
-        assert r.status_code == 200
-        js = r.json()
-        assert abs(js['predicted_return'] - 0.02) < 1e-6
-        assert 'confidence' in js
+        with TestClient(app) as client:
+            payload = {"ticker": "MSFT", "horizon": "1d", "context": {}}
+            r = client.post('/predict', json=payload)
+            assert r.status_code == 200
+            js = r.json()
+            assert abs(js['predicted_return'] - 0.02) < 1e-6
+            assert 'confidence' in js
 
         # ensure stored
         conn = sqlite3.connect(db)
@@ -206,4 +218,4 @@ def test_predict_success_with_model_and_data():
         conn.close()
 
     finally:
-        os.unlink(db)
+        _safe_unlink(db)

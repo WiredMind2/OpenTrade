@@ -18,18 +18,14 @@ class TestAPIBacktestEndpoints:
 
     def setup_method(self):
         """Set up test client and mock database."""
-        import sys
-        from pathlib import Path
-        backend_path = str(Path(__file__).parent.parent / 'backend')
-        # Ensure backend package is preferred on import path
-        if backend_path not in sys.path:
-            sys.path.insert(0, backend_path)
         from main import app, app_state
 
-        # Sanity check: imported main should be backend/main.py
+        # Sanity check: imported main should resolve to the app entrypoint.
+        # The project now uses a top-level main shim that re-exports backend.main.
         import main as imported_main
-        assert 'backend{}main.py'.format(os.path.sep) in getattr(imported_main, '__file__', ''), \
-            f"Imported main module is {getattr(imported_main, '__file__', None)}; expected backend/main.py"
+        imported_path = getattr(imported_main, '__file__', '')
+        assert imported_path.endswith(f"main.py"), \
+            f"Imported main module is {imported_path}; expected main.py entrypoint"
 
         # Create temporary database for testing
         self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)

@@ -11,8 +11,9 @@ This is a stub: the real trading_model should be called to produce suggested_pos
 import argparse
 import sqlite3
 import os
+import logging
 from datetime import datetime, timedelta
-from script_logger import logger
+from backend.scripts.script_logger import logger
 
 
 def load_trading_predictions(conn, date_str):

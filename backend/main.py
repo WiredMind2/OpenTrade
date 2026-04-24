@@ -139,7 +139,7 @@ app.include_router(scripts_router)
 app.include_router(udf_router, prefix="/udf")
 
 # Add WebSocket endpoint
-app.add_websocket_route("/ws", websocket_endpoint)
+app.add_api_websocket_route("/ws", websocket_endpoint)
 
 
 async def init_database():

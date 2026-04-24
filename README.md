@@ -76,7 +76,7 @@ Create a new class in `backend/models/` that inherits from `BaseModel` and imple
 ### Running the Application and Tests
 
 1. Activate the virtual environment: `& .venv\Scripts\Activate.ps1`
-2. Start the backend: `python main.py`
+2. Start the backend from repo root: `python main.py`
 3. Start the frontend: `cd frontend && npm run dev`
 4. Run tests: `pytest`
 
@@ -84,7 +84,8 @@ Create a new class in `backend/models/` that inherits from `BaseModel` and imple
 
 ```
 trading-backtesting/
-├── main.py                    # Top-level import shim that re-exports backend app
+├── main.py                    # Top-level backend launcher (repo-root entrypoint)
+├── app_shim.py                # Compatibility shim for `from main import app, app_state`
 ├── backend/
 │   ├── main.py                # FastAPI app entry point
 │   ├── schemas/               # Pydantic models (e.g., `schemas/udf.py`)
@@ -181,7 +182,7 @@ npm run dev
    # From repo root (after activating .venv):
    python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
-   # Or run the module directly from backend:
+   # Or run from the backend directory:
    cd backend
    python main.py
    ```

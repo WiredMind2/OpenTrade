@@ -17,12 +17,24 @@ active_connections = set()
 chart_subscriptions: Dict[WebSocket, Set[Tuple[str, str, str]]] = {}
 
 
+def _get_app_state() -> dict:
+    """Return the active app_state, preferring the top-level shim during tests."""
+    from backend.main import app_state as backend_app_state
+    try:
+        from main import app_state as shim_app_state  # type: ignore
+        if isinstance(shim_app_state, dict):
+            return shim_app_state
+    except Exception:
+        pass
+    return backend_app_state
+
+
 async def broadcast_websocket_message(message: dict):
     """Broadcast a message to all connected WebSocket clients.
 
     Returns a dict with broadcast statistics for testing/monitoring.
     """
-    from backend.main import app_state
+    app_state = _get_app_state()
 
     # Use module-level set or app_state set (whichever has connections)
     connections = active_connections or app_state.get("active_websockets", set())
@@ -130,16 +142,16 @@ async def broadcast_chart_update(symbol: str, resolution: str, bar_data: dict):
 
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time trading updates."""
-    from backend.main import app_state
+    app_state = _get_app_state()
 
     logger.info("[WebSocket Backend] Accepting connection...")
     await websocket.accept()
     
     # Add to both sets for compatibility
-    app_state["active_websockets"].add(websocket)
+    app_state.setdefault("active_websockets", set()).add(websocket)
     active_connections.add(websocket)
     
-    logger.info(f"[WebSocket Backend] Connection established. Active connections: {len(app_state['active_websockets'])}")
+    logger.info(f"[WebSocket Backend] Connection established. Active connections: {len(app_state.get('active_websockets', set()))}")
 
     try:
         while True:
@@ -198,6 +210,6 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in chart_subscriptions:
             del chart_subscriptions[websocket]
 
-        app_state["active_websockets"].discard(websocket)
+        app_state.setdefault("active_websockets", set()).discard(websocket)
         active_connections.discard(websocket)
-        logger.info(f"[WebSocket Backend] Connection closed. Active connections: {len(app_state['active_websockets'])}")
+        logger.info(f"[WebSocket Backend] Connection closed. Active connections: {len(app_state.get('active_websockets', set()))}")

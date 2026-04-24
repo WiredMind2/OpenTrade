@@ -240,7 +240,12 @@ class SentimentMLStrategy(BaseStrategy):
 
     def train(self, config: Dict[str, Any]) -> Any:
         """Train the sentiment model by enqueuing a background training job."""
-        from backend.main import app_state  # Import here to avoid circular imports
+        # Import lazily to avoid hard dependency on full FastAPI app during unit tests
+        # or lightweight CLI usage where optional API dependencies may be missing.
+        try:
+            from backend.main import app_state  # Import here to avoid circular imports
+        except Exception:
+            app_state = {}
 
         # Generate job ID
         job_id = str(uuid.uuid4())

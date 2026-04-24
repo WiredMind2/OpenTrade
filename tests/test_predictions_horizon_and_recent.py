@@ -1,10 +1,24 @@
 import tempfile
 import os
 import sqlite3
+import time
+import gc
 from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 
 from backend.main import app, app_state
+
+
+def _safe_unlink(path, retries=5, delay=0.1):
+    """Windows-friendly temp file cleanup with brief retries."""
+    for _ in range(retries):
+        try:
+            os.unlink(path)
+            return
+        except PermissionError:
+            gc.collect()
+            time.sleep(delay)
+    os.unlink(path)
 
 
 def init_db(db):
@@ -61,18 +75,18 @@ def test_chart_data_horizon_3d_and_7d():
         from backend.config import reload_config
         reload_config()
         app_state['database_path'] = db
-        client = TestClient(app)
-        r3 = client.get('/predictions/chart-data/MUL?horizon=3d')
-        assert r3.status_code == 200
-        body3 = r3.json()
-        assert 'predictions' in body3
+        with TestClient(app) as client:
+            r3 = client.get('/predictions/chart-data/MUL?horizon=3d')
+            assert r3.status_code == 200
+            body3 = r3.json()
+            assert 'predictions' in body3
 
-        r7 = client.get('/predictions/chart-data/MUL?horizon=7d')
-        assert r7.status_code == 200
-        body7 = r7.json()
-        assert 'predictions' in body7
+            r7 = client.get('/predictions/chart-data/MUL?horizon=7d')
+            assert r7.status_code == 200
+            body7 = r7.json()
+            assert 'predictions' in body7
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_get_recent_predictions_parses_features_and_metadata():
@@ -91,16 +105,16 @@ def test_get_recent_predictions_parses_features_and_metadata():
         from backend.config import reload_config
         reload_config()
         app_state['database_path'] = db
-        client = TestClient(app)
-        r = client.get('/predictions/recent')
-        assert r.status_code == 200
-        body = r.json()
-        assert len(body) >= 1
-        p = body[0]
-        assert isinstance(p.get('features_used'), list)
-        assert isinstance(p.get('metadata'), dict)
+        with TestClient(app) as client:
+            r = client.get('/predictions/recent')
+            assert r.status_code == 200
+            body = r.json()
+            assert len(body) >= 1
+            p = body[0]
+            assert isinstance(p.get('features_used'), list)
+            assert isinstance(p.get('metadata'), dict)
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_confidence_clamp_bounds():
@@ -125,21 +139,21 @@ def test_confidence_clamp_bounds():
 
         app_state['database_path'] = db
         app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': M0(), 'embedder': 'x'}}
-        client = TestClient(app)
-        r = client.post('/predict', json={'ticker':'CL','horizon':'1d','context':{}})
-        assert r.status_code == 200
-        js = r.json()
-        assert abs(js['confidence'] - 0.95) < 1e-6
+        with TestClient(app) as client:
+            r = client.post('/predict', json={'ticker':'CL','horizon':'1d','context':{}})
+            assert r.status_code == 200
+            js = r.json()
+            assert abs(js['confidence'] - 0.95) < 1e-6
 
-        # model returns large value to force lower clamp
-        class M1:
-            def predict(self, X):
-                return [1.0]
+            # model returns large value to force lower clamp
+            class M1:
+                def predict(self, X):
+                    return [1.0]
 
-        app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': M1(), 'embedder': 'x'}}
-        r2 = client.post('/predict', json={'ticker':'CL','horizon':'1d','context':{}})
-        assert r2.status_code == 200
-        js2 = r2.json()
-        assert abs(js2['confidence'] - 0.1) < 1e-6
+            app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': M1(), 'embedder': 'x'}}
+            r2 = client.post('/predict', json={'ticker':'CL','horizon':'1d','context':{}})
+            assert r2.status_code == 200
+            js2 = r2.json()
+            assert abs(js2['confidence'] - 0.1) < 1e-6
     finally:
-        os.unlink(db)
+        _safe_unlink(db)

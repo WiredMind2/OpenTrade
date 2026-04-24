@@ -21,6 +21,7 @@ logger = get_component_logger(__file__)
 
 # Rate limiter for heavy endpoints
 limiter = Limiter(key_func=get_remote_address)
+security = HTTPBearer()
 
 
 class TrainRequest(BaseModel):
@@ -39,7 +40,7 @@ class ProjectionRequest(BaseModel):
     horizon: int = Field(default=30, ge=1, le=365, description="Number of days to project forward")
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())) -> Dict[str, Any]:
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
     """Get current authenticated user from JWT token."""
     token = credentials.credentials
     from backend.config import get_config

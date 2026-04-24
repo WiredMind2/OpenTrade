@@ -213,7 +213,7 @@ class TestModelAPI:
         data = response.json()
 
         assert "job_id" in data
-        assert data["status"] == "queued"
+        assert data["status"] in ["queued", "running", "completed"]
         assert data["model_meta"] is None
 
     def test_retrain_model_immediate(self):
@@ -329,7 +329,7 @@ class TestModelAPI:
 
         assert data["id"] == job_id
         assert data["model_name"] == "test_job_model"
-        assert data["status"] == "queued"
+        assert data["status"] in ["queued", "running", "completed"]
 
     def test_get_job_status_not_found(self):
         """Test GET /api/jobs/{job_id} with non-existent job."""

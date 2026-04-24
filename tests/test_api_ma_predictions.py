@@ -379,7 +379,7 @@ class TestMAWebSocketIntegration:
     @patch('routes.scripts.broadcast_websocket_message')
     @patch('routes.scripts.script_executions')
     @patch('routes.scripts.run_script_async')
-    async def test_websocket_broadcast_on_completion(self, mock_run_script, mock_executions, mock_broadcast):
+    def test_websocket_broadcast_on_completion(self, mock_run_script, mock_executions, mock_broadcast):
         """Test WebSocket broadcast when MA prediction completes."""
         # This would be tested in the async function, but we can't easily test that here
         # The WebSocket broadcast is tested in the run_script_async tests in test_api_scripts.py

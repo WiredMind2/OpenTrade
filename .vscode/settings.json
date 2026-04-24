@@ -50,5 +50,36 @@
         "tests/pytest.ini"
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+    "python.languageServer": "None",
+    "cursorpyright.analysis.autoImportCompletions": true,
+    "cursorpyright.analysis.autoSearchPaths": true,
+    "cursorpyright.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "none",
+        "reportUndefinedVariable": "none",
+        "reportOptionalMemberAccess": "none",
+        "reportOptionalSubscript": "none",
+        "reportOptionalCall": "none",
+        "reportOptionalIterable": "none",
+        "reportOptionalContextManager": "none",
+        "reportOptionalOperand": "none",
+        "reportUnknownParameterType": "none",
+        "reportUnknownArgumentType": "none",
+        "reportUnknownLambdaType": "none",
+        "reportUnknownVariableType": "none",
+        "reportUnknownMemberType": "none",
+        "reportNoReturnUsed": "none",
+        "reportAttributeAccessIssue": "none",
+        "reportPotentiallyUnboundVariable": "none",
+        "reportUnusedCoroutine": "none",
+        "reportFunctionMemberAccess": "none",
+        "reportIncompatibleMethodOverride": "none",
+        "reportIncompatibleVariableOverride": "none",
+        "reportOverlappingOverload": "none"
+    },
+    "cursorpyright.analysis.extraPaths": [
+        "./scripts",
+        "./tests"
+    ],
+    "cursorpyright.analysis.typeCheckingMode": "off"
 }

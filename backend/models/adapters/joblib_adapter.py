@@ -61,7 +61,7 @@ class JoblibModelAdapter(BaseModelAdapter):
                 if features.ndim == 1:
                     features = features.reshape(1, -1)
                 # Validate feature count
-                if self.expected_features and features.shape[1] != len(self.expected_features):
+                if hasattr(self.expected_features, "__len__") and features.shape[1] != len(self.expected_features):
                     raise ValueError(f"Feature mismatch: expected {len(self.expected_features)} features, got {features.shape[1]}")
             else:
                 # Need to compute features from ticker/horizon

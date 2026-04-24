@@ -16,9 +16,9 @@ import warnings
 import json
 from pathlib import Path
 
-from config import get_config
-from logging_config import get_component_logger
-from error_handling import handle_data_errors, DataIngestionError
+from backend.config import get_config
+from backend.logging_config import get_component_logger
+from backend.error_handling import handle_data_errors, DataIngestionError
 
 
 logger = get_component_logger(__file__)

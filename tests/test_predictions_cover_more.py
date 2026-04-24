@@ -1,10 +1,25 @@
 import tempfile
 import os
 import sqlite3
+import time
+import gc
 from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 
 from backend.main import app, app_state
+
+
+def _safe_unlink(path, retries=5, delay=0.1):
+    """Windows-friendly temp file cleanup with brief retries."""
+    for _ in range(retries):
+        try:
+            os.unlink(path)
+            return
+        except PermissionError:
+            gc.collect()
+            time.sleep(delay)
+    # Final attempt to surface any persistent issue
+    os.unlink(path)
 
 
 def make_db_with_price_and_predicted_conf(db_path):
@@ -36,15 +51,15 @@ def test_chart_data_reads_predicted_confidence():
     try:
         make_db_with_price_and_predicted_conf(db)
         app_state['database_path'] = db
-        client = TestClient(app)
-        r = client.get('/predictions/chart-data/TST?include_raw=true')
-        assert r.status_code == 200
-        body = r.json()
-        assert 'raw_predictions' in body
-        rp = body['raw_predictions'][0]
-        assert abs(rp['confidence'] - 0.77) < 1e-6
+        with TestClient(app) as client:
+            r = client.get('/predictions/chart-data/TST?include_raw=true')
+            assert r.status_code == 200
+            body = r.json()
+            assert 'raw_predictions' in body
+            rp = body['raw_predictions'][0]
+            assert abs(rp['confidence'] - 0.77) < 1e-6
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_predict_with_price_data_only_uses_model_and_volume_features():
@@ -78,13 +93,13 @@ def test_predict_with_price_data_only_uses_model_and_volume_features():
 
         app_state['database_path'] = db
         app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': M(), 'embedder': 'x'}}
-        client = TestClient(app)
-        r = client.post('/predict', json={'ticker':'PRC','horizon':'1d','context':{}})
-        assert r.status_code == 200
-        js = r.json()
-        assert abs(js['predicted_return'] - 0.123) < 1e-6
+        with TestClient(app) as client:
+            r = client.post('/predict', json={'ticker':'PRC','horizon':'1d','context':{}})
+            assert r.status_code == 200
+            js = r.json()
+            assert abs(js['predicted_return'] - 0.123) < 1e-6
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_trading_predictions_table_missing_returns_empty_list(monkeypatch):
@@ -101,9 +116,9 @@ def test_trading_predictions_table_missing_returns_empty_list(monkeypatch):
         conn.close()
 
         app_state['database_path'] = db
-        client = TestClient(app)
-        r = client.get('/trading/predictions')
-        assert r.status_code == 200
-        assert r.json() == []
+        with TestClient(app) as client:
+            r = client.get('/trading/predictions')
+            assert r.status_code == 200
+            assert r.json() == []
     finally:
-        os.unlink(db)
+        _safe_unlink(db)

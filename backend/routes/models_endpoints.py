@@ -19,13 +19,27 @@ from backend.schemas.models import RetrainRequest, RetrainResponse
 router = APIRouter()
 
 
+def _get_app_state() -> dict:
+    """Return active app_state, preferring top-level shim in tests."""
+    from backend.main import app_state as backend_app_state
+    try:
+        from main import app_state as shim_app_state  # type: ignore
+        if isinstance(shim_app_state, dict):
+            return shim_app_state
+    except Exception:
+        pass
+    return backend_app_state
+
+
 @router.get("/models", response_model=List[ModelSummary], tags=["Models"])
 async def list_models():
     """List available models."""
-    from backend.main import app_state  # Import here to avoid circular imports
-
-    registry = app_state["model_registry"]
+    app_state = _get_app_state()
+    registry = app_state.get("model_registry")
     models = []
+
+    if registry is None:
+        return models
 
     for model in registry.list():
         config_schema = model.get_config_schema()
@@ -44,8 +58,8 @@ async def list_models():
 @router.post("/models/{name}/predict", response_model=ModelPredictResponse, tags=["Models"])
 async def predict_with_model(name: str, request: ModelPredictRequest):
     """Generate predictions using a specific model."""
-    from backend.main import app_state  # Import here to avoid circular imports
     from fastapi import HTTPException
+    app_state = _get_app_state()
 
     registry = app_state["model_registry"]
     model = registry.get(name)
@@ -79,9 +93,23 @@ def require_admin():
 
 def _get_db_connection():
     """Get database connection from app state."""
-    from backend.main import app_state
+    app_state = _get_app_state()
     db_path = app_state.get("database_path", "data/backtest.db")
-    return sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS model_jobs (
+            id TEXT PRIMARY KEY,
+            model_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            config TEXT,
+            result TEXT,
+            error TEXT
+        )
+    """)
+    conn.commit()
+    return conn
 
 
 def _store_job(job_id: str, model_name: str, status: str, config: dict = None, result: dict = None, error: str = None):
@@ -118,7 +146,7 @@ def _update_job_status(job_id: str, status: str, result: dict = None, error: str
 async def _run_retrain_background(job_id: str, model_name: str, training_payload: dict, config: dict, options: dict):
     """Background task to run model retraining."""
     try:
-        from backend.main import app_state
+        app_state = _get_app_state()
 
         # Update status to running
         _update_job_status(job_id, "running")
@@ -148,7 +176,7 @@ async def retrain_model(name: str, request: RetrainRequest, background_tasks: Ba
     if not require_admin():
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    from backend.main import app_state
+    app_state = _get_app_state()
 
     # Get model
     registry = app_state["model_registry"]

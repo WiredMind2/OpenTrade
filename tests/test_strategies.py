@@ -133,6 +133,9 @@ class MockStrategy(BaseStrategy):
 
     def create_backtrader_strategy(self, parameters):
         return None
+
+    def project(self, parameters, projection_days=30, initial_capital=100000.0):
+        return {}
 """)
 
             # Discover strategies
@@ -174,6 +177,9 @@ class TestBaseStrategy:
             def create_backtrader_strategy(self, parameters):
                 return Mock()
 
+            def project(self, parameters, projection_days=30, initial_capital=100000.0):
+                return {}
+
         strategy = ConcreteStrategy(
             name="test_strategy",
             description="Test description",
@@ -193,6 +199,9 @@ class TestBaseStrategy:
         class ConcreteStrategy(BaseStrategy):
             def create_backtrader_strategy(self, parameters):
                 return Mock()
+
+            def project(self, parameters, projection_days=30, initial_capital=100000.0):
+                return {}
 
         strategy = ConcreteStrategy(
             name="test_strategy",

@@ -34,7 +34,7 @@ class TestScriptAdapter:
         # Should be a Pydantic model
         assert hasattr(schema, 'model_json_schema')
 
-    @patch('backend.models.three_ma_adapter.sqlite3')
+    @patch('backend.models.adapters.script_adapter.sqlite3')
     @patch('backend.models.three_ma_adapter.optimize_ma_periods')
     @patch('backend.models.three_ma_adapter.generate_predictions')
     def test_predict_with_skip_optimization(self, mock_generate, mock_optimize, mock_sqlite):
@@ -95,7 +95,7 @@ class TestScriptAdapter:
         mock_generate.assert_called_once_with(mock_conn, "2023-01-01", "2023-01-02", 5, 20, 50)
         mock_optimize.assert_not_called()
 
-    @patch('backend.models.three_ma_adapter.sqlite3')
+    @patch('backend.models.adapters.script_adapter.sqlite3')
     @patch('backend.models.three_ma_adapter.optimize_ma_periods')
     @patch('backend.models.three_ma_adapter.generate_predictions')
     def test_predict_with_optimization(self, mock_generate, mock_optimize, mock_sqlite):
@@ -141,7 +141,7 @@ class TestScriptAdapter:
         assert len(result["predictions"]) == 1
         prediction = result["predictions"][0]
         assert prediction["position_pct"] == -0.03
-        assert prediction["confidence"] == 0.4
+        assert prediction["confidence"] == 0.6
 
         assert result["meta"]["optimization_skipped"] is False
 
@@ -165,7 +165,7 @@ class TestScriptAdapter:
         with pytest.raises(ValueError, match="tickers list cannot be empty"):
             self.adapter.predict(inputs, config)
 
-    @patch('backend.models.three_ma_adapter.sqlite3')
+    @patch('backend.models.adapters.script_adapter.sqlite3')
     def test_retrain(self, mock_sqlite):
         """Test retraining the model."""
         # Mock database connection

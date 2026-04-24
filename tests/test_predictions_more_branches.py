@@ -1,10 +1,24 @@
 import tempfile
 import os
 import sqlite3
+import time
+import gc
 from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 
 from backend.main import app, app_state
+
+
+def _safe_unlink(path, retries=5, delay=0.1):
+    """Windows-friendly temp file cleanup with brief retries."""
+    for _ in range(retries):
+        try:
+            os.unlink(path)
+            return
+        except PermissionError:
+            gc.collect()
+            time.sleep(delay)
+    os.unlink(path)
 
 
 def init_min_schema(db_path: str):
@@ -69,15 +83,15 @@ def test_predict_with_model_loaded_but_no_data_returns_zero():
                 return [0.5]
 
         app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': DummyModel(), 'embedder': 'x'}}
-        client = TestClient(app)
-        payload = {"ticker": "ZZZ", "horizon": "1d", "context": {}}
-        r = client.post('/predict', json=payload)
-        assert r.status_code == 200
-        data = r.json()
-        # With no articles and no price_data the code falls back to 0.0
-        assert data['predicted_return'] == 0.0
+        with TestClient(app) as client:
+            payload = {"ticker": "ZZZ", "horizon": "1d", "context": {}}
+            r = client.post('/predict', json=payload)
+            assert r.status_code == 200
+            data = r.json()
+            # With no articles and no price_data the code falls back to 0.0
+            assert data['predicted_return'] == 0.0
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_predict_model_none_returns_500():
@@ -88,12 +102,12 @@ def test_predict_model_none_returns_500():
         init_min_schema(db)
         app_state['database_path'] = db
         app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': None}}
-        client = TestClient(app)
-        payload = {"ticker": "ABC", "horizon": "1d", "context": {}}
-        r = client.post('/predict', json=payload)
-        assert r.status_code == 500
+        with TestClient(app) as client:
+            payload = {"ticker": "ABC", "horizon": "1d", "context": {}}
+            r = client.post('/predict', json=payload)
+            assert r.status_code == 500
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_predict_with_articles_only_uses_model():
@@ -115,14 +129,14 @@ def test_predict_with_articles_only_uses_model():
 
         app_state['database_path'] = db
         app_state['models_loaded'] = {'lightgbm_1d': {'lgbm': MyModel(), 'embedder': 'x'}}
-        client = TestClient(app)
-        payload = {"ticker": "ABC", "horizon": "1d", "context": {}}
-        r = client.post('/predict', json=payload)
-        assert r.status_code == 200
-        data = r.json()
-        assert abs(data['predicted_return'] - 0.123) < 1e-6
+        with TestClient(app) as client:
+            payload = {"ticker": "ABC", "horizon": "1d", "context": {}}
+            r = client.post('/predict', json=payload)
+            assert r.status_code == 200
+            data = r.json()
+            assert abs(data['predicted_return'] - 0.123) < 1e-6
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_trading_predictions_returns_rows_when_present():
@@ -141,15 +155,15 @@ def test_trading_predictions_returns_rows_when_present():
         from backend.config import reload_config
         reload_config()
         app_state['database_path'] = db
-        client = TestClient(app)
-        r = client.get('/trading/predictions')
-        assert r.status_code == 200
-        data = r.json()
-        assert isinstance(data, list)
-        assert len(data) == 1
-        assert data[0]['ticker'] == 'ABC'
+        with TestClient(app) as client:
+            r = client.get('/trading/predictions')
+            assert r.status_code == 200
+            data = r.json()
+            assert isinstance(data, list)
+            assert len(data) == 1
+            assert data[0]['ticker'] == 'ABC'
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
 
 
 def test_chart_data_with_history_but_no_predictions_returns_hist_only():
@@ -166,11 +180,11 @@ def test_chart_data_with_history_but_no_predictions_returns_hist_only():
         conn.close()
 
         app_state['database_path'] = db
-        client = TestClient(app)
-        r = client.get('/predictions/chart-data/HST')
-        assert r.status_code == 200
-        body = r.json()
-        assert len(body['historical_data']) == 1
-        assert body['predictions'] == []
+        with TestClient(app) as client:
+            r = client.get('/predictions/chart-data/HST')
+            assert r.status_code == 200
+            body = r.json()
+            assert len(body['historical_data']) == 1
+            assert body['predictions'] == []
     finally:
-        os.unlink(db)
+        _safe_unlink(db)
