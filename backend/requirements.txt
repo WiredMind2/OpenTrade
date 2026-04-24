@@ -1,6 +1,7 @@
 requests
 pandas
 numpy
+backtrader
 lightgbm
 sentence-transformers
 kaggle
