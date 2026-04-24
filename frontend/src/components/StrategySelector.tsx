@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getStrategies } from '../services/strategyApi';
 
 interface ParameterSchema {
   type: string;
@@ -22,23 +23,16 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<string>('');
   const [params, setParams] = useState<Record<string, any>>({});
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    console.log('Fetching strategies from /api/strategies');
-    fetch('/api/strategies')
-      .then(res => {
-        console.log('Strategies fetch response status:', res.status);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-        return res.json();
-      })
+    getStrategies()
       .then((data: Strategy[]) => {
-        console.log('Fetched strategies:', data);
         setStrategies(data);
       })
       .catch(err => {
         console.error('Failed to fetch strategies:', err);
+        setError('Unable to load strategies. Please try again later.');
       });
   }, []);
 
@@ -129,6 +123,10 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
           </option>
         ))}
       </select>
+
+      {error && (
+        <p style={{ color: 'red', marginTop: '0.5rem' }}>{error}</p>
+      )}
 
       {selectedStrategy && (
         <div>
