@@ -84,8 +84,7 @@ Create a new class in `backend/models/` that inherits from `BaseModel` and imple
 
 ```
 trading-backtesting/
-├── main.py                    # Top-level backend launcher (repo-root entrypoint)
-├── app_shim.py                # Compatibility shim for `from main import app, app_state`
+├── main.py                    # Top-level import shim that re-exports backend app
 ├── backend/
 │   ├── main.py                # FastAPI app entry point
 │   ├── schemas/               # Pydantic models (e.g., `schemas/udf.py`)
@@ -122,7 +121,34 @@ cd frontend
 npm run dev
 ```
 
-## 🛠 Installation & Setup
+## � Docker Development
+
+This repository includes Docker support for local development with both backend and frontend services.
+
+### Start with Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+- Backend: `http://localhost:8000`
+- Frontend: `http://localhost:5173`
+
+The backend service mounts `./backend`, `./data`, and `.env` for live development.
+The frontend service mounts `./frontend` and supports hot reload.
+
+### Stop Docker services
+
+```bash
+docker compose down
+```
+
+### Optional: VS Code Dev Container
+
+If you use VS Code, open the repo in the dev container. The `.devcontainer/devcontainer.json` configuration forwards ports `8000` and `5173`.
+
+## �🛠 Installation & Setup
 
 ### Prerequisites
 - Python 3.10+
@@ -153,21 +179,6 @@ npm run dev
    # Edit .env with your configuration
    ```
 
-   **Kaggle authentication (optional):**
-
-   If you plan to run the `download_kaggle` pipeline step, authenticate once before running the pipeline.
-
-   ```bash
-   pip install kagglehub
-   ```
-
-   ```python
-   import kagglehub
-   kagglehub.login()
-   ```
-
-   `kagglehub.login()` opens an interactive prompt for your Kaggle username and API token. Use the same credentials from the **API** section of your Kaggle account settings.
-
 3. **Initialize Database**:
    ```powershell
    # Run schema migration to create the database schema
@@ -182,7 +193,7 @@ npm run dev
    # From repo root (after activating .venv):
    python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
-   # Or run from the backend directory:
+   # Or run the module directly from backend:
    cd backend
    python main.py
    ```
