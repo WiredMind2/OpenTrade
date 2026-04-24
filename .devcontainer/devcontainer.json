@@ -1,0 +1,14 @@
+{
+  "name": "OpenTrade Dev Container",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "backend",
+  "workspaceFolder": "/app",
+  "forwardPorts": [8000, 5173],
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "eamodio.gitlens",
+    "ms-azuretools.vscode-docker"
+  ],
+  "postCreateCommand": "cd backend && python -m pip install -r requirements.txt && cd ../frontend && npm install"
+}

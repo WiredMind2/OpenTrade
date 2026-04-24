@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.log
+*.db
+*.sqlite3
+*.env
+.venv/
+venv/
+node_modules/
+frontend/node_modules/
+backend/__pycache__/
+.git/
+.vscode/
+.env.local
+.DS_Store
+coverage/
+htmlcov/
