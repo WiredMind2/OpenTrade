@@ -152,6 +152,21 @@ npm run dev
    # Edit .env with your configuration
    ```
 
+   **Kaggle authentication (optional):**
+
+   If you plan to run the `download_kaggle` pipeline step, authenticate once before running the pipeline.
+
+   ```bash
+   pip install kagglehub
+   ```
+
+   ```python
+   import kagglehub
+   kagglehub.login()
+   ```
+
+   `kagglehub.login()` opens an interactive prompt for your Kaggle username and API token. Use the same credentials from the **API** section of your Kaggle account settings.
+
 3. **Initialize Database**:
    ```powershell
    # Run schema migration to create the database schema
