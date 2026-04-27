@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react'
-import { getPredictions, createPrediction, getTickers } from '../services/api'
+import React, { useEffect, useState, useRef } from 'react'
+import { getPredictions, createPrediction, getTickers, getPredictionProjections } from '../services/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -25,7 +25,7 @@ import { Separator } from '../components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
-import { getMockPredictionsForTicker } from '../utils/mockPredictions'
+import { getStrategies } from '../services/strategyApi'
 
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
@@ -47,6 +47,8 @@ export default function Predictions() {
   // Prediction projections state
   const [showPredictionProjections, setShowPredictionProjections] = useState(false)
   const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
+  const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
+  const [registeredStrategies, setRegisteredStrategies] = useState<string[]>([])
 
   const chartRef = useRef<any>(null)
 
@@ -77,6 +79,9 @@ export default function Predictions() {
   useEffect(() => {
     fetchPredictions()
     fetchTickers()
+    getStrategies()
+      .then((items) => setRegisteredStrategies(items.map((item) => item.name)))
+      .catch((e) => console.error('Failed to fetch strategies for prediction overlays:', e))
   }, [])
 
   const submit = async () => {
@@ -115,21 +120,55 @@ export default function Predictions() {
   }
 
   // Generate prediction projections for the selected ticker
-  const generatePredictionProjections = (ticker: string) => {
+  const generatePredictionProjections = async (ticker: string): Promise<boolean> => {
     // Get the latest price and time from the chart
     const latestPrice = chartRef.current?.getLatestPrice();
     const latestTime = chartRef.current?.getLatestTime();
-    const projections = getMockPredictionsForTicker(ticker, latestPrice || undefined, latestTime ? latestTime * 1000 : undefined)
-    setPredictionProjections(projections)
+
+    if (typeof latestPrice !== 'number' || typeof latestTime !== 'number') {
+      setProjectionAnchorWarning('Projection overlay is waiting for latest chart data.')
+      return false
+    }
+
+    setProjectionAnchorWarning(null)
+    try {
+      const strategiesToUse = registeredStrategies.length > 0
+        ? registeredStrategies
+        : projectionStrategy
+          ? [projectionStrategy]
+          : undefined
+
+      const projections = await getPredictionProjections({
+        symbol: ticker,
+        anchor_time: new Date(latestTime * 1000).toISOString(),
+        anchor_price: latestPrice,
+        horizon_days: projectionHorizon,
+        strategy_names: strategiesToUse,
+      })
+      setPredictionProjections(projections)
+      return true
+    } catch (e: any) {
+      console.error('Failed to generate prediction projections:', e)
+      setProjectionAnchorWarning(e.message || 'Projection overlay failed to load.')
+      return false
+    }
   }
 
   // Handle prediction projections toggle
   const handlePredictionProjectionsToggle = (enabled: boolean) => {
     setShowPredictionProjections(enabled)
-    if (enabled && predictionProjections.length === 0) {
-      generatePredictionProjections(selectedTicker)
+    if (!enabled) {
+      setProjectionAnchorWarning(null)
+      return
     }
+
+    void generatePredictionProjections(selectedTicker)
   }
+
+  useEffect(() => {
+    if (!showPredictionProjections) return
+    void generatePredictionProjections(selectedTicker)
+  }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy, registeredStrategies])
 
   const handleStrategyChange = (strategy: string, params: Record<string, any>) => {
     setProjectionStrategy(strategy)
@@ -251,6 +290,9 @@ export default function Predictions() {
                       onCheckedChange={handlePredictionProjectionsToggle}
                     />
                   </div>
+                  {projectionAnchorWarning && (
+                    <p className="text-xs text-amber-500">{projectionAnchorWarning}</p>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -5,7 +5,8 @@ This module defines the abstract base class that all trading strategies must imp
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Type, Literal
+from datetime import datetime, timedelta
+from typing import Dict, Any, Type, Literal, List
 import backtrader as bt
 
 
@@ -42,3 +43,42 @@ class BaseStrategy(ABC):
             Dict containing projected performance metrics
         """
         pass
+
+    def project_series(
+        self,
+        parameters: Dict[str, Any],
+        anchor_time: datetime,
+        anchor_price: float,
+        projection_days: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """Project a time series of prices from an anchor point.
+
+        The default implementation adapts summary output from ``project()`` to a
+        deterministic daily path. Strategies can override this with richer logic.
+        """
+        summary = self.project(
+            parameters=parameters,
+            projection_days=projection_days,
+            initial_capital=anchor_price,
+        )
+        total_return = float(summary.get("projected_return", 0.0))
+        confidence = float(summary.get("confidence", 0.5))
+        daily_return = total_return / max(projection_days, 1)
+
+        points: List[Dict[str, Any]] = []
+        price = anchor_price
+        for day in range(projection_days):
+            current_time = anchor_time + timedelta(days=day)
+            price = max(0.01, price * (1 + daily_return))
+            band_width = abs(price * (1 - confidence) * 0.2)
+            points.append(
+                {
+                    "time": current_time.isoformat(),
+                    "price": round(price, 4),
+                    "confidence": confidence,
+                    "upperBound": round(price + band_width, 4),
+                    "lowerBound": round(max(0.01, price - band_width), 4),
+                }
+            )
+
+        return points

@@ -101,6 +101,11 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
        );
        const projectionEntitiesRef = useRef<any[]>([]);
        const predictionEntitiesRef = useRef<any[]>([]);
+      const normalizeTimeToSeconds = (value: unknown): number | null => {
+        const ts = Number(value)
+        if (!Number.isFinite(ts)) return null
+        return ts > 1e11 ? Math.floor(ts / 1000) : Math.floor(ts)
+      }
 
        // State for projection settings
        const [projectionSettings, setProjectionSettings] = useState({
@@ -598,6 +603,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
           if (lastBar && typeof lastBar.close === 'number') {
             return lastBar.close;
           }
+          console.warn("[OHLCChart] Latest bar price unavailable");
 
           // Fallback: try to get price from the price scale
           const priceScale = chart.priceScale();
@@ -621,8 +627,12 @@ widgetRef.current = new TradingView.widget(widgetOptions);
           // Get the last bar from the chart
           const lastBar = chart.lastBar();
           if (lastBar && typeof lastBar.time === 'number') {
-            return lastBar.time;
+            const normalizedTime = normalizeTimeToSeconds(lastBar.time);
+            if (normalizedTime !== null) {
+              return normalizedTime;
+            }
           }
+          console.warn("[OHLCChart] Latest bar time unavailable or invalid");
         } catch (error) {
           console.warn("[OHLCChart] Failed to get latest time:", error);
         }

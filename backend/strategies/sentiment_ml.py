@@ -14,7 +14,7 @@ import os
 import json
 import re
 from datetime import datetime
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, List
 import backtrader as bt
 import joblib
 
@@ -621,6 +621,71 @@ class SentimentMLStrategy(BaseStrategy):
     def get_current_model_name(self) -> str:
         """Get the current model name."""
         return self.model_name
+
+    def project_series(
+        self,
+        parameters: Dict[str, Any],
+        anchor_time,
+        anchor_price: float,
+        projection_days: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """Generate anchored series from recent trading model predictions."""
+        from datetime import timedelta
+        import numpy as np
+        from backend.main import app_state
+
+        ticker = parameters.get("symbol", "AAPL")
+        lookback_days = max(30, projection_days * 2)
+        predictions: List[tuple] = []
+        try:
+            db_path = app_state.get("database_path", "data/backtest.db")
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT predicted_return, COALESCE(enter_prob, 0.5), COALESCE(suggested_position_pct, 0.0)
+                FROM trading_model_predictions
+                WHERE ticker = ?
+                ORDER BY dt DESC, produced_at DESC
+                LIMIT ?
+                """,
+                (ticker, lookback_days),
+            )
+            predictions = cur.fetchall()
+            conn.close()
+        except Exception:
+            predictions = []
+
+        if predictions:
+            projected_returns = np.array([float(row[0] or 0.0) for row in predictions], dtype=float)
+            enter_probs = np.array([float(row[1] or 0.5) for row in predictions], dtype=float)
+            positions = np.array([abs(float(row[2] or 0.0)) for row in predictions], dtype=float)
+            daily_return = float(np.mean(projected_returns * np.maximum(positions, 0.01) * enter_probs))
+            confidence_seed = float(np.mean(enter_probs))
+            vol = float(np.std(projected_returns)) if projected_returns.size > 1 else 0.015
+        else:
+            daily_return = 0.001
+            confidence_seed = 0.55
+            vol = 0.02
+
+        points: List[Dict[str, Any]] = []
+        price = anchor_price
+        for day in range(projection_days):
+            t = anchor_time + timedelta(days=day)
+            adaptive = daily_return * (1 - day / max(1, projection_days * 1.2))
+            price = max(0.01, price * (1 + adaptive))
+            confidence = max(0.3, min(0.92, confidence_seed - day * 0.008))
+            band = abs(price * (vol + (1 - confidence) * 0.03))
+            points.append(
+                {
+                    "time": t.isoformat(),
+                    "price": round(price, 4),
+                    "confidence": round(confidence, 4),
+                    "upperBound": round(price + band, 4),
+                    "lowerBound": round(max(0.01, price - band), 4),
+                }
+            )
+        return points
 
     def project(self, parameters: Dict[str, Any], projection_days: int = 30, initial_capital: float = 100000.0) -> Dict[str, Any]:
         """Project future performance using ML model predictions."""

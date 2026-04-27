@@ -74,7 +74,7 @@ function generatePredictionProjection(
   // Adjust volatility based on model type (some models are more volatile)
   const baseVolatility = 0.02 + (modelIndex * 0.005);
 
-  for (let i = 1; i <= numPoints; i++) {
+  for (let i = 0; i < numPoints; i++) {
     const point = generatePredictionPoint(baseTime, basePrice, i, numPoints, baseVolatility);
     points.push(point);
   }

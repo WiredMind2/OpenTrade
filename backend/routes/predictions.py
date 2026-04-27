@@ -11,6 +11,7 @@ import sys
 import os
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -26,6 +27,21 @@ logger = get_component_logger(__file__)
 router = APIRouter()
 
 logger.info("Predictions router created")
+
+PROJECTION_COLORS = ["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B", "#EF4444", "#06B6D4"]
+
+
+class ProjectionSeriesRequest(BaseModel):
+    """Request model for multi-strategy projection overlays."""
+    symbol: str = Field(..., description="Ticker symbol")
+    anchor_time: str = Field(..., description="Anchor time in ISO format")
+    anchor_price: float = Field(..., gt=0, description="Anchor price")
+    horizon_days: int = Field(default=14, ge=1, le=365, description="Projection horizon in days")
+    strategy_names: Optional[List[str]] = Field(default=None, description="Optional subset of strategy names")
+    params_by_strategy: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Optional parameter overrides keyed by strategy name",
+    )
 
 
 
@@ -305,6 +321,97 @@ async def get_available_tickers():
         logger.error(f"Failed to get available tickers: {str(e)}")
         # Return empty list instead of 500 error
         return []
+
+
+@router.post("/api/predictions/projections", response_model=List[Dict[str, Any]], tags=["Predictions"])
+async def get_prediction_projections(request: ProjectionSeriesRequest):
+    """Generate chart-ready prediction projection overlays for registered strategies."""
+    from backend.main import app_state  # Import here to avoid circular imports
+
+    symbol = request.symbol.upper()
+    try:
+        anchor_dt = datetime.fromisoformat(request.anchor_time.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="anchor_time must be a valid ISO datetime")
+
+    registry = app_state.get("strategy_registry")
+    if not registry:
+        raise HTTPException(status_code=500, detail="Strategy registry not available")
+
+    all_metadata = registry.list()
+    metadata_by_name = {item.get("name"): item for item in all_metadata}
+    strategy_names = request.strategy_names or list(metadata_by_name.keys())
+
+    unknown = [name for name in strategy_names if name not in metadata_by_name]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown strategies requested: {', '.join(unknown)}")
+
+    projections: List[Dict[str, Any]] = []
+    for index, strategy_name in enumerate(strategy_names):
+        strategy = registry.get(strategy_name)
+        if not strategy:
+            continue
+
+        strategy_params = dict((request.params_by_strategy or {}).get(strategy_name, {}))
+        strategy_params["symbol"] = symbol
+
+        try:
+            raw_points = strategy.project_series(
+                parameters=strategy_params,
+                anchor_time=anchor_dt,
+                anchor_price=request.anchor_price,
+                projection_days=request.horizon_days,
+            )
+        except Exception as e:
+            logger.error(f"Projection series generation failed for '{strategy_name}': {e}")
+            continue
+
+        points: List[Dict[str, Any]] = []
+        for point in raw_points:
+            t_value = point.get("time")
+            if isinstance(t_value, str):
+                try:
+                    t_value = datetime.fromisoformat(t_value.replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    continue
+            elif isinstance(t_value, (int, float)):
+                if t_value > 10_000_000_000:
+                    t_value = t_value / 1000.0
+            else:
+                continue
+
+            points.append(
+                {
+                    "time": int(t_value),
+                    "price": float(point.get("price", request.anchor_price)),
+                    "confidence": float(point.get("confidence", 0.5)),
+                    "upperBound": float(point["upperBound"]) if point.get("upperBound") is not None else None,
+                    "lowerBound": float(point["lowerBound"]) if point.get("lowerBound") is not None else None,
+                }
+            )
+
+        if not points:
+            continue
+
+        avg_confidence = float(np.mean([p["confidence"] for p in points])) if points else 0.5
+        projections.append(
+            {
+                "id": f"{symbol}_{strategy_name}_{int(datetime.utcnow().timestamp())}",
+                "ticker": symbol,
+                "modelName": strategy_name,
+                "horizon": request.horizon_days,
+                "points": points,
+                "confidence": round(avg_confidence, 4),
+                "color": PROJECTION_COLORS[index % len(PROJECTION_COLORS)],
+                "createdAt": datetime.utcnow().isoformat(),
+                "metadata": {
+                    "strategyType": metadata_by_name[strategy_name].get("type"),
+                    "parameters": strategy_params,
+                },
+            }
+        )
+
+    return projections
 
 
 @router.get("/trading/predictions", response_model=List[Dict[str, Any]], tags=["Predictions"])

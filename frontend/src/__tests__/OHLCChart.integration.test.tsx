@@ -35,6 +35,7 @@ describe('OHLCChart Projection Integration', () => {
     createMultipointShape: jest.fn(),
     createShape: jest.fn(),
     removeEntity: jest.fn(),
+    lastBar: jest.fn(),
     symbolExt: jest.fn(),
     timeScale: jest.fn(),
     priceScale: jest.fn(),
@@ -58,6 +59,10 @@ describe('OHLCChart Projection Integration', () => {
     mockWidget.chart.mockReturnValue(mockChart);
     mockChart.createMultipointShape.mockReturnValue('line-entity-id');
     mockChart.createShape.mockReturnValue('marker-entity-id');
+    mockChart.lastBar.mockReturnValue({
+      time: 1609459200000,
+      close: 150.5,
+    });
     mockChart.symbolExt.mockReturnValue({ tick_size: 0.01 });
     mockChart.timeScale.mockReturnValue({
       coordinateToTime: jest.fn(() => 1609459200),
@@ -240,6 +245,70 @@ describe('OHLCChart Projection Integration', () => {
     await expect(projectionOptions.onProjectionRequest(startPoint)).rejects.toThrow();
 
     consoleSpy.mockRestore();
+  });
+
+  it('renders multiple live prediction overlays for current symbol', async () => {
+    render(
+      <OHLCChart
+        symbol="AAPL"
+        showPredictionProjections={true}
+        predictionProjections={[
+          {
+            id: 'AAPL_moving_average_1',
+            ticker: 'AAPL',
+            modelName: 'moving_average',
+            horizon: 3,
+            points: [
+              { time: 1609459200, price: 150, confidence: 0.8, upperBound: 152, lowerBound: 148 },
+              { time: 1609545600, price: 151, confidence: 0.79, upperBound: 153, lowerBound: 149 },
+            ],
+            confidence: 0.8,
+            color: '#3B82F6',
+            createdAt: '2026-04-27T00:00:00Z',
+          },
+          {
+            id: 'AAPL_sentiment_ml_1',
+            ticker: 'AAPL',
+            modelName: 'sentiment_ml',
+            horizon: 3,
+            points: [
+              { time: 1609459200, price: 149, confidence: 0.74, upperBound: 151, lowerBound: 147 },
+              { time: 1609545600, price: 152, confidence: 0.72, upperBound: 154, lowerBound: 150 },
+            ],
+            confidence: 0.73,
+            color: '#8B5CF6',
+            createdAt: '2026-04-27T00:00:00Z',
+          },
+        ]}
+      />
+    );
+
+    await waitFor(() => {
+      expect(mockWidget.onChartReady).toHaveBeenCalled();
+    });
+
+    // 2 main lines + 4 confidence band lines
+    expect(mockChart.createMultipointShape).toHaveBeenCalledTimes(6);
+    expect(mockChart.createMultipointShape).toHaveBeenCalledWith(
+      [
+        { time: 1609459200, price: 150 },
+        { time: 1609545600, price: 151 },
+      ],
+      expect.objectContaining({
+        shape: 'polyline',
+        overrides: expect.objectContaining({ linecolor: '#3B82F6' }),
+      })
+    );
+    expect(mockChart.createMultipointShape).toHaveBeenCalledWith(
+      [
+        { time: 1609459200, price: 149 },
+        { time: 1609545600, price: 152 },
+      ],
+      expect.objectContaining({
+        shape: 'polyline',
+        overrides: expect.objectContaining({ linecolor: '#8B5CF6' }),
+      })
+    );
   });
 
   it('clears existing projections before rendering new ones', async () => {

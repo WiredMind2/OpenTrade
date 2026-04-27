@@ -4,7 +4,7 @@ Moving Average Crossover Strategy
 This module implements a simple moving average crossover trading strategy.
 """
 
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, List
 import backtrader as bt
 
 from backend.strategies.base import BaseStrategy
@@ -138,6 +138,67 @@ class MovingAverageStrategy(BaseStrategy):
     def train(self, config: Dict[str, Any]) -> Any:
         """Training not supported for rule-based strategies."""
         raise NotImplementedError("Training not supported for rule-based strategies")
+
+    def project_series(
+        self,
+        parameters: Dict[str, Any],
+        anchor_time,
+        anchor_price: float,
+        projection_days: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """Generate anchored price series using recent daily return statistics."""
+        from datetime import timedelta
+        import sqlite3
+        import numpy as np
+        from backend.main import app_state
+
+        try:
+            db_path = app_state.get("database_path", "data/backtest.db")
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT close
+                FROM price_daily
+                WHERE ticker = ?
+                ORDER BY date DESC
+                LIMIT 120
+                """,
+                (parameters.get("symbol", "AAPL"),),
+            )
+            closes = [row[0] for row in cur.fetchall()][::-1]
+            conn.close()
+        except Exception:
+            closes = []
+
+        if len(closes) > 1:
+            returns = np.diff(closes) / closes[:-1]
+            drift = float(np.mean(returns))
+            vol = float(np.std(returns))
+        else:
+            drift = 0.0007
+            vol = 0.01
+
+        points: List[Dict[str, Any]] = []
+        price = anchor_price
+        for day in range(projection_days):
+            t = anchor_time + timedelta(days=day)
+            trend_adj = drift * 0.7  # strategy generally follows trend with damping
+            cyclical = vol * 0.2 * np.sin(day / 4)
+            next_return = trend_adj + cyclical
+            price = max(0.01, price * (1 + next_return))
+            confidence = max(0.35, min(0.8, 0.78 - day * 0.01))
+            band = abs(price * vol * 1.5)
+            points.append(
+                {
+                    "time": t.isoformat(),
+                    "price": round(price, 4),
+                    "confidence": round(confidence, 4),
+                    "upperBound": round(price + band, 4),
+                    "lowerBound": round(max(0.01, price - band), 4),
+                }
+            )
+        return points
 
     def project(self, parameters: Dict[str, Any], projection_days: int = 30, initial_capital: float = 100000.0) -> Dict[str, Any]:
         """Project future performance using recent market data and strategy logic."""
