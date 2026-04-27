@@ -4,6 +4,10 @@ import '@testing-library/jest-dom';
 import OHLCChart from '../components/OHLCChart';
 import { projectStrategy } from '../services/strategyApi';
 
+jest.mock('../services/strategyApi', () => ({
+  projectStrategy: jest.fn(),
+}));
+
 // Mock the TradingView library
 jest.mock('../../public/charting_library/charting_library.esm.js', () => ({
   widget: jest.fn(),
@@ -44,6 +48,11 @@ describe('OHLCChart Projection Integration', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (projectStrategy as jest.Mock).mockResolvedValue([
+      { time: '2021-01-01T00:00:00Z', price: 150.0 },
+      { time: '2021-01-02T00:00:00Z', price: 152.0 },
+      { time: '2021-01-03T00:00:00Z', price: 151.5 },
+    ]);
 
     // Mock TradingView widget constructor
     const mockTradingView = require('../../public/charting_library/charting_library.esm.js');
@@ -77,17 +86,6 @@ describe('OHLCChart Projection Integration', () => {
   });
 
   it('integrates projection functionality with chart clicks', async () => {
-    const mockProjectionPoints = [
-      { time: '2021-01-01T00:00:00Z', price: 150.0 },
-      { time: '2021-01-02T00:00:00Z', price: 152.0 },
-      { time: '2021-01-03T00:00:00Z', price: 151.5 },
-    ];
-
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockProjectionPoints,
-    });
-
     const { attachProjectionManager } = require('../lib/ChartProjectionManager');
 
     render(
@@ -122,17 +120,14 @@ describe('OHLCChart Projection Integration', () => {
     const result = await projectionOptions.onProjectionRequest(startPoint);
 
     // Verify API call was made
-    expect(global.fetch).toHaveBeenCalledWith('/api/strategies/moving_average/project', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        symbol: 'AAPL',
-        startTime: '2021-01-01T00:00:00.000Z',
-        startPrice: 150.0,
-        params: { window: 20 },
-        horizon: 3,
-      }),
-    });
+    expect(projectStrategy).toHaveBeenCalledWith(
+      'moving_average',
+      'AAPL',
+      '2021-01-01T00:00:00.000Z',
+      150.0,
+      { window: 20 },
+      3
+    );
 
     // Verify response transformation
     expect(result).toEqual([
@@ -143,15 +138,10 @@ describe('OHLCChart Projection Integration', () => {
   });
 
   it('renders projection entities on chart when projection succeeds', async () => {
-    const mockProjectionPoints = [
+    (projectStrategy as jest.Mock).mockResolvedValueOnce([
       { time: '2021-01-01T00:00:00Z', price: 150.0 },
       { time: '2021-01-02T00:00:00Z', price: 152.0 },
-    ];
-
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockProjectionPoints,
-    });
+    ]);
 
     const { attachProjectionManager } = require('../lib/ChartProjectionManager');
 
@@ -185,7 +175,7 @@ describe('OHLCChart Projection Integration', () => {
         { time: 1609545600, price: 152.0 },
       ],
       {
-        shape: 'polyline',
+        shape: 'trend_line',
         lock: true,
         disableSelection: true,
         disableSave: true,
@@ -217,10 +207,7 @@ describe('OHLCChart Projection Integration', () => {
   it('handles projection API errors gracefully', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-    });
+    (projectStrategy as jest.Mock).mockRejectedValueOnce(new Error('Projection failed'));
 
     const { attachProjectionManager } = require('../lib/ChartProjectionManager');
 
@@ -287,15 +274,15 @@ describe('OHLCChart Projection Integration', () => {
       expect(mockWidget.onChartReady).toHaveBeenCalled();
     });
 
-    // 2 main lines + 4 confidence band lines
-    expect(mockChart.createMultipointShape).toHaveBeenCalledTimes(6);
+    // Only the 2 primary prediction lines should be rendered.
+    expect(mockChart.createMultipointShape).toHaveBeenCalledTimes(2);
     expect(mockChart.createMultipointShape).toHaveBeenCalledWith(
       [
         { time: 1609459200, price: 150 },
         { time: 1609545600, price: 151 },
       ],
       expect.objectContaining({
-        shape: 'polyline',
+        shape: 'trend_line',
         overrides: expect.objectContaining({ linecolor: '#3B82F6' }),
       })
     );
@@ -305,21 +292,16 @@ describe('OHLCChart Projection Integration', () => {
         { time: 1609545600, price: 152 },
       ],
       expect.objectContaining({
-        shape: 'polyline',
+        shape: 'trend_line',
         overrides: expect.objectContaining({ linecolor: '#8B5CF6' }),
       })
     );
   });
 
   it('clears existing projections before rendering new ones', async () => {
-    const mockProjectionPoints = [
+    (projectStrategy as jest.Mock).mockResolvedValueOnce([
       { time: '2021-01-01T00:00:00Z', price: 150.0 },
-    ];
-
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockProjectionPoints,
-    });
+    ]);
 
     const { attachProjectionManager } = require('../lib/ChartProjectionManager');
 
@@ -358,10 +340,9 @@ describe('OHLCChart Projection Integration', () => {
   it('updates projection settings via ref methods', async () => {
     const chartRef = React.createRef<any>();
 
-    (global.fetch as jest.Mock).mockResolvedValue({
-      ok: true,
-      json: async () => [{ time: '2021-01-01T00:00:00Z', price: 150.0 }],
-    });
+    (projectStrategy as jest.Mock).mockResolvedValue([
+      { time: '2021-01-01T00:00:00Z', price: 150.0 },
+    ]);
 
     render(
       <OHLCChart
@@ -388,6 +369,23 @@ describe('OHLCChart Projection Integration', () => {
     // Verify the chart component state would be updated
     // (This is more of an integration test to ensure the ref API works)
     expect(chartRef.current).toBeDefined();
+  });
+
+  it('exposes latest anchor values through ref methods', async () => {
+    const chartRef = React.createRef<any>();
+    mockChart.lastBar.mockReturnValue({
+      time: 1609459200000, // milliseconds
+      close: 150.5,
+    });
+
+    render(<OHLCChart ref={chartRef} symbol="AAPL" />);
+
+    await waitFor(() => {
+      expect(mockWidget.onChartReady).toHaveBeenCalled();
+    });
+
+    expect(chartRef.current?.getLatestPrice()).toBe(150.5);
+    expect(chartRef.current?.getLatestTime()).toBe(1609459200);
   });
 
   it('clears projections via ref method', async () => {

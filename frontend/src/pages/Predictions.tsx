@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { getPredictions, createPrediction, getTickers, getPredictionProjections } from '../services/api'
+import { getPredictions, createPrediction, getTickers, getPredictionProjections, getLatestPriceAnchor } from '../services/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -7,7 +7,6 @@ import { Badge } from '../components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Switch } from '../components/ui/switch'
 import { PredictionResponse, PredictionProjection } from '../types'
-import Loading from '../components/Loading'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
 import {
@@ -18,14 +17,14 @@ import {
   Target,
   Activity,
   Trash2,
-  Eye,
-  EyeOff
+  Eye
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
 import { getStrategies } from '../services/strategyApi'
+import { resolveProjectionAnchor } from '../utils/projectionAnchor'
 
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
@@ -42,7 +41,6 @@ export default function Predictions() {
   const [projectionStrategy, setProjectionStrategy] = useState('')
   const [projectionParams, setProjectionParams] = useState<Record<string, any>>({})
   const [projectionHorizon, setProjectionHorizon] = useState(30)
-  const [projectionMode, setProjectionMode] = useState('interactive')
 
   // Prediction projections state
   const [showPredictionProjections, setShowPredictionProjections] = useState(false)
@@ -91,9 +89,11 @@ export default function Predictions() {
     }
     setSubmitting(true)
     try {
-      const data = await createPrediction(ticker, horizon)
+      const normalizedTicker = ticker.trim().toUpperCase()
+      const data = await createPrediction(normalizedTicker, horizon)
       setPreds(prev => [data, ...prev])
-      setTicker('') // Clear input after successful prediction
+      setSelectedTicker(normalizedTicker)
+      setTicker(normalizedTicker)
     } catch (e: any) {
       alert('Failed to make prediction: ' + (e.message || 'Unknown error'))
     } finally {
@@ -121,11 +121,15 @@ export default function Predictions() {
 
   // Generate prediction projections for the selected ticker
   const generatePredictionProjections = async (ticker: string): Promise<boolean> => {
-    // Get the latest price and time from the chart
-    const latestPrice = chartRef.current?.getLatestPrice();
-    const latestTime = chartRef.current?.getLatestTime();
+    const anchor = await resolveProjectionAnchor(
+      () => chartRef.current?.getLatestPrice?.() ?? null,
+      () => chartRef.current?.getLatestTime?.() ?? null,
+      {
+        fallbackAnchor: () => getLatestPriceAnchor(ticker),
+      }
+    )
 
-    if (typeof latestPrice !== 'number' || typeof latestTime !== 'number') {
+    if (!anchor) {
       setProjectionAnchorWarning('Projection overlay is waiting for latest chart data.')
       return false
     }
@@ -137,13 +141,15 @@ export default function Predictions() {
         : projectionStrategy
           ? [projectionStrategy]
           : undefined
+      const paramsByStrategy = projectionStrategy ? { [projectionStrategy]: projectionParams } : undefined
 
       const projections = await getPredictionProjections({
         symbol: ticker,
-        anchor_time: new Date(latestTime * 1000).toISOString(),
-        anchor_price: latestPrice,
+        anchor_time: new Date(anchor.latestTime * 1000).toISOString(),
+        anchor_price: anchor.latestPrice,
         horizon_days: projectionHorizon,
         strategy_names: strategiesToUse,
+        params_by_strategy: paramsByStrategy,
       })
       setPredictionProjections(projections)
       return true
@@ -174,21 +180,14 @@ export default function Predictions() {
     setProjectionStrategy(strategy)
     setProjectionParams(params)
     if (chartRef.current) {
-      chartRef.current.setProjectionStrategy(strategy, params, projectionHorizon, projectionMode)
+      chartRef.current.setProjectionStrategy(strategy, params, projectionHorizon)
     }
   }
 
   const handleHorizonChange = (value: number) => {
     setProjectionHorizon(value)
     if (chartRef.current && projectionStrategy) {
-      chartRef.current.setProjectionStrategy(projectionStrategy, projectionParams, value, projectionMode)
-    }
-  }
-
-  const handleModeChange = (mode: string) => {
-    setProjectionMode(mode)
-    if (chartRef.current && projectionStrategy) {
-      chartRef.current.setProjectionStrategy(projectionStrategy, projectionParams, projectionHorizon, mode)
+      chartRef.current.setProjectionStrategy(projectionStrategy, projectionParams, value)
     }
   }
 
@@ -235,6 +234,21 @@ export default function Predictions() {
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-2">
+                      <label className="text-sm font-medium">Symbol</label>
+                      <Select value={selectedTicker} onValueChange={setSelectedTicker}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableTickers.map((symbol) => (
+                            <SelectItem key={symbol} value={symbol}>
+                              {symbol}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
                       <label className="text-sm font-medium">Horizon (days)</label>
                       <Input
                         type="number"
@@ -244,19 +258,6 @@ export default function Predictions() {
                         max="365"
                         className="font-mono"
                       />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Mode</label>
-                      <Select value={projectionMode} onValueChange={handleModeChange}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="interactive">Interactive</SelectItem>
-                          <SelectItem value="server-side">Server-side</SelectItem>
-                        </SelectContent>
-                      </Select>
                     </div>
 
                     <div className="flex items-end">
@@ -305,7 +306,6 @@ export default function Predictions() {
               strategyName={projectionStrategy}
               params={projectionParams}
               horizon={projectionHorizon}
-              mode={projectionMode}
               showPredictionProjections={showPredictionProjections}
               predictionProjections={predictionProjections}
             />
@@ -327,15 +327,18 @@ export default function Predictions() {
               </CardHeader>
               <CardContent>
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <div className="flex-1">
-                    <Input
-                      value={ticker}
-                      onChange={e => setTicker(e.target.value.toUpperCase())}
-                      placeholder="e.g., AAPL, MSFT, GOOGL"
-                      className="font-mono"
-                      onKeyDown={e => e.key === 'Enter' && submit()}
-                    />
-                  </div>
+                  <Select value={ticker} onValueChange={setTicker}>
+                    <SelectTrigger className="w-full sm:flex-1">
+                      <SelectValue placeholder="Select ticker" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableTickers.map((symbol) => (
+                        <SelectItem key={symbol} value={symbol}>
+                          {symbol}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Select value={horizon} onValueChange={setHorizon}>
                     <SelectTrigger className="w-full sm:w-[140px]">
                       <SelectValue />

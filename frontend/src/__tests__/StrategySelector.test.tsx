@@ -2,6 +2,11 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import StrategySelector from '../components/StrategySelector';
+import { getStrategies } from '../services/strategyApi';
+
+jest.mock('../services/strategyApi', () => ({
+  getStrategies: jest.fn(),
+}));
 
 const mockStrategies = [
   {
@@ -29,14 +34,15 @@ const mockStrategies = [
 
 describe('StrategySelector', () => {
   const mockOnStrategyChange = jest.fn();
+  const mockedGetStrategies = getStrategies as jest.MockedFunction<typeof getStrategies>;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (global.fetch as jest.Mock).mockClear();
+    mockedGetStrategies.mockResolvedValue(mockStrategies as any);
   });
 
   it('renders loading state initially', () => {
-    (global.fetch as jest.Mock).mockImplementationOnce(() =>
+    mockedGetStrategies.mockImplementationOnce(() =>
       new Promise(() => {}) // Never resolves
     );
 
@@ -47,11 +53,6 @@ describe('StrategySelector', () => {
   });
 
   it('fetches and displays strategies on mount', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStrategies,
-    });
-
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
     await waitFor(() => {
@@ -63,7 +64,7 @@ describe('StrategySelector', () => {
 
   it('handles fetch error gracefully', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    mockedGetStrategies.mockRejectedValueOnce(new Error('Network error'));
 
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
@@ -75,11 +76,6 @@ describe('StrategySelector', () => {
   });
 
   it('calls onStrategyChange when strategy is selected', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStrategies,
-    });
-
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
     await waitFor(() => {
@@ -99,11 +95,6 @@ describe('StrategySelector', () => {
   });
 
   it('renders parameters when strategy is selected', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStrategies,
-    });
-
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
     await waitFor(() => {
@@ -122,11 +113,6 @@ describe('StrategySelector', () => {
   });
 
   it('renders different input types for parameters', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStrategies,
-    });
-
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
     await waitFor(() => {
@@ -164,10 +150,7 @@ describe('StrategySelector', () => {
       can_train: false
     }];
 
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => strategiesWithUnknownType,
-    });
+    mockedGetStrategies.mockResolvedValueOnce(strategiesWithUnknownType as any);
 
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
@@ -185,11 +168,6 @@ describe('StrategySelector', () => {
   });
 
   it('updates parameters and calls onStrategyChange when parameter values change', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStrategies,
-    });
-
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
     await waitFor(() => {
@@ -224,11 +202,6 @@ describe('StrategySelector', () => {
   });
 
   it('calls onStrategyChange with empty values when no strategy is selected', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStrategies,
-    });
-
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
     await waitFor(() => {
@@ -244,11 +217,6 @@ describe('StrategySelector', () => {
   });
 
   it('shows parameter descriptions', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockStrategies,
-    });
-
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
     await waitFor(() => {

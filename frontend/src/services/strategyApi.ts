@@ -1,3 +1,5 @@
+import api from './api'
+
 interface StrategyMetadata {
   name: string;
   description: string;
@@ -12,11 +14,8 @@ interface ProjectionPoint {
 }
 
 export async function getStrategies(): Promise<StrategyMetadata[]> {
-  const response = await fetch('/api/strategies');
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
-  }
-  return response.json();
+  const response = await api.get('/api/strategies');
+  return response.data;
 }
 
 export async function projectStrategy(
@@ -27,21 +26,33 @@ export async function projectStrategy(
   params: object,
   horizon: number
 ): Promise<ProjectionPoint[]> {
-  const response = await fetch(`/api/strategies/${strategyName}/project`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      symbol,
-      startTime,
-      startPrice,
-      params,
-      horizon,
-    }),
+  const response = await api.post(`/api/strategies/${strategyName}/project`, {
+    symbol,
+    startTime,
+    startPrice,
+    params,
+    horizon,
   });
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
+
+  const { data } = response;
+  if (Array.isArray(data)) {
+    return data;
   }
-  return response.json();
+
+  // Backend strategies endpoint can return summary metrics. Build a deterministic
+  // projection path so the interactive chart flow still renders.
+  const projectedReturn = Number(data?.projected_return ?? 0);
+  const safeHorizon = Math.max(1, horizon);
+  const dailyReturn = projectedReturn / safeHorizon;
+  const start = new Date(startTime).getTime();
+  let price = startPrice;
+  const points: ProjectionPoint[] = [];
+  for (let day = 0; day < safeHorizon; day += 1) {
+    price = Math.max(0.01, price * (1 + dailyReturn));
+    points.push({
+      time: new Date(start + day * 24 * 60 * 60 * 1000).toISOString(),
+      price,
+    });
+  }
+  return points;
 }

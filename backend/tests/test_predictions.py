@@ -109,3 +109,80 @@ def test_projection_overlays_endpoint_rejects_unknown_strategy():
 
     assert response.status_code == 400
     assert "Unknown strategies requested" in response.json()["detail"]
+
+
+def test_projection_overlays_endpoint_passes_strategy_parameters():
+    client = TestClient(app)
+    mock_strategy = MagicMock()
+    mock_strategy.project_series.return_value = [
+        {"time": "2026-04-27T00:00:00Z", "price": 100.0, "confidence": 0.9},
+    ]
+
+    mock_registry = MagicMock()
+    mock_registry.list.return_value = [{"name": "moving_average", "type": "rule"}]
+    mock_registry.get.return_value = mock_strategy
+
+    request_payload = {
+        "symbol": "AAPL",
+        "anchor_time": "2026-04-27T00:00:00Z",
+        "anchor_price": 100.0,
+        "horizon_days": 5,
+        "strategy_names": ["moving_average"],
+        "params_by_strategy": {"moving_average": {"short_window": 5, "long_window": 20}},
+    }
+
+    with patch("backend.main.app_state", {"strategy_registry": mock_registry}):
+        response = client.post("/api/predictions/projections", json=request_payload)
+
+    assert response.status_code == 200
+    mock_strategy.project_series.assert_called_once()
+    kwargs = mock_strategy.project_series.call_args.kwargs
+    assert kwargs["projection_days"] == 5
+    assert kwargs["anchor_price"] == 100.0
+    assert kwargs["parameters"]["symbol"] == "AAPL"
+    assert kwargs["parameters"]["short_window"] == 5
+    assert kwargs["parameters"]["long_window"] == 20
+
+
+def test_projection_overlays_endpoint_skips_strategy_failures_and_returns_valid_series():
+    client = TestClient(app)
+
+    failing_strategy = MagicMock()
+    failing_strategy.project_series.side_effect = RuntimeError("boom")
+
+    good_strategy = MagicMock()
+    good_strategy.project_series.return_value = [
+        {
+            "time": 1777248000000,  # milliseconds input should be normalized
+            "price": 102.5,
+            "confidence": 0.77,
+            "upperBound": 104.0,
+            "lowerBound": 101.0,
+        }
+    ]
+
+    mock_registry = MagicMock()
+    mock_registry.list.return_value = [
+        {"name": "moving_average", "type": "rule"},
+        {"name": "sentiment_ml", "type": "ml"},
+    ]
+    mock_registry.get.side_effect = lambda name: failing_strategy if name == "moving_average" else good_strategy
+
+    with patch("backend.main.app_state", {"strategy_registry": mock_registry}):
+        response = client.post(
+            "/api/predictions/projections",
+            json={
+                "symbol": "AAPL",
+                "anchor_time": "2026-04-27T00:00:00Z",
+                "anchor_price": 100.0,
+                "horizon_days": 2,
+                "strategy_names": ["moving_average", "sentiment_ml"],
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["modelName"] == "sentiment_ml"
+    assert body[0]["points"][0]["time"] == 1777248000
+    assert body[0]["points"][0]["price"] == 102.5

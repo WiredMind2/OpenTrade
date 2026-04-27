@@ -7,7 +7,6 @@ import TradingViewUDFDatafeed from "../services/tradingViewUDF";
 import { attachProjectionManager, detachProjectionManager } from "../lib/ChartProjectionManager";
 import { projectStrategy } from "../services/strategyApi";
 import type { ProjectionPoint, PredictionProjection } from "../types";
-import { formatPredictionTooltip } from "../utils/mockPredictions";
 
 /**
  * Candle data point
@@ -146,98 +145,33 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
          );
 
          relevantProjections.forEach(projection => {
-           // Create main prediction line
-           const linePoints: any[] = projection.points.map(point => ({
-             time: point.time,
-             price: point.price
-           }));
+          // Draw explicit line segments to avoid any closed polygon behavior.
+          for (let i = 1; i < projection.points.length; i++) {
+            const start = projection.points[i - 1];
+            const end = projection.points[i];
+            const segmentId = chart.createMultipointShape([
+              { time: start.time, price: start.price },
+              { time: end.time, price: end.price },
+            ], {
+              shape: 'trend_line',
+              lock: true,
+              disableSelection: true,
+              disableSave: true,
+              overrides: {
+                linestyle: 0, // SOLID
+                linewidth: 2,
+                linecolor: projection.color,
+                transparency: 0
+              }
+            });
 
-           const lineEntityId = chart.createMultipointShape(linePoints, {
-             shape: 'polyline',
-             lock: true,
-             disableSelection: true,
-             disableSave: true,
-             overrides: {
-               linestyle: 0, // SOLID
-               linewidth: 2,
-               linecolor: projection.color,
-               transparency: 0
-             }
-           });
-
-           if (lineEntityId) {
-             predictionEntitiesRef.current.push(lineEntityId);
+            if (segmentId) {
+              predictionEntitiesRef.current.push(segmentId);
+            }
            }
 
-           // Create confidence bands if upper/lower bounds exist
-           if (projection.points.some(p => p.upperBound && p.lowerBound)) {
-             const upperBandPoints: any[] = projection.points.map(point => ({
-               time: point.time,
-               price: point.upperBound || point.price
-             }));
-
-             const lowerBandPoints: any[] = projection.points.map(point => ({
-               time: point.time,
-               price: point.lowerBound || point.price
-             }));
-
-             // Upper band
-             const upperBandId = chart.createMultipointShape(upperBandPoints, {
-               shape: 'polyline',
-               lock: true,
-               disableSelection: true,
-               disableSave: true,
-               overrides: {
-                 linestyle: 1, // DASHED
-                 linewidth: 1,
-                 linecolor: projection.color,
-                 transparency: 40
-               }
-             });
-
-             // Lower band
-             const lowerBandId = chart.createMultipointShape(lowerBandPoints, {
-               shape: 'polyline',
-               lock: true,
-               disableSelection: true,
-               disableSave: true,
-               overrides: {
-                 linestyle: 1, // DASHED
-                 linewidth: 1,
-                 linecolor: projection.color,
-                 transparency: 40
-               }
-             });
-
-             if (upperBandId) predictionEntitiesRef.current.push(upperBandId);
-             if (lowerBandId) predictionEntitiesRef.current.push(lowerBandId);
-           }
-
-           // Add tooltips for prediction points (every 3rd point to avoid clutter)
-           projection.points.forEach((point, index) => {
-             if (index % 3 === 0 || index === projection.points.length - 1) {
-               const tooltipText = formatPredictionTooltip(point);
-               const tooltipId = chart.createShape({
-                 time: point.time,
-                 price: point.price
-               }, {
-                 shape: 'anchored_text',
-                 lock: true,
-                 disableSelection: true,
-                 disableSave: true,
-                 text: `$${point.price.toFixed(2)}`,
-                 overrides: {
-                   color: projection.color,
-                   transparency: 20,
-                   fontsize: 10
-                 }
-               });
-
-               if (tooltipId) {
-                 predictionEntitiesRef.current.push(tooltipId);
-               }
-             }
-           });
+          // Intentionally render only the primary (solid) prediction line.
+          // Confidence band outlines were visually noisy and have been removed.
 
            // Add start marker for each projection
            if (projection.points.length > 0) {
@@ -399,28 +333,29 @@ widgetRef.current = new TradingView.widget(widgetOptions);
                 });
                 projectionEntitiesRef.current = [];
 
-                // Convert ProjectionPoint[] to ShapePoint[] for the line
-                const linePoints: any[] = points.map(point => ({
-                  time: point.time,
-                  price: point.close
-                }));
+                // Draw line segments instead of polyline to prevent closed shapes.
+                for (let i = 1; i < points.length; i++) {
+                  const previous = points[i - 1];
+                  const current = points[i];
+                  const segmentId = chart.createMultipointShape([
+                    { time: previous.time, price: previous.close },
+                    { time: current.time, price: current.close },
+                  ], {
+                    shape: 'trend_line',
+                    lock: true,
+                    disableSelection: true,
+                    disableSave: true,
+                    overrides: {
+                      linestyle: 2, // DASHED
+                      linewidth: 2,
+                      linecolor: '#FF6B35', // Orange color for projections
+                      transparency: 0
+                    }
+                  });
 
-                // Create the projection line as a polyline with dashed style
-                const lineEntityId = chart.createMultipointShape(linePoints, {
-                  shape: 'polyline',
-                  lock: true,
-                  disableSelection: true,
-                  disableSave: true,
-                  overrides: {
-                    linestyle: 2, // DASHED
-                    linewidth: 2,
-                    linecolor: '#FF6B35', // Orange color for projections
-                    transparency: 0
+                  if (segmentId) {
+                    projectionEntitiesRef.current.push(segmentId);
                   }
-                });
-
-                if (lineEntityId) {
-                  projectionEntitiesRef.current.push(lineEntityId);
                 }
 
                 // Add start point marker
@@ -444,32 +379,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
                     projectionEntitiesRef.current.push(startMarkerId);
                   }
                 }
-
-                // Add tooltips for each point (show every 5th point to avoid clutter)
-                points.forEach((point, index) => {
-                  if (index % 5 === 0 || index === points.length - 1) {
-                    const priceText = `$${point.close.toFixed(2)}`; // Format with 2 decimals
-                    const tooltipId = chart.createShape({
-                      time: point.time,
-                      price: point.close
-                    }, {
-                      shape: 'anchored_text',
-                      lock: true,
-                      disableSelection: true,
-                      disableSave: true,
-                      text: priceText,
-                      overrides: {
-                        color: '#FF6B35',
-                        transparency: 20,
-                        fontsize: 10
-                      }
-                    });
-
-                    if (tooltipId) {
-                      projectionEntitiesRef.current.push(tooltipId);
-                    }
-                  }
-                });
 
                 // Add buy/sell signal markers (simplified: mark significant price changes)
                 for (let i = 1; i < points.length; i++) {

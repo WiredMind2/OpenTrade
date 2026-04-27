@@ -63,6 +63,36 @@ export const getTickers = async () => {
   return response.data
 }
 
+export interface LatestPriceAnchor {
+  latestPrice: number
+  latestTime: number
+}
+
+export const getLatestPriceAnchor = async (ticker: string): Promise<LatestPriceAnchor | null> => {
+  const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
+    params: { limit: 1 },
+  })
+  const rows = response.data?.data
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return null
+  }
+
+  const latest = rows[0]
+  if (typeof latest?.close !== 'number' || typeof latest?.date !== 'string') {
+    return null
+  }
+
+  const timestampMs = Date.parse(`${latest.date}T00:00:00Z`)
+  if (!Number.isFinite(timestampMs)) {
+    return null
+  }
+
+  return {
+    latestPrice: latest.close,
+    latestTime: Math.floor(timestampMs / 1000),
+  }
+}
+
 export const createPrediction = async (ticker: string, horizon: string) => {
   const response = await instance.post('/predict', { ticker: ticker.toUpperCase(), horizon })
   return response.data
