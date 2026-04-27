@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const instance = axios.create({
   baseURL: API_BASE,
@@ -65,6 +65,20 @@ export const getTickers = async () => {
 
 export const createPrediction = async (ticker: string, horizon: string) => {
   const response = await instance.post('/predict', { ticker: ticker.toUpperCase(), horizon })
+  return response.data
+}
+
+export interface PredictionProjectionRequest {
+  symbol: string
+  anchor_time: string
+  anchor_price: number
+  horizon_days: number
+  strategy_names?: string[]
+  params_by_strategy?: Record<string, Record<string, any>>
+}
+
+export const getPredictionProjections = async (payload: PredictionProjectionRequest) => {
+  const response = await instance.post('/api/predictions/projections', payload)
   return response.data
 }
 

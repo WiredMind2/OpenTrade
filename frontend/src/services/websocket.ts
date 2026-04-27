@@ -28,10 +28,15 @@ class WebSocketService {
   }
 
   private getWebSocketUrl(): string {
-    const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
-    // Convert HTTP to WS
-    const wsUrl = apiBase.replace(/^http/, 'ws')
-    return `${wsUrl}/ws`
+    const apiBase = import.meta.env.VITE_API_BASE
+    if (apiBase) {
+      // Convert explicit HTTP(S) API base to WS(S)
+      return `${apiBase.replace(/^http/, 'ws')}/ws`
+    }
+
+    // Same-origin fallback keeps Docker and local dev consistent.
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}/ws`
   }
 
   connect(): void {
