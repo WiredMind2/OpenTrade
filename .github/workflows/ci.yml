@@ -1,0 +1,43 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  ci:
+    name: Docker Compose CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker Compose services
+        run: |
+          docker compose -f docker-compose.yml build backend frontend
+
+      - name: Run backend tests in Docker Compose
+        run: |
+          docker compose -f docker-compose.yml run --rm \
+            -v ${{ github.workspace }}:/app \
+            -w /app backend \
+            pytest tests/
+
+      - name: Run frontend tests in Docker Compose
+        run: |
+          docker compose -f docker-compose.yml run --rm \
+            -v ${{ github.workspace }}:/app \
+            -w /app/frontend frontend \
+            npm test -- --runInBand
+
+      - name: Build frontend in Docker Compose
+        run: |
+          docker compose -f docker-compose.yml run --rm \
+            -v ${{ github.workspace }}:/app \
+            -w /app/frontend frontend \
+            npm run build
