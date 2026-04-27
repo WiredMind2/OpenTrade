@@ -24,6 +24,9 @@ export interface PredictionResponse {
   timestamp: string;
   model_version: string;
   features_used: string[];
+  feature_schema_version?: string;
+  interval_lower?: number | null;
+  interval_upper?: number | null;
   metadata?: Record<string, any>;
 }
 
@@ -332,4 +335,77 @@ export interface PredictionProjection {
 export interface PredictionProjectionData {
   projections: PredictionProjection[];
   lastUpdated: string;
+}
+
+export interface StrategyAnalyticsFilters {
+  strategies: string[];
+  benchmarks: string[];
+  available_presets: string[];
+  available_granularities: Array<'daily' | 'weekly' | 'monthly'>;
+  rolling_windows: number[];
+  min_date?: string | null;
+  max_date?: string | null;
+}
+
+export interface StrategyMetricPoint {
+  strategy: string;
+  run_count: number;
+  total_return: number;
+  cagr: number;
+  sharpe: number;
+  sortino: number;
+  calmar: number;
+  information_ratio: number;
+  alpha: number;
+  beta: number;
+  volatility: number;
+  max_drawdown: number;
+  win_rate: number;
+  profit_factor: number;
+  avg_win: number;
+  avg_loss: number;
+  expectancy: number;
+  total_trades: number;
+}
+
+export interface StrategyComparisonSummary {
+  benchmark_ticker: string;
+  granularity: 'daily' | 'weekly' | 'monthly';
+  rolling_window: number;
+  start_date?: string | null;
+  end_date?: string | null;
+  metrics: StrategyMetricPoint[];
+}
+
+export interface StrategyTimeseriesPoint {
+  date: string;
+  normalized_equity: number;
+  drawdown: number;
+  rolling_sharpe?: number | null;
+  rolling_sortino?: number | null;
+  rolling_volatility?: number | null;
+  period_return?: number | null;
+}
+
+export interface StrategyTimeseriesResponse {
+  strategy: string;
+  benchmark_ticker: string;
+  granularity: 'daily' | 'weekly' | 'monthly';
+  points: StrategyTimeseriesPoint[];
+  benchmark_points: StrategyTimeseriesPoint[];
+  monthly_returns: Record<string, Record<string, number>>;
+}
+
+export interface DistributionBucket {
+  bucket: string;
+  count: number;
+  value: number;
+}
+
+export interface StrategyDistributionResponse {
+  strategy: string;
+  returns_histogram: DistributionBucket[];
+  trade_pnl_histogram: DistributionBucket[];
+  holding_period_histogram: DistributionBucket[];
+  pnl_by_symbol: DistributionBucket[];
 }

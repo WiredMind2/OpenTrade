@@ -37,6 +37,8 @@ from backend.routes.websocket import websocket_endpoint, broadcast_chart_update
 from backend.routes.scripts import router as scripts_router
 from backend.routes.udf import router as udf_router
 from backend.routes.strategies import router as strategies_router
+from backend.routes.strategy_analytics import router as strategy_analytics_router
+from backend.ml.storage import ensure_ml_schema
 
 
 
@@ -133,6 +135,7 @@ logger.info(f"Predictions router included, routes: {[route.path for route in pre
 app.include_router(backtests_router)
 app.include_router(models_router, prefix="/api")
 app.include_router(strategies_router, prefix="/api", tags=["strategies"])
+app.include_router(strategy_analytics_router)
 app.include_router(portfolio_router)
 app.include_router(data_router)
 app.include_router(scripts_router)
@@ -150,6 +153,7 @@ async def init_database():
         conn = sqlite3.connect(app_state["database_path"])
         # Test connection
         conn.execute("SELECT 1")
+        ensure_ml_schema(conn)
         conn.close()
         logger.info("Database connection initialized")
     except Exception as e:

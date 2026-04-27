@@ -18,7 +18,7 @@ from typing import Dict, Any, Type, List
 import backtrader as bt
 import joblib
 
-from backend.strategies.base import BaseStrategy
+from backend.strategies.recursive_forecast import RecursiveForecastStrategy
 from backend.logging_config import get_component_logger
 from backend.routes.websocket import broadcast_websocket_message
 
@@ -34,7 +34,7 @@ except ImportError:
 logger = get_component_logger(__file__)
 
 
-class SentimentMLStrategy(BaseStrategy):
+class SentimentMLStrategy(RecursiveForecastStrategy):
     """ML-driven strategy using sentiment model predictions."""
 
     def __init__(self):
@@ -53,6 +53,11 @@ class SentimentMLStrategy(BaseStrategy):
                 'type': 'float',
                 'default': 0.1,
                 'description': 'Maximum position size as percentage of portfolio value'
+            },
+            'forecast_horizon_days': {
+                'type': 'int',
+                'default': 5,
+                'description': 'Recursive forecast horizon used for path-aware signal generation'
             }
         }
 
@@ -106,137 +111,8 @@ class SentimentMLStrategy(BaseStrategy):
             self.model_name = self.current_version
 
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
-        """Create and return a Backtrader strategy class with sentiment ML logic."""
-
-        model_name = self.model_name  # Use current version
-
-        class SentimentMLBacktrader(bt.Strategy):
-            params = (
-                ('model_name', 'sentiment_model'),
-                ('prediction_threshold', 0.5),
-                ('max_position_pct', 0.1)
-            )
-
-            def __init__(self):
-                self.equity_curve = []
-                self.trades = []
-                self.model_name = model_name
-                self.prediction_threshold = self.p.prediction_threshold
-                self.max_position_pct = self.p.max_position_pct
-
-                # Get database path from cerebro (passed via strategy params)
-                self.db_path = getattr(self, 'db_path', 'data/backtest.db')
-
-            def next(self):
-                current_date = self.datas[0].datetime.date(0).isoformat()
-                allocations = {}
-
-                # Generate signals for each ticker
-                for data in self.datas:
-                    ticker = data._name
-
-                    # Get prediction for this ticker and date
-                    prediction = self._get_prediction(ticker, current_date)
-                    if prediction is None:
-                        continue
-
-                    predicted_return = prediction.get('predicted_return', 0)
-                    suggested_position_pct = prediction.get('suggested_position_pct', 0)
-
-                    # Generate signal based on prediction and threshold
-                    if abs(predicted_return) >= self.prediction_threshold:
-                        # Use the sign of predicted return, scaled by suggested position
-                        signal_pct = suggested_position_pct * (1 if predicted_return > 0 else -1)
-                        allocations[ticker] = signal_pct
-                    else:
-                        # Close position if below threshold
-                        allocations[ticker] = 0.0
-
-                # Enforce position limits (scale down if total exposure exceeds max)
-                total_exposure = sum(abs(pct) for pct in allocations.values())
-                if total_exposure > self.max_position_pct:
-                    scale = self.max_position_pct / total_exposure
-                    allocations = {t: v * scale for t, v in allocations.items()}
-
-                # Execute trades
-                for ticker, target_pct in allocations.items():
-                    # Find data feed for this ticker
-                    data = None
-                    for d in self.datas:
-                        if hasattr(d, '_name') and d._name == ticker:
-                            data = d
-                            break
-
-                    if data is None:
-                        continue
-
-                    current_position = self.getposition(data).size
-                    current_value = current_position * data.close[0]
-                    portfolio_value = self.broker.getvalue()
-                    target_value = target_pct * portfolio_value
-
-                    if abs(current_value - target_value) < 100:  # Minimum trade size
-                        continue
-
-                    if target_value > current_value:
-                        # Buy
-                        shares_to_buy = int((target_value - current_value) / data.close[0])
-                        if shares_to_buy > 0:
-                            self.buy(data=data, size=shares_to_buy)
-                    elif target_value < current_value:
-                        # Sell
-                        shares_to_sell = int((current_value - target_value) / data.close[0])
-                        if shares_to_sell > 0:
-                            self.sell(data=data, size=shares_to_sell)
-
-                # Record equity curve
-                self.equity_curve.append({
-                    'date': current_date,
-                    'value': self.broker.getvalue()
-                })
-
-            def _get_prediction(self, ticker: str, date: str) -> Dict[str, Any]:
-                """Get prediction for ticker on given date."""
-                try:
-                    conn = sqlite3.connect(self.db_path)
-                    cur = conn.cursor()
-
-                    # Query the latest prediction for this ticker on or before the date
-                    cur.execute("""
-                        SELECT predicted_return, enter_prob, suggested_position_pct, exit_prob
-                        FROM trading_model_predictions
-                        WHERE ticker = ? AND dt <= ? AND model = ?
-                        ORDER BY dt DESC, produced_at DESC
-                        LIMIT 1
-                    """, (ticker, date, self.model_name))
-
-                    row = cur.fetchone()
-                    conn.close()
-
-                    if row:
-                        return {
-                            'predicted_return': row[0],
-                            'enter_prob': row[1],
-                            'suggested_position_pct': row[2],
-                            'exit_prob': row[3]
-                        }
-
-                except Exception as e:
-                    logger.error(f"Error getting prediction for {ticker} on {date}: {e}")
-
-                return None
-
-            def notify_trade(self, trade):
-                if trade.isclosed:
-                    self.trades.append({
-                        'size': trade.size,
-                        'price': trade.price,
-                        'value': trade.value,
-                        'pnl': trade.pnl,
-                        'pnlcomm': trade.pnlcomm
-                    })
-
-        return SentimentMLBacktrader
+        """Create and return the shared recursive forecast runtime strategy."""
+        return super().create_backtrader_strategy(parameters)
 
     def train(self, config: Dict[str, Any]) -> Any:
         """Train the sentiment model by enqueuing a background training job."""
@@ -635,22 +511,35 @@ class SentimentMLStrategy(BaseStrategy):
         from backend.main import app_state
 
         ticker = parameters.get("symbol", "AAPL")
+        horizon = str(parameters.get("horizon", "1d"))
         lookback_days = max(30, projection_days * 2)
         predictions: List[tuple] = []
         try:
             db_path = app_state.get("database_path", "data/backtest.db")
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT predicted_return, COALESCE(enter_prob, 0.5), COALESCE(suggested_position_pct, 0.0)
-                FROM trading_model_predictions
-                WHERE ticker = ?
-                ORDER BY dt DESC, produced_at DESC
-                LIMIT ?
-                """,
-                (ticker, lookback_days),
-            )
+            try:
+                cur.execute(
+                    """
+                    SELECT predicted_return, COALESCE(enter_prob, 0.5), COALESCE(suggested_position_pct, 0.0)
+                    FROM trading_model_predictions
+                    WHERE ticker = ? AND (horizon = ? OR horizon IS NULL)
+                    ORDER BY dt DESC, produced_at DESC
+                    LIMIT ?
+                    """,
+                    (ticker, horizon, lookback_days),
+                )
+            except sqlite3.OperationalError:
+                cur.execute(
+                    """
+                    SELECT predicted_return, COALESCE(enter_prob, 0.5), COALESCE(suggested_position_pct, 0.0)
+                    FROM trading_model_predictions
+                    WHERE ticker = ?
+                    ORDER BY dt DESC, produced_at DESC
+                    LIMIT ?
+                    """,
+                    (ticker, lookback_days),
+                )
             predictions = cur.fetchall()
             conn.close()
         except Exception:

@@ -478,6 +478,14 @@ export default function Predictions() {
                                 <Clock className="h-3 w-3" />
                                 {new Date(p.timestamp).toLocaleString()}
                               </div>
+                              <div className="text-xs text-muted-foreground">
+                                model: {p.model_version}
+                              </div>
+                              {(p.interval_lower !== undefined && p.interval_upper !== undefined) && (
+                                <div className="text-xs text-muted-foreground">
+                                  range: {(p.interval_lower! * 100).toFixed(2)}% to {(p.interval_upper! * 100).toFixed(2)}%
+                                </div>
+                              )}
                             </div>
                           </div>
                         </CardContent>

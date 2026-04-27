@@ -1,4 +1,10 @@
 import axios from 'axios'
+import type {
+  StrategyAnalyticsFilters,
+  StrategyComparisonSummary,
+  StrategyDistributionResponse,
+  StrategyTimeseriesResponse,
+} from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -190,6 +196,47 @@ export const retrainModel = async (modelName: string, trainingPayload: Record<st
 
 export const getJobStatus = async (jobId: string) => {
   const response = await instance.get(`/jobs/${jobId}`)
+  return response.data
+}
+
+// Strategy analytics API functions
+export interface StrategyAnalyticsQuery {
+  strategies?: string[]
+  benchmark_ticker?: string
+  preset?: string
+  granularity?: 'daily' | 'weekly' | 'monthly'
+  rolling_window?: number
+}
+
+export const getStrategyAnalyticsFilters = async (): Promise<StrategyAnalyticsFilters> => {
+  const response = await instance.get('/api/strategy-analytics/filters')
+  return response.data
+}
+
+export const getStrategyAnalyticsSummary = async (
+  query: StrategyAnalyticsQuery
+): Promise<StrategyComparisonSummary> => {
+  const response = await instance.get('/api/strategy-analytics/summary', {
+    params: {
+      ...query,
+      strategies: query.strategies ?? [],
+    },
+  })
+  return response.data
+}
+
+export const getStrategyTimeseries = async (
+  strategy: string,
+  query: Omit<StrategyAnalyticsQuery, 'strategies'>
+): Promise<StrategyTimeseriesResponse> => {
+  const response = await instance.get(`/api/strategy-analytics/timeseries/${strategy}`, { params: query })
+  return response.data
+}
+
+export const getStrategyDistributions = async (
+  strategy: string
+): Promise<StrategyDistributionResponse> => {
+  const response = await instance.get(`/api/strategy-analytics/distributions/${strategy}`)
   return response.data
 }
 

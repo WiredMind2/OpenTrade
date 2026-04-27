@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime
 from backend.routes.predictions import generate_prediction
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
@@ -186,3 +187,39 @@ def test_projection_overlays_endpoint_skips_strategy_failures_and_returns_valid_
     assert body[0]["modelName"] == "sentiment_ml"
     assert body[0]["points"][0]["time"] == 1777248000
     assert body[0]["points"][0]["price"] == 102.5
+
+
+def test_predict_endpoint_returns_interval_metadata():
+    client = TestClient(app)
+    mock_service = MagicMock()
+    class _Model:
+        model_version = "lightgbm_1d_v2"
+        model_name = "lightgbm_1d_v2"
+        feature_schema_version = "ml_features_v1"
+
+    class _Intervals:
+        lower = -0.01
+        upper = 0.02
+
+    class _Result:
+        ticker = "AAPL"
+        horizon = "1d"
+        predicted_return = 0.012
+        confidence = 0.77
+        timestamp = datetime.utcnow()
+        model = _Model()
+        features_used = ["avg_sentiment"]
+        intervals = _Intervals()
+        metadata = {"request_id": "r1"}
+
+    fake_result = _Result()
+    mock_service.predict.return_value = fake_result
+
+    with patch("backend.routes.predictions.PredictionService", return_value=mock_service):
+        with patch("backend.main.app_state", {"database_path": "x", "models_loaded": {"lightgbm_1d": {}}}):
+            response = client.post("/predict", json={"ticker": "AAPL", "horizon": "1d"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["feature_schema_version"] == "ml_features_v1"
+    assert body["interval_lower"] == -0.01
+    assert body["interval_upper"] == 0.02

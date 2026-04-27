@@ -52,7 +52,8 @@ class StrategyRegistry:
                         for name, obj in inspect.getmembers(module):
                             if (inspect.isclass(obj) and
                                 issubclass(obj, BaseStrategy) and
-                                obj != BaseStrategy):
+                                obj != BaseStrategy and
+                                not inspect.isabstract(obj)):
                                 # Instantiate the strategy class
                                 strategy = obj()
                                 strategies.append(strategy)

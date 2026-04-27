@@ -7,6 +7,7 @@ import Portfolio from './pages/Portfolio'
 import Scripts from './pages/Scripts'
 import Models from './pages/Models'
 import Strategies from './pages/Strategies'
+import StrategyPerformance from './pages/StrategyPerformance'
 import { ThemeProvider } from './components/ThemeProvider'
 import { Sidebar, MobileSidebar } from './components/Sidebar'
 
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/scripts" element={<Scripts />} />
               <Route path="/models" element={<Navigate to="/strategies" replace />} />
               <Route path="/strategies" element={<Strategies />} />
+              <Route path="/strategy-performance" element={<StrategyPerformance />} />
             </Routes>
           </main>
         </div>
