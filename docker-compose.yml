@@ -11,8 +11,9 @@ services:
       - ./backend:/app/backend
       - ./models:/app/models
       - ./data:/app/data
+      - ./db:/app/db
       - ./.env:/app/.env:ro
-    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
   frontend:
     build:
@@ -22,6 +23,7 @@ services:
       - '5173:5173'
     environment:
       - BACKEND_HOST=backend
+      - BROWSER=none
     volumes:
       - ./frontend:/app
       - /app/node_modules

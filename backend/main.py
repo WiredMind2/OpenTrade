@@ -157,11 +157,48 @@ async def init_database():
     import sqlite3
 
     try:
-        conn = sqlite3.connect(app_state["database_path"])
-        # Test connection
-        conn.execute("SELECT 1")
-        conn.close()
-        logger.info("Database connection initialized")
+        db_path = app_state["database_path"]
+        if not db_path:
+            raise TradingBacktesterError("Database path is not configured")
+
+        # Ensure parent directory exists (common on fresh checkouts).
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            # Keep behavior consistent with schema.sql
+            conn.execute("PRAGMA foreign_keys = ON;")
+
+            # Apply schema.sql (idempotent because it uses IF NOT EXISTS)
+            schema_path = (Path(__file__).resolve().parent.parent / "db" / "schema.sql")
+            if not schema_path.exists():
+                raise TradingBacktesterError(f"Schema file not found at: {schema_path}")
+
+            schema_sql = schema_path.read_text(encoding="utf-8")
+            try:
+                conn.executescript(schema_sql)
+            except sqlite3.DatabaseError as e:
+                # If the DB file is in a broken state (common after an interrupted schema apply),
+                # SQLite can refuse to even read sqlite_master. In that case, the safest recovery
+                # is to delete the DB file and re-run initialization.
+                msg = str(e).lower()
+                if "malformed database schema" in msg or "database disk image is malformed" in msg:
+                    raise TradingBacktesterError(
+                        f"SQLite database file appears corrupted: {db_path}. "
+                        f"Delete the file and restart to recreate tables from schema.sql. "
+                        f"Original error: {e}"
+                    )
+                raise
+            conn.commit()
+
+            # Validate/patch ML schema expectations (adds missing columns if needed)
+            ensure_ml_schema(conn)
+
+            # Test connection
+            conn.execute("SELECT 1")
+            logger.info("Database initialized and schema ensured")
+        finally:
+            conn.close()
     except Exception as e:
         logger.exception("Failed to initialize database")
         raise TradingBacktesterError(f"Database initialization failed: {e}")
