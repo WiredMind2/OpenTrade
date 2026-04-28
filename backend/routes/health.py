@@ -44,7 +44,8 @@ async def health_check():
 
     # Test database connection
     try:
-        conn = sqlite3.connect(app_state.get("database_path", "data/backtest.db"))
+        db_path = app_state.get("database_path") or "data/backtest.db"
+        conn = sqlite3.connect(db_path)
         conn.execute("SELECT 1")
         conn.close()
         services["database"] = "healthy"
