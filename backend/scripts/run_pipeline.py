@@ -48,9 +48,14 @@ def db_table_count(db_path: str, query: str):
 
 
 def precheck_apply_schema(args):
-    # consider schema applied if tickers table exists
-    q = "SELECT count(name) FROM sqlite_master WHERE type='table' AND name='tickers'"
-    return db_table_count(args.db, q) > 0
+    # Consider schema applied only if a small set of core tables exist.
+    # (A partially-initialized DB might have only one table.)
+    q = """
+    SELECT COUNT(name)
+    FROM sqlite_master
+    WHERE type='table' AND name IN ('tickers', 'price_daily', 'sentiment_predictions', 'backtest_runs')
+    """
+    return db_table_count(args.db, q) >= 4
 
 
 def precheck_download_kaggle(args):
@@ -344,6 +349,7 @@ def main():
     parser.add_argument('--backtest_end', default='2025-01-01')
     parser.add_argument('--steps', default=','.join(DEFAULT_STEPS))
     parser.add_argument('--continue-on-error', action='store_true')
+    parser.add_argument('--no-precheck', action='store_true', help='Run requested steps even if pre-checks indicate they are completed')
     parser.add_argument('--debug_limit', type=int, default=20)
     args = parser.parse_args()
 
@@ -358,13 +364,14 @@ def main():
             continue
 
         # pre-check: skip steps which appear already completed
-        pre = STEP_PRECHECK.get(step)
-        try:
-            if pre and pre(args):
-                logger.info('Skipping step %s because pre-check indicates it is already completed', step)
-                continue
-        except Exception as e:
-            logger.warning('Pre-check for step %s raised an exception: %s (will attempt to run step)', step, e)
+        if not args.no_precheck:
+            pre = STEP_PRECHECK.get(step)
+            try:
+                if pre and pre(args):
+                    logger.info('Skipping step %s because pre-check indicates it is already completed', step)
+                    continue
+            except Exception as e:
+                logger.warning('Pre-check for step %s raised an exception: %s (will attempt to run step)', step, e)
 
         func = STEP_COMMANDS[step]
         ok, step_log = run_step(step, func, args, log_dir)

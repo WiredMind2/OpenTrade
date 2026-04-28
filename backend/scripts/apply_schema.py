@@ -6,10 +6,10 @@ Usage:
 This is a tiny utility that runs the SQL script in `db/schema.sql` against the target SQLite file.
 """
 import argparse
+import logging
 import os
 import sqlite3
 import sys
-from script_logger import logger
 
 
 def apply_schema(db_path: str, schema_path: str):
@@ -19,19 +19,17 @@ def apply_schema(db_path: str, schema_path: str):
     try:
         conn.executescript(sql)
         conn.commit()
-        logger.info('Schema applied to %s', db_path)
+        logging.getLogger(__name__).info('Schema applied to %s', db_path)
     finally:
         conn.close()
 
 
 def main():
-    # Set up logger
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[logging.StreamHandler()]
     )
-    logger = logging.getLogger(__name__)
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', required=False, default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db')), help='SQLite DB path')
