@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { getPredictions, createPrediction, getTickers, getPredictionProjections, getLatestPriceAnchor } from '../services/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
@@ -209,10 +209,82 @@ export default function Predictions() {
         </p>
       </div>
 
+      {/* Prediction Form — always visible */}
+      <Card className="border-muted shadow-md">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" />
+            Generate New Prediction
+          </CardTitle>
+          <CardDescription>
+            Select a ticker and time horizon, then click Predict
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Select value={ticker} onValueChange={setTicker}>
+              <SelectTrigger className="w-full sm:flex-1">
+                <SelectValue placeholder="Select ticker" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableTickers.map((symbol) => (
+                  <SelectItem key={symbol} value={symbol}>
+                    {symbol}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={horizon} onValueChange={setHorizon}>
+              <SelectTrigger className="w-full sm:w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1d">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    1 Day
+                  </div>
+                </SelectItem>
+                <SelectItem value="3d">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    3 Days
+                  </div>
+                </SelectItem>
+                <SelectItem value="7d">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    7 Days
+                  </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={submit}
+              disabled={submitting || !ticker.trim()}
+              className="w-full sm:w-auto min-w-[120px]"
+              size="default"
+            >
+              {submitting ? (
+                <>
+                  <Activity className="mr-2 h-4 w-4 animate-spin" />
+                  Predicting...
+                </>
+              ) : (
+                <>
+                  <Target className="mr-2 h-4 w-4" />
+                  Predict
+                </>
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="chart">Chart</TabsTrigger>
-          <TabsTrigger value="predictions">Predictions</TabsTrigger>
+          <TabsTrigger value="predictions">Recent Predictions</TabsTrigger>
         </TabsList>
 
         <TabsContent value="chart">
@@ -313,188 +385,110 @@ export default function Predictions() {
         </TabsContent>
 
         <TabsContent value="predictions">
-          <div className="space-y-6">
-            {/* Prediction Form */}
-            <Card className="border-muted shadow-md">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="h-5 w-5 text-primary" />
-                  Generate New Prediction
-                </CardTitle>
-                <CardDescription>
-                  Enter a ticker symbol and select a time horizon
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <Select value={ticker} onValueChange={setTicker}>
-                    <SelectTrigger className="w-full sm:flex-1">
-                      <SelectValue placeholder="Select ticker" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableTickers.map((symbol) => (
-                        <SelectItem key={symbol} value={symbol}>
-                          {symbol}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={horizon} onValueChange={setHorizon}>
-                    <SelectTrigger className="w-full sm:w-[140px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1d">
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4" />
-                          1 Day
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="3d">
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4" />
-                          3 Days
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="7d">
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4" />
-                          7 Days
-                        </div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    onClick={submit}
-                    disabled={submitting || !ticker.trim()}
-                    className="w-full sm:w-auto min-w-[120px]"
-                    size="default"
-                  >
-                    {submitting ? (
-                      <>
-                        <Activity className="mr-2 h-4 w-4 animate-spin" />
-                        Predicting...
-                      </>
-                    ) : (
-                      <>
-                        <Target className="mr-2 h-4 w-4" />
-                        Predict
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Recent Predictions</h3>
+              <Badge variant="secondary">{preds.length} Total</Badge>
+            </div>
 
-            {/* Predictions List */}
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">Recent Predictions</h3>
-                <Badge variant="secondary">{preds.length} Total</Badge>
+            {loading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map(i => (
+                  <Card key={i}>
+                    <CardContent className="p-6">
+                      <div className="space-y-3">
+                        <Skeleton className="h-5 w-32" />
+                        <Skeleton className="h-4 w-full" />
+                        <Skeleton className="h-4 w-2/3" />
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
               </div>
+            ) : error ? (
+              <ErrorMessage message={error} onRetry={fetchPredictions} />
+            ) : preds.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <TrendingUp className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground text-center">
+                    No predictions yet. Generate your first prediction above!
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4">
+                {preds.map((p, i) => {
+                  const confidenceBadge = getConfidenceBadge(p.confidence)
+                  const returnColor = getReturnColor(p.predicted_return)
+                  const isPositive = p.predicted_return > 0
 
-              {loading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map(i => (
-                    <Card key={i}>
+                  return (
+                    <Card key={i} className="border-muted">
                       <CardContent className="p-6">
-                        <div className="space-y-3">
-                          <Skeleton className="h-5 w-32" />
-                          <Skeleton className="h-4 w-full" />
-                          <Skeleton className="h-4 w-2/3" />
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          {/* Left Section */}
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleTickerClick(p.ticker)}
+                                  className="text-2xl font-bold font-mono hover:text-primary transition-colors cursor-pointer"
+                                >
+                                  {p.ticker}
+                                </button>
+                                <Badge variant="outline" className="font-normal">
+                                  {p.horizon}
+                                </Badge>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {isPositive ? (
+                                <TrendingUp className="h-4 w-4 text-success" />
+                              ) : (
+                                <TrendingDown className="h-4 w-4 text-destructive" />
+                              )}
+                              <span className={`text-lg font-semibold ${returnColor}`}>
+                                {(p.predicted_return * 100).toFixed(2)}%
+                              </span>
+                              <span className="text-sm text-muted-foreground">
+                                predicted return
+                              </span>
+                            </div>
+                          </div>
+
+                          <Separator orientation="vertical" className="hidden sm:block h-16" />
+
+                          {/* Right Section */}
+                          <div className="flex flex-col items-start sm:items-end gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm text-muted-foreground">Confidence:</span>
+                              <Badge variant={confidenceBadge.variant}>
+                                {confidenceBadge.label} ({(p.confidence * 100).toFixed(0)}%)
+                              </Badge>
+                            </div>
+
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Clock className="h-3 w-3" />
+                              {new Date(p.timestamp).toLocaleString()}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              model: {p.model_version}
+                            </div>
+                            {(p.interval_lower !== undefined && p.interval_upper !== undefined) && (
+                              <div className="text-xs text-muted-foreground">
+                                range: {(p.interval_lower! * 100).toFixed(2)}% to {(p.interval_upper! * 100).toFixed(2)}%
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
-                  ))}
-                </div>
-              ) : error ? (
-                <ErrorMessage message={error} onRetry={fetchPredictions} />
-              ) : preds.length === 0 ? (
-                <Card className="border-dashed">
-                  <CardContent className="flex flex-col items-center justify-center py-12">
-                    <TrendingUp className="h-12 w-12 text-muted-foreground mb-4" />
-                    <p className="text-muted-foreground text-center">
-                      No predictions yet. Generate your first prediction above!
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="grid gap-4">
-                  {preds.map((p, i) => {
-                    const confidenceBadge = getConfidenceBadge(p.confidence)
-                    const returnColor = getReturnColor(p.predicted_return)
-                    const isPositive = p.predicted_return > 0
-
-                    return (
-                      <Card
-                        key={i}
-                        className="border-muted"
-                      >
-                        <CardContent className="p-6">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                            {/* Left Section */}
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-3">
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={() => handleTickerClick(p.ticker)}
-                                    className="text-2xl font-bold font-mono hover:text-primary transition-colors cursor-pointer"
-                                  >
-                                    {p.ticker}
-                                  </button>
-                                  <Badge variant="outline" className="font-normal">
-                                    {p.horizon}
-                                  </Badge>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                {isPositive ? (
-                                  <TrendingUp className="h-4 w-4 text-success" />
-                                ) : (
-                                  <TrendingDown className="h-4 w-4 text-destructive" />
-                                )}
-                                <span className={`text-lg font-semibold ${returnColor}`}>
-                                  {(p.predicted_return * 100).toFixed(2)}%
-                                </span>
-                                <span className="text-sm text-muted-foreground">
-                                  predicted return
-                                </span>
-                              </div>
-                            </div>
-
-                            <Separator orientation="vertical" className="hidden sm:block h-16" />
-
-                            {/* Right Section */}
-                            <div className="flex flex-col items-start sm:items-end gap-2">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm text-muted-foreground">Confidence:</span>
-                                <Badge variant={confidenceBadge.variant}>
-                                  {confidenceBadge.label} ({(p.confidence * 100).toFixed(0)}%)
-                                </Badge>
-                              </div>
-
-                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <Clock className="h-3 w-3" />
-                                {new Date(p.timestamp).toLocaleString()}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                model: {p.model_version}
-                              </div>
-                              {(p.interval_lower !== undefined && p.interval_upper !== undefined) && (
-                                <div className="text-xs text-muted-foreground">
-                                  range: {(p.interval_lower! * 100).toFixed(2)}% to {(p.interval_upper! * 100).toFixed(2)}%
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </TabsContent>
 
