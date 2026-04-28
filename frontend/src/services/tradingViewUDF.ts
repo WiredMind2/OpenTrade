@@ -28,6 +28,13 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
   private readonly baseUrl: string
   private chartUpdateUnsubscribe?: () => void
 
+  private normalizeTimestampToSeconds(value: unknown): number {
+    const ts = Number(value)
+    if (!Number.isFinite(ts)) return 0
+    // TradingView periodParams are typically seconds, but be defensive if ms are provided.
+    return ts > 1e11 ? Math.floor(ts / 1000) : Math.floor(ts)
+  }
+
   private normalizeTimestampToMs(value: unknown): number {
     const ts = Number(value)
     if (!Number.isFinite(ts)) return 0
@@ -148,11 +155,14 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
      onResult: HistoryCallback,
      onError: ErrorCallback
    ): void {
+     const fromSeconds = this.normalizeTimestampToSeconds(periodParams.from)
+     const toSeconds = this.normalizeTimestampToSeconds(periodParams.to)
+
      const params = new URLSearchParams({
        symbol: symbolInfo.ticker || symbolInfo.name,
        resolution: resolution,
-       from_ts: periodParams.from.toString(),
-       to_ts: periodParams.to.toString()
+       from_ts: fromSeconds.toString(),
+       to_ts: toSeconds.toString()
      })
 
      if (periodParams.countBack) {
@@ -167,6 +177,10 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
          }
 
          if (response.data.s === 'no_data') {
+           console.warn(
+             '[TradingViewUDF] no_data response',
+             { symbol: symbolInfo.ticker || symbolInfo.name, resolution, fromSeconds, toSeconds, countBack: periodParams.countBack }
+           )
            onResult([], { noData: true })
            return
          }

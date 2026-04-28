@@ -6,7 +6,17 @@ import type {
   StrategyTimeseriesResponse,
 } from '../types'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+// Jest (CommonJS) cannot parse `import.meta`. Keep baseURL flexible without relying on it.
+//
+// Defaulting to `window.location.origin` makes chart UDF calls deterministic in more setups:
+// - Vite dev server + proxy (same-origin requests still proxy)
+// - Frontend served by backend (same origin is the backend)
+// - Static hosting where the backend is co-hosted behind the same origin
+const API_BASE =
+  (typeof window !== 'undefined' && (window as any).__API_BASE__) ||
+  (typeof process !== 'undefined' && (process as any).env?.VITE_API_BASE) ||
+  (typeof window !== 'undefined' && window.location?.origin) ||
+  ''
 
 const instance = axios.create({
   baseURL: API_BASE,

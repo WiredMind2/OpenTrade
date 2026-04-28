@@ -639,14 +639,6 @@ async def get_historical_data(
         # Initialize data validator
         validator = DataValidator(db_path)
 
-        # Validate symbol exists in database
-        if not validator.validate_symbol_exists(symbol.upper()):
-            logger.warning(f"UDF history: symbol {symbol} not found in database")
-            return {
-                "s": "error",
-                "errmsg": f"Symbol '{symbol}' not found"
-            }
-
         # Parse resolution early so timestamp normalization can use granularity.
         table, target_resolution = parse_resolution(resolution)
         date_col = 'date' if table == 'price_daily' else 'dt'
@@ -708,6 +700,31 @@ async def get_historical_data(
         logger.info(f"UDF history: date range {from_date} to {to_date}")
 
         logger.info(f"UDF history: using table {table}, date_col {date_col}, target_resolution {target_resolution}")
+
+        # If the colleague's DB is empty, TradingView will otherwise show "No data here".
+        # Attempt external fetch for unknown symbols before failing fast.
+        if not validator.validate_symbol_exists(symbol.upper()):
+            logger.warning(
+                f"UDF history: symbol {symbol} not found in database; attempting external fetch "
+                f"for {from_date.date()} to {to_date.date()} (table={table})"
+            )
+
+            fetch_success = fetch_external_data(symbol.upper(), table, from_date, to_date)
+            if not fetch_success:
+                logger.error(f"UDF history: external fetch failed for unknown symbol {symbol}")
+                return {
+                    "s": "error",
+                    "errmsg": f"Symbol '{symbol}' not found and external fetch failed"
+                }
+
+            # Rebuild validator after potential DB updates.
+            validator = DataValidator(db_path)
+            if not validator.validate_symbol_exists(symbol.upper()):
+                logger.error(f"UDF history: external fetch reported success but symbol still missing: {symbol}")
+                return {
+                    "s": "error",
+                    "errmsg": f"Failed to register symbol '{symbol}' after external fetch"
+                }
 
         # Let TradingView stop requesting older chunks naturally.
         if to_ts < 0 and from_ts < 0:
