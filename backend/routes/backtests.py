@@ -6,6 +6,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any
+import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks
 
@@ -35,7 +36,7 @@ async def run_backtest(
             raise HTTPException(status_code=400, detail="Date range too large (max 5 years)")
 
         # Generate unique backtest ID
-        backtest_id = f"bt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        backtest_id = f"bt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{uuid.uuid4().hex[:8]}"
 
         # Log backtest request
         logger.info(
@@ -66,6 +67,7 @@ async def run_backtest(
             strategy_name=request.strategy_name,
             start_date=request.start_date,
             end_date=request.end_date,
+            completed_at=None,
             initial_capital=request.initial_capital,
             final_value=request.initial_capital,
             total_return=0.0,
@@ -116,6 +118,12 @@ async def get_backtest_result(
          win_rate, total_trades, avg_trade_return, volatility,
          equity_curve_json, metrics_json) = row
 
+        def _f(x, default: float = 0.0) -> float:
+            try:
+                return default if x is None else float(x)
+            except Exception:
+                return default
+
         equity_curve = json.loads(equity_curve_json) if equity_curve_json else []
         metrics = json.loads(metrics_json) if metrics_json else {}
 
@@ -123,16 +131,17 @@ async def get_backtest_result(
             strategy_name=name,
             start_date=pd.to_datetime(started_at).to_pydatetime(),
             end_date=pd.to_datetime(completed_at).to_pydatetime(),
-            initial_capital=initial_capital,
-            final_value=final_value,
-            total_return=total_return,
-            annualized_return=annualized_return,
-            sharpe_ratio=sharpe_ratio,
-            max_drawdown=max_drawdown,
-            win_rate=win_rate,
-            total_trades=total_trades,
-            avg_trade_return=avg_trade_return,
-            volatility=volatility,
+            completed_at=pd.to_datetime(completed_at).to_pydatetime() if completed_at else None,
+            initial_capital=_f(initial_capital, 100000.0),
+            final_value=_f(final_value, _f(initial_capital, 100000.0)),
+            total_return=_f(total_return),
+            annualized_return=_f(annualized_return),
+            sharpe_ratio=_f(sharpe_ratio),
+            max_drawdown=_f(max_drawdown),
+            win_rate=_f(win_rate),
+            total_trades=int(total_trades or 0),
+            avg_trade_return=_f(avg_trade_return),
+            volatility=_f(volatility),
             timestamp=pd.to_datetime(completed_at).to_pydatetime(),
             metrics=metrics,
             equity_curve=equity_curve

@@ -1,9 +1,18 @@
 import { getStrategies, projectStrategy } from '../services/strategyApi';
 
+jest.mock('../services/api', () => ({
+  __esModule: true,
+  default: {
+    get: jest.fn(),
+    post: jest.fn(),
+  },
+}))
+
+const api = require('../services/api').default as { get: jest.Mock; post: jest.Mock }
+
 describe('strategyApi', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (global.fetch as jest.Mock).mockClear();
   });
 
   describe('getStrategies', () => {
@@ -25,29 +34,22 @@ describe('strategyApi', () => {
         }
       ];
 
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockStrategies,
-      });
+      api.get.mockResolvedValueOnce({ data: mockStrategies })
 
       const result = await getStrategies();
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/strategies');
+      expect(api.get).toHaveBeenCalledWith('/api/strategies');
       expect(result).toEqual(mockStrategies);
     });
 
     it('throws error when response is not ok', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      });
-
-      await expect(getStrategies()).rejects.toThrow('HTTP error! status: 500');
+      api.get.mockRejectedValueOnce(new Error('HTTP error! status: 500'))
+      await expect(getStrategies()).rejects.toThrow('HTTP error! status: 500')
     });
 
     it('throws error when fetch fails', async () => {
       const mockError = new Error('Network error');
-      (global.fetch as jest.Mock).mockRejectedValueOnce(mockError);
+      api.get.mockRejectedValueOnce(mockError);
 
       await expect(getStrategies()).rejects.toThrow('Network error');
     });
@@ -61,10 +63,7 @@ describe('strategyApi', () => {
     ];
 
     it('projects strategy successfully with all parameters', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       const result = await projectStrategy(
         'moving_average',
@@ -75,27 +74,18 @@ describe('strategyApi', () => {
         3
       );
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/strategies/moving_average/project', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          symbol: 'AAPL',
-          startTime: '2021-01-01T00:00:00Z',
-          startPrice: 150.0,
-          params: { window: 20, threshold: 0.02 },
-          horizon: 3,
-        }),
-      });
+      expect(api.post).toHaveBeenCalledWith('/api/strategies/moving_average/project', {
+        symbol: 'AAPL',
+        startTime: '2021-01-01T00:00:00Z',
+        startPrice: 150.0,
+        params: { window: 20, threshold: 0.02 },
+        horizon: 3,
+      })
       expect(result).toEqual(mockProjectionData);
     });
 
     it('projects strategy with minimal parameters', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       const result = await projectStrategy(
         'sentiment_ml',
@@ -106,96 +96,69 @@ describe('strategyApi', () => {
         1
       );
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/strategies/sentiment_ml/project', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          symbol: 'TSLA',
-          startTime: '2021-01-01T12:00:00Z',
-          startPrice: 800.5,
-          params: {},
-          horizon: 1,
-        }),
-      });
+      expect(api.post).toHaveBeenCalledWith('/api/strategies/sentiment_ml/project', {
+        symbol: 'TSLA',
+        startTime: '2021-01-01T12:00:00Z',
+        startPrice: 800.5,
+        params: {},
+        horizon: 1,
+      })
       expect(result).toEqual(mockProjectionData);
     });
 
     it('throws error when response is not ok', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-      });
-
-      await expect(projectStrategy('invalid_strategy', 'AAPL', '2021-01-01T00:00:00Z', 150.0, {}, 1))
-        .rejects.toThrow('HTTP error! status: 400');
+      api.post.mockRejectedValueOnce(new Error('HTTP error! status: 400'))
+      await expect(projectStrategy('invalid_strategy', 'AAPL', '2021-01-01T00:00:00Z', 150.0, {}, 1)).rejects.toThrow(
+        'HTTP error! status: 400'
+      )
     });
 
     it('throws error when fetch fails', async () => {
       const mockError = new Error('Connection failed');
-      (global.fetch as jest.Mock).mockRejectedValueOnce(mockError);
+      api.post.mockRejectedValueOnce(mockError);
 
       await expect(projectStrategy('moving_average', 'AAPL', '2021-01-01T00:00:00Z', 150.0, {}, 1))
         .rejects.toThrow('Connection failed');
     });
 
     it('handles different strategy names', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       await projectStrategy('custom_strategy', 'GOOGL', '2021-01-01T00:00:00Z', 2500.0, {}, 1);
 
-      expect(global.fetch).toHaveBeenCalledWith('/api/strategies/custom_strategy/project', expect.any(Object));
+      expect(api.post).toHaveBeenCalledWith('/api/strategies/custom_strategy/project', expect.any(Object));
     });
 
     it('handles different symbols', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       await projectStrategy('moving_average', 'MSFT', '2021-01-01T00:00:00Z', 300.0, {}, 1);
 
-      const callArgs = (global.fetch as jest.Mock).mock.calls[0][1];
-      const body = JSON.parse(callArgs.body);
-      expect(body.symbol).toBe('MSFT');
+      const body = (api.post as jest.Mock).mock.calls[0][1]
+      expect(body.symbol).toBe('MSFT')
     });
 
     it('handles different time formats', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       const customTime = '2021-12-31T23:59:59.999Z';
       await projectStrategy('moving_average', 'AAPL', customTime, 150.0, {}, 1);
 
-      const callArgs = (global.fetch as jest.Mock).mock.calls[0][1];
-      const body = JSON.parse(callArgs.body);
-      expect(body.startTime).toBe(customTime);
+      const body = (api.post as jest.Mock).mock.calls[0][1]
+      expect(body.startTime).toBe(customTime)
     });
 
     it('handles different price values', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       await projectStrategy('moving_average', 'AAPL', '2021-01-01T00:00:00Z', 0.01, {}, 1);
 
-      const callArgs = (global.fetch as jest.Mock).mock.calls[0][1];
-      const body = JSON.parse(callArgs.body);
-      expect(body.startPrice).toBe(0.01);
+      const body = (api.post as jest.Mock).mock.calls[0][1]
+      expect(body.startPrice).toBe(0.01)
     });
 
     it('handles complex parameter objects', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       const complexParams = {
         window: 50,
@@ -209,22 +172,17 @@ describe('strategyApi', () => {
 
       await projectStrategy('moving_average', 'AAPL', '2021-01-01T00:00:00Z', 150.0, complexParams, 1);
 
-      const callArgs = (global.fetch as jest.Mock).mock.calls[0][1];
-      const body = JSON.parse(callArgs.body);
-      expect(body.params).toEqual(complexParams);
+      const body = (api.post as jest.Mock).mock.calls[0][1]
+      expect(body.params).toEqual(complexParams)
     });
 
     it('handles different horizon values', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockProjectionData,
-      });
+      api.post.mockResolvedValueOnce({ data: mockProjectionData })
 
       await projectStrategy('moving_average', 'AAPL', '2021-01-01T00:00:00Z', 150.0, {}, 100);
 
-      const callArgs = (global.fetch as jest.Mock).mock.calls[0][1];
-      const body = JSON.parse(callArgs.body);
-      expect(body.horizon).toBe(100);
+      const body = (api.post as jest.Mock).mock.calls[0][1]
+      expect(body.horizon).toBe(100)
     });
   });
 });

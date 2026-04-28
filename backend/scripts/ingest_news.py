@@ -10,7 +10,6 @@ import sqlite3
 import argparse
 import time
 from datetime import datetime
-from newsapi import NewsApiClient
 from dotenv import load_dotenv
 from .script_logger import logger
 
@@ -21,6 +20,15 @@ NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')
 
 class NewsAPIConnector:
     def __init__(self, api_key: str):
+        # Optional dependency: keep module importable in environments
+        # where the third-party `newsapi` package is not installed (e.g. CI/tests).
+        try:
+            from newsapi import NewsApiClient  # type: ignore
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "Optional dependency missing: install `newsapi-python` to ingest news."
+            ) from e
+
         self.client = NewsApiClient(api_key=api_key)
 
     def fetch_headlines(self, query: str, from_dt: str | None = None, to_dt: str | None = None, page=1, page_size=100, max_retries=3):
@@ -95,7 +103,13 @@ def store_articles(db_path: str, articles: list):
             conn.close()
 
 
-def ingest_news_data(db_path: str = None, query: str = 'stock OR company OR earnings', from_dt: str = None, to_dt: str = None):
+def ingest_news_data(
+    db_path: str | None = None,
+    query: str = 'stock OR company OR earnings',
+    from_dt: str | None = None,
+    to_dt: str | None = None,
+    api_key: str | None = None,
+):
     """
     Ingest news data from NewsAPI and store in database.
     Returns True on success, raises exception on failure.
@@ -103,11 +117,12 @@ def ingest_news_data(db_path: str = None, query: str = 'stock OR company OR earn
     if db_path is None:
         db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'backtest.db'))
 
-    if not NEWSAPI_KEY:
+    api_key = api_key or NEWSAPI_KEY
+    if not api_key:
         raise ValueError('NEWSAPI_KEY not set in environment. Export it or add to .env file.')
 
     try:
-        conn = NewsAPIConnector(api_key=NEWSAPI_KEY)
+        conn = NewsAPIConnector(api_key=api_key)
         articles = conn.fetch_headlines(query=query, from_dt=from_dt, to_dt=to_dt)
         store_articles(db_path, articles)
         return True

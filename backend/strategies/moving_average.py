@@ -44,7 +44,11 @@ class MovingAverageStrategy(BaseStrategy):
         """Create and return a Backtrader strategy class with MA crossover logic."""
 
         class MovingAverageCrossover(bt.Strategy):
-            params = ('short_window', 'long_window', 'max_position_pct')
+            params = (
+                ("short_window", int(parameters.get("short_window", 10))),
+                ("long_window", int(parameters.get("long_window", 30))),
+                ("max_position_pct", float(parameters.get("max_position_pct", 0.1))),
+            )
 
             def __init__(self):
                 self.equity_curve = []

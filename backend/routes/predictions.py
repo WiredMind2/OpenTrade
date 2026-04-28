@@ -49,9 +49,8 @@ class ProjectionSeriesRequest(BaseModel):
 
 
 
-@router.post("/predict", response_model=PredictionResponse, tags=["Predictions"])
-async def make_prediction(request: PredictionRequest):
-    """Make a trading prediction for a given ticker."""
+async def make_prediction(request: PredictionRequest) -> PredictionResponse:
+    """Core prediction routine (kept patchable for tests)."""
     from backend.main import app_state  # Import here to avoid circular imports
 
     logger.info(f"Prediction request received: ticker={request.ticker}, horizon={request.horizon}")
@@ -100,6 +99,12 @@ async def make_prediction(request: PredictionRequest):
     except Exception as e:
         logger.error(f"Prediction failed for {request.ticker}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/predict", response_model=PredictionResponse, tags=["Predictions"])
+async def predict_endpoint(request: PredictionRequest):
+    """Make a trading prediction for a given ticker."""
+    return await make_prediction(request)
 
 
 @router.get("/predictions/recent", response_model=List[PredictionResponse], tags=["Predictions"])

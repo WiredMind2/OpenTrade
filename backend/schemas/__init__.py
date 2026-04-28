@@ -83,6 +83,7 @@ class BacktestResult(BaseModel):
     strategy_name: str
     start_date: datetime
     end_date: datetime
+    completed_at: Optional[datetime] = None
     initial_capital: float
     final_value: float
     total_return: float

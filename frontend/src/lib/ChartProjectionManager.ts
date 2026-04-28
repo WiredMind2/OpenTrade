@@ -60,30 +60,30 @@ export function attachProjectionManager(
         });
     };
 
-    // Subscribe to click events by adding DOM event listener to widget container
-    // The widget has access to its container through the widget API
-    const widgetContainer = document.getElementById(attachedWidget._options.container as string);
-
-    if (widgetContainer) {
-      const clickHandler = (event: MouseEvent) => {
-        // Get the bounding rectangle of the widget container
-        const rect = widgetContainer.getBoundingClientRect();
-        // Calculate relative coordinates within the widget
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-
-        handleClick({ x, y });
-      };
-
-      widgetContainer.addEventListener('click', clickHandler);
-
-      // Store the cleanup function
-      chartUnsubscribe = () => {
-        widgetContainer.removeEventListener('click', clickHandler);
-      };
-    } else {
-      console.warn('[ChartProjectionManager] Could not find widget container for click events');
+    // Prefer TradingView's native click subscription when available (test-friendly).
+    if (typeof (chart as any).subscribeClick === 'function') {
+      chartUnsubscribe = (chart as any).subscribeClick(handleClick);
+      return;
     }
+
+    // Fallback: subscribe via DOM click events on the widget container.
+    const containerId = (attachedWidget as any)?._options?.container as string | undefined;
+    const widgetContainer = containerId ? document.getElementById(containerId) : null;
+
+    if (!widgetContainer) {
+      console.warn('[ChartProjectionManager] Could not find widget container for click events');
+      return;
+    }
+
+    const clickHandler = (event: MouseEvent) => {
+      const rect = widgetContainer.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      handleClick({ x, y });
+    };
+
+    widgetContainer.addEventListener('click', clickHandler);
+    chartUnsubscribe = () => widgetContainer.removeEventListener('click', clickHandler);
   });
 }
 

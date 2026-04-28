@@ -42,6 +42,7 @@ export interface BacktestResult {
   strategy_name: string;
   start_date: string;
   end_date: string;
+  completed_at?: string | null;
   initial_capital: number;
   final_value: number;
   total_return: number;

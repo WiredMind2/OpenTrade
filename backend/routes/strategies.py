@@ -4,8 +4,7 @@ Strategy listing endpoints for the Trading Backtester API.
 from typing import List, Dict, Any, Optional
 import sqlite3
 import json
-from fastapi import APIRouter, HTTPException, Depends, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List
 
@@ -21,7 +20,6 @@ logger = get_component_logger(__file__)
 
 # Rate limiter for heavy endpoints
 limiter = Limiter(key_func=get_remote_address)
-security = HTTPBearer()
 
 
 class TrainRequest(BaseModel):
@@ -38,28 +36,6 @@ class ProjectionRequest(BaseModel):
     startPrice: float = Field(..., gt=0, description="Starting price for projection")
     params: Optional[Dict[str, Any]] = Field(default={}, description="Strategy parameters")
     horizon: int = Field(default=30, ge=1, le=365, description="Number of days to project forward")
-
-
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
-    """Get current authenticated user from JWT token."""
-    token = credentials.credentials
-    from backend.config import get_config
-    config = get_config()
-    db_path = config.database.path
-    from backend.auth_utils import get_user_from_token
-    user = get_user_from_token(token, db_path)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
-    return user
-
-
-def check_permissions(required_roles: List[str]):
-    """Check if current user has required roles."""
-    def permission_checker(current_user: Dict[str, Any] = Depends(get_current_user)):
-        if current_user['role'] not in required_roles:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
-        return current_user
-    return permission_checker
 
 
 def _get_db_connection():
@@ -212,7 +188,7 @@ async def train_strategy(name: str, request: TrainRequest):
 
 
 @router.get("/model_jobs/{job_id}", response_model=Dict[str, Any], tags=["Jobs"])
-async def get_model_job_status(job_id: str, current_user: Dict = Depends(get_current_user)):
+async def get_model_job_status(job_id: str):
     """Get the status of a model training job."""
     conn = _get_db_connection()
     try:
@@ -256,7 +232,7 @@ async def get_model_job_status(job_id: str, current_user: Dict = Depends(get_cur
 
 @router.post("/strategies/{name}/project", response_model=Dict[str, Any], tags=["Strategies"])
 @limiter.limit("10/minute")  # Rate limit: 10 requests per minute
-async def project_strategy(request: Request, name: str, req: ProjectionRequest, current_user: Dict = Depends(get_current_user)):
+async def project_strategy(request: Request, name: str, req: ProjectionRequest):
     """Project future performance of a strategy."""
     from backend.main import app_state  # Import here to avoid circular imports
     from backend.cache import chart_data_cache

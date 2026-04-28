@@ -15,6 +15,7 @@ import os
 from datetime import datetime
 import io
 from contextlib import redirect_stdout, redirect_stderr
+import traceback
 from script_logger import logger
 
 
@@ -177,9 +178,18 @@ def run_step(name: str, func, args, log_dir: str):
         stderr = stderr_capture.getvalue()
         returncode = 0
     except Exception as e:
-        stdout = ''
-        stderr = str(e)
+        # Preserve any partial output we captured before the exception,
+        # and include the full traceback in the step log for debugging.
+        try:
+            stdout = stdout_capture.getvalue()  # type: ignore[name-defined]
+            stderr = stderr_capture.getvalue()  # type: ignore[name-defined]
+        except Exception:
+            stdout = ""
+            stderr = ""
+        tb = traceback.format_exc()
+        stderr = (stderr + ("\n" if stderr else "") + tb).strip()
         returncode = 1
+        logger.exception("Step %s raised an exception", name)
     # write stdout/stderr to step log
     with open(step_log, 'w', encoding='utf-8') as f:
         f.write('COMMAND: run_' + name + '\n')

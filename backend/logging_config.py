@@ -138,11 +138,18 @@ class JSONFormatter(logging.Formatter):
         if record.levelno >= logging.ERROR:
             try:
                 process = psutil.Process()
+                open_files_count = None
+                # psutil.Process.open_files() can be very slow or hang on Windows in some environments.
+                if sys.platform != "win32":
+                    try:
+                        open_files_count = len(process.open_files())
+                    except Exception:
+                        open_files_count = None
                 log_entry["system_metrics"] = {
                     "cpu_percent": process.cpu_percent(),
                     "memory_percent": process.memory_percent(),
                     "memory_mb": process.memory_info().rss / 1024 / 1024,
-                    "open_files": len(process.open_files()),
+                    "open_files": open_files_count,
                     "threads": process.num_threads()
                 }
             except Exception:
@@ -247,13 +254,21 @@ class TradingLogger:
         # Merge context with additional fields
         log_data = {**self._context, **kwargs}
 
+        # Support `exc_info` / `exception=True` so tracebacks are actually emitted.
+        # Many call sites pass `exception=True` expecting a traceback to appear.
+        exc_info = None
+        if "exc_info" in log_data:
+            exc_info = log_data.pop("exc_info")
+        elif log_data.pop("exception", False):
+            exc_info = True
+
         # Create log record with extra data
         extra = {}
         for key, value in log_data.items():
             if value is not None:
                 extra[key] = value
 
-        self.logger.log(level, message, *args, extra=extra)
+        self.logger.log(level, message, *args, extra=extra, exc_info=exc_info)
     
     def debug(self, message: str, *args, **kwargs):
         """Log debug message."""
@@ -281,7 +296,7 @@ class TradingLogger:
     
     def exception(self, message: str, **kwargs):
         """Log exception with traceback."""
-        kwargs['exception'] = True
+        kwargs["exception"] = True
         self._log(logging.ERROR, message, **kwargs)
     
     # Trading-specific logging methods
@@ -395,6 +410,38 @@ class TradingLogger:
 # Global logger instances
 _loggers: Dict[str, TradingLogger] = {}
 
+_LIB_LOGGER_OVERRIDES_APPLIED = False
+
+
+def _apply_library_logger_overrides(disable_ws_logging: bool = True) -> None:
+    """
+    Reduce noise from third-party loggers.
+
+    When `disable_ws_logging=True`, suppress common WebSocket-related loggers and
+    uvicorn access logs, while keeping real error logs visible.
+    """
+    global _LIB_LOGGER_OVERRIDES_APPLIED
+    if _LIB_LOGGER_OVERRIDES_APPLIED:
+        return
+
+    if disable_ws_logging:
+        noisy = {
+            # Uvicorn access spam (incl. websocket connect/disconnect)
+            "uvicorn.access": logging.WARNING,
+            # Websocket stack
+            "uvicorn.protocols.websockets": logging.WARNING,
+            "websockets": logging.WARNING,
+            "wsproto": logging.WARNING,
+            # Starlette internals can get chatty around WS disconnects
+            "starlette.websockets": logging.WARNING,
+        }
+        for name, level in noisy.items():
+            lib_logger = logging.getLogger(name)
+            lib_logger.setLevel(level)
+            lib_logger.propagate = False
+
+    _LIB_LOGGER_OVERRIDES_APPLIED = True
+
 
 def _normalize_component_path(component_path: str) -> str:
     """Normalize component path to match mapping keys."""
@@ -415,6 +462,8 @@ def _normalize_component_path(component_path: str) -> str:
 
 def get_logger(name: str, config: Optional[Dict[str, Any]] = None) -> TradingLogger:
     """Get or create a logger instance."""
+    _apply_library_logger_overrides(disable_ws_logging=True)
+
     if name not in _loggers:
         from backend.config import config as global_config
 
@@ -435,6 +484,10 @@ def get_logger(name: str, config: Optional[Dict[str, Any]] = None) -> TradingLog
             'structured_logging': getattr(global_config.logging, 'structured_logging', True),
             'timed_rotation': getattr(global_config.logging, 'timed_rotation', False)
         }
+
+        # Disable noisy WS route logs by default (keep warnings/errors).
+        if normalized_name == "backend.routes.websocket":
+            log_config["level"] = "WARNING"
 
         if config:
             log_config.update(config)

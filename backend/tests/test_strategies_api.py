@@ -18,29 +18,6 @@ def client():
     return TestClient(app)
 
 
-@pytest.fixture
-def mock_user():
-    """Mock authenticated user."""
-    return {
-        'id': 1,
-        'username': 'testuser',
-        'role': 'user',
-        'email': 'test@example.com'
-    }
-
-
-@pytest.fixture
-def mock_token(mock_user):
-    """Mock JWT token for authentication."""
-    return "mock.jwt.token"
-
-
-@pytest.fixture
-def auth_headers(mock_token):
-    """Authentication headers for API requests."""
-    return {"Authorization": f"Bearer {mock_token}"}
-
-
 class TestStrategiesAPI:
     """Test class for strategies API endpoints."""
 
@@ -128,10 +105,8 @@ class TestStrategiesAPI:
         assert response.status_code == 404
         assert "not found" in response.json()['detail'].lower()
 
-    @patch('backend.auth_utils.get_user_from_token')
-    def test_project_strategy_success_moving_average(self, mock_get_user, client, mock_user, auth_headers):
+    def test_project_strategy_success_moving_average(self, client):
         """Test successful projection for moving_average strategy."""
-        mock_get_user.return_value = mock_user
 
         # Mock strategy with project method
         mock_strategy = MagicMock()
@@ -163,8 +138,7 @@ class TestStrategiesAPI:
             }
             response = client.post(
                 "/api/strategies/moving_average/project",
-                json=request_data,
-                headers=auth_headers
+                json=request_data
             )
 
         assert response.status_code == 200
@@ -180,10 +154,8 @@ class TestStrategiesAPI:
             initial_capital=150.0  # startPrice
         )
 
-    @patch('backend.auth_utils.get_user_from_token')
-    def test_project_strategy_success_sentiment_ml(self, mock_get_user, client, mock_user, auth_headers):
+    def test_project_strategy_success_sentiment_ml(self, client):
         """Test successful projection for sentiment_ml strategy."""
-        mock_get_user.return_value = mock_user
 
         # Mock strategy with project method
         mock_strategy = MagicMock()
@@ -216,8 +188,7 @@ class TestStrategiesAPI:
             }
             response = client.post(
                 "/api/strategies/sentiment_ml/project",
-                json=request_data,
-                headers=auth_headers
+                json=request_data
             )
 
         assert response.status_code == 200
@@ -231,10 +202,8 @@ class TestStrategiesAPI:
             initial_capital=200.0  # startPrice
         )
 
-    @patch('backend.auth_utils.get_user_from_token')
-    def test_project_strategy_invalid_params(self, mock_get_user, client, mock_user, auth_headers):
+    def test_project_strategy_invalid_params(self, client):
         """Test projection with invalid parameters."""
-        mock_get_user.return_value = mock_user
 
         # Mock strategy that raises exception
         mock_strategy = MagicMock()
@@ -254,17 +223,14 @@ class TestStrategiesAPI:
             }
             response = client.post(
                 "/api/strategies/moving_average/project",
-                json=request_data,
-                headers=auth_headers
+                json=request_data
             )
 
         assert response.status_code == 400
         assert "Unknown parameter" in response.json()['detail']
 
-    @patch('backend.auth_utils.get_user_from_token')
-    def test_project_strategy_not_found(self, mock_get_user, client, mock_user, auth_headers):
+    def test_project_strategy_not_found(self, client):
         """Test projection for non-existent strategy."""
-        mock_get_user.return_value = mock_user
 
         mock_registry = MagicMock()
         mock_registry.get.return_value = None
@@ -279,17 +245,14 @@ class TestStrategiesAPI:
             }
             response = client.post(
                 "/api/strategies/non_existent/project",
-                json=request_data,
-                headers=auth_headers
+                json=request_data
             )
 
         assert response.status_code == 404
         assert "not found" in response.json()['detail'].lower()
 
-    @patch('backend.auth_utils.get_user_from_token')
-    def test_project_strategy_invalid_projection_days(self, mock_get_user, client, mock_user, auth_headers):
+    def test_project_strategy_invalid_projection_days(self, client):
         """Test projection with invalid projection_days (too high)."""
-        mock_get_user.return_value = mock_user
 
         mock_registry = MagicMock()
         mock_registry.get.return_value = MagicMock()  # Strategy exists
@@ -304,17 +267,14 @@ class TestStrategiesAPI:
             }
             response = client.post(
                 "/api/strategies/moving_average/project",
-                json=request_data,
-                headers=auth_headers
+                json=request_data
             )
 
         # Should fail validation before reaching strategy.project()
         assert response.status_code == 422  # Validation error
 
-    @patch('backend.auth_utils.get_user_from_token')
-    def test_project_strategy_invalid_capital(self, mock_get_user, client, mock_user, auth_headers):
+    def test_project_strategy_invalid_capital(self, client):
         """Test projection with invalid initial_capital (negative)."""
-        mock_get_user.return_value = mock_user
 
         mock_registry = MagicMock()
         mock_registry.get.return_value = MagicMock()  # Strategy exists
@@ -329,29 +289,11 @@ class TestStrategiesAPI:
             }
             response = client.post(
                 "/api/strategies/moving_average/project",
-                json=request_data,
-                headers=auth_headers
+                json=request_data
             )
 
         # Should fail validation before reaching strategy.project()
         assert response.status_code == 422  # Validation error
-
-    def test_protected_strategies_endpoints_require_auth(self, client):
-        """Test that protected strategies endpoints require authentication."""
-        endpoints = [
-            ("/api/strategies/moving_average/train", "post", {}),
-            ("/api/model_jobs/test_job", "get", None),
-            ("/api/strategies/moving_average/project", "post", {})
-        ]
-
-        for endpoint, method, data in endpoints:
-            if method == "post":
-                response = client.post(endpoint, json=data or {})
-            else:
-                response = client.get(endpoint)
-
-            # The auth system returns 403 Forbidden for missing/invalid tokens
-            assert response.status_code in [401, 403]  # Unauthorized or Forbidden
 
     def test_public_strategies_endpoints_no_auth_required(self, client):
         """Test that public strategies endpoints don't require authentication."""

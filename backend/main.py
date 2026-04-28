@@ -160,7 +160,7 @@ async def init_database():
         conn.close()
         logger.info("Database connection initialized")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.exception("Failed to initialize database")
         raise TradingBacktesterError(f"Database initialization failed: {e}")
 
 
@@ -258,13 +258,13 @@ async def chart_broadcast_worker():
                         logger.debug(f"Broadcast chart update for {symbol}:{resolution}")
 
                 except Exception as e:
-                    logger.error(f"Error broadcasting chart update for {symbol}:{resolution}: {e}")
+                    logger.exception("Error broadcasting chart update for %s:%s", symbol, resolution)
 
         except asyncio.CancelledError:
             logger.info("Chart broadcast worker cancelled")
             break
         except Exception as e:
-            logger.error(f"Chart broadcast worker error: {e}")
+            logger.exception("Chart broadcast worker error")
             # Continue running despite errors
 
 
