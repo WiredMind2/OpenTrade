@@ -196,8 +196,10 @@ async def get_available_tickers():
 
         cur = conn.cursor()
         cur.execute("SELECT DISTINCT ticker FROM price_minute ORDER BY ticker")
-
         tickers = [row[0] for row in cur.fetchall()]
+        if not tickers:
+            cur.execute("SELECT DISTINCT ticker FROM price_daily ORDER BY ticker")
+            tickers = [row[0] for row in cur.fetchall()]
         conn.close()
 
         return tickers
