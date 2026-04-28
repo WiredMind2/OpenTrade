@@ -17,11 +17,14 @@ from script_logger import logger
 
 def _configure_sqlite_for_ingest(conn: sqlite3.Connection) -> None:
     # These pragmas make bulk ingestion dramatically faster.
-    # WAL helps concurrency (readers while writing); NORMAL is a good balance for local dev.
-    conn.execute("PRAGMA journal_mode=WAL;")
+    # On some Windows bind mounts, WAL can cause "unable to open database file" due to -wal/-shm handling.
+    # DELETE is slower than WAL but far more compatible.
+    conn.execute("PRAGMA journal_mode=DELETE;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA temp_store=MEMORY;")
-    conn.execute("PRAGMA foreign_keys=ON;")
+    # Disable FK checks during bulk ingest for speed (we insert tickers first).
+    conn.execute("PRAGMA foreign_keys=OFF;")
+    conn.execute("PRAGMA busy_timeout=60000;")
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -108,28 +111,28 @@ def ingest_csv_to_db(db_path: str, csv_path: str, ticker: Optional[str] = None):
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
 
-    batch_size = 50_000
+    batch_size = 5_000
     total_inserted = 0
 
     if is_multi:
         # Multi-ticker: expect a ticker column.
         df["ticker"] = df["ticker"].astype(str).str.upper()
         tickers = sorted(set(df["ticker"].dropna().tolist()))
-        for tkr in tickers:
-            ensure_ticker(tkr)
-
-        records = list(
-            zip(
-                df["ticker"].tolist(),
-                df["date"].tolist(),
-                df["open"].tolist(),
-                df["high"].tolist(),
-                df["low"].tolist(),
-                df["close"].tolist(),
-                df["adjusted_close"].tolist(),
-                [None if pd.isna(v) else int(v) for v in df["volume"].tolist()],
+        logger.info("Ensuring %d tickers exist (bulk insert)", len(tickers))
+        try:
+            cur.executemany(
+                "INSERT OR IGNORE INTO tickers (ticker, name, exchange) VALUES (?, ?, ?)",
+                [(t, None, None) for t in tickers],
             )
-        )
+            conn.commit()
+        except Exception as e:
+            # Fallback to per-row logging if something unexpected happens
+            logger.warning("Bulk ticker insert failed (%s); falling back to per-ticker inserts", e)
+            for tkr in tickers:
+                ensure_ticker(tkr)
+            conn.commit()
+
+        tick_col = df["ticker"].tolist()
     else:
         # Single ticker: infer from filename if not provided.
         if ticker is None:
@@ -137,26 +140,43 @@ def ingest_csv_to_db(db_path: str, csv_path: str, ticker: Optional[str] = None):
         t = str(ticker).upper()
         ensure_ticker(t)
 
-        records = list(
-            zip(
-                [t] * len(df),
-                df["date"].tolist(),
-                df["open"].tolist(),
-                df["high"].tolist(),
-                df["low"].tolist(),
-                df["close"].tolist(),
-                df["adjusted_close"].tolist(),
-                [None if pd.isna(v) else int(v) for v in df["volume"].tolist()],
-            )
-        )
+        tick_col = [t] * len(df)
 
-    logger.info("Ingesting %d rows from %s", len(records), csv_path)
+    # Materialize columns once; generate tuple batches on demand to avoid huge intermediate lists.
+    date_col = df["date"].tolist()
+    open_col = df["open"].tolist()
+    high_col = df["high"].tolist()
+    low_col = df["low"].tolist()
+    close_col = df["close"].tolist()
+    adj_col = df["adjusted_close"].tolist()
+    vol_raw = df["volume"].tolist()
+
+    def vol_at(i: int):
+        v = vol_raw[i]
+        return None if pd.isna(v) else int(v)
+
+    n = len(date_col)
+    logger.info("Ingesting %d rows from %s", n, csv_path)
     try:
-        for chunk in _iter_chunks(records, batch_size):
+        for start in range(0, n, batch_size):
+            end = min(start + batch_size, n)
+            chunk = [
+                (
+                    tick_col[i],
+                    date_col[i],
+                    open_col[i],
+                    high_col[i],
+                    low_col[i],
+                    close_col[i],
+                    adj_col[i],
+                    vol_at(i),
+                )
+                for i in range(start, end)
+            ]
             cur.executemany(insert_sql, chunk)
             conn.commit()
-            total_inserted += len(chunk)
-            logger.info("... committed %d/%d rows from %s", total_inserted, len(records), os.path.basename(csv_path))
+            total_inserted += (end - start)
+            logger.info("... committed %d/%d rows from %s", total_inserted, n, os.path.basename(csv_path))
     finally:
         conn.close()
 
