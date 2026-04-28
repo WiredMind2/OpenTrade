@@ -77,7 +77,11 @@ async def lifespan(app: FastAPI):
         await load_models()
 
     # Start chart broadcasting task
-    app_state["chart_broadcast_task"] = asyncio.create_task(chart_broadcast_worker())
+    # Avoid background workers during tests to prevent file-handle leaks
+    # (especially on Windows where SQLite files can't be unlinked while open).
+    is_test_env = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"))
+    if not is_test_env:
+        app_state["chart_broadcast_task"] = asyncio.create_task(chart_broadcast_worker())
 
     logger.info("Trading Backtester API started successfully")
 
@@ -153,7 +157,6 @@ async def init_database():
         conn = sqlite3.connect(app_state["database_path"])
         # Test connection
         conn.execute("SELECT 1")
-        ensure_ml_schema(conn)
         conn.close()
         logger.info("Database connection initialized")
     except Exception as e:
