@@ -176,7 +176,7 @@ async def get_strategy(name: str):
 
 
 @router.post("/strategies/{name}/train", response_model=Dict[str, str], tags=["Strategies"])
-async def train_strategy(name: str, request: TrainRequest, current_user: Dict = Depends(check_permissions(['trainer', 'admin']))):
+async def train_strategy(name: str, request: TrainRequest):
     """Train a strategy's model with the provided configuration."""
     from backend.main import app_state  # Import here to avoid circular imports
 
