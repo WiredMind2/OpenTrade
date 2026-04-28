@@ -200,9 +200,34 @@ class HumanReadableFormatter(logging.Formatter):
         "getMessage",
     }
 
+    COLORS = {
+        'DEBUG': '\033[36m',       # Cyan
+        'INFO': '\033[32m',        # Green
+        'WARNING': '\033[33m',     # Yellow
+        'ERROR': '\033[31m',       # Red
+        'CRITICAL': '\033[1;31m',  # Bold Red
+    }
+    RESET = '\033[0m'
+    PATH_COLOR = '\033[35m'        # Magenta for paths/loggers
+    TIMESTAMP_COLOR = '\033[90m'   # Grey for timestamp
+
+    def _short_logger_name(self, logger_name: str, max_parts: int = 3) -> str:
+        """Return a shorter logger name for console output."""
+        parts = logger_name.split('.')
+        if len(parts) <= max_parts:
+            return logger_name
+        return '.'.join(parts[-max_parts:])
+
     def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + "Z"
-        base = f"{timestamp} {record.levelname:<8} {record.name}: {record.getMessage()}"
+        logger_name = self._short_logger_name(record.name, max_parts=3)
+        
+        color = self.COLORS.get(record.levelname, self.RESET)
+        ts_colored = f"{self.TIMESTAMP_COLOR}{timestamp}{self.RESET}"
+        level_colored = f"{color}{record.levelname:<8}{self.RESET}"
+        logger_colored = f"{self.PATH_COLOR}{logger_name:<30}{self.RESET}"
+        
+        base = f"{ts_colored} {level_colored} {logger_colored} {record.getMessage()}"
 
         extras = {}
         for k, v in record.__dict__.items():
@@ -642,15 +667,18 @@ def setup_logging():
     """Setup global logging configuration."""
     try:
         from backend.config import config as global_config
-        
-        # Configure the root logger
-        root_logger = logging.getLogger()
-        root_logger.setLevel(getattr(global_config.logging, 'level', 'INFO'))
-        
-        # Add main application logger
-        get_app_logger()
+        level = getattr(global_config.logging, 'level', 'INFO')
     except ImportError:
-        # Config not available (e.g., during testing), use default logging
-        root_logger = logging.getLogger()
-        root_logger.setLevel('INFO')
-        get_app_logger()
+        level = 'INFO'
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    # Ensure root logger has a clean console handler for easy terminal reading.
+    if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(HumanReadableFormatter())
+        root_logger.addHandler(console_handler)
+
+    # Keep the application logger available for component-specific logs.
+    get_app_logger()

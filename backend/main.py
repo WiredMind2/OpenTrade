@@ -17,13 +17,16 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.config import get_config
-from backend.logging_config import get_component_logger
+from backend.logging_config import get_component_logger, setup_logging
 from backend.error_handling import TradingBacktesterError
 from backend.models import ModelRegistry
 from backend.strategies import strategy_registry
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+
+# Initialize logging before route modules load so console output remains clear.
+setup_logging()
 
 # Import route modules (package-relative)
 from backend.routes.health import router as health_router
