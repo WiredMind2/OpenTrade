@@ -27,6 +27,23 @@ router = APIRouter()
 # Global state for tracking script executions
 script_executions: Dict[str, Dict[str, Any]] = {}
 
+def _safe_decode(b: bytes | None) -> str:
+    if not b:
+        return ""
+    return b.decode(errors="replace")
+
+
+def _tail(text: str, max_chars: int = 8000) -> str:
+    """
+    Keep logs readable: return only the last `max_chars` chars.
+    This is usually the most actionable part (tracebacks, last errors).
+    """
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
 
 @router.post("/scripts/execute", response_model=ScriptExecutionResponse, tags=["Scripts"])
 async def execute_script(
@@ -71,7 +88,7 @@ async def execute_script(
         )
 
     except Exception as e:
-        logger.error(f"Failed to start script execution: {str(e)}")
+        logger.exception("Failed to start script execution")
         raise HTTPException(status_code=500, detail=f"Failed to execute script: {str(e)}")
 
 
@@ -186,7 +203,7 @@ async def run_pipeline(
         )
 
     except Exception as e:
-        logger.error(f"Failed to start pipeline: {str(e)}")
+        logger.exception("Failed to start pipeline")
         raise HTTPException(status_code=500, detail=f"Failed to start pipeline: {str(e)}")
 
 
@@ -252,7 +269,7 @@ async def generate_ma_predictions(
         )
 
     except Exception as e:
-        logger.error(f"Failed to start MA prediction generation: {str(e)}")
+        logger.exception("Failed to start MA prediction generation")
         raise HTTPException(status_code=500, detail=f"Failed to generate MA predictions: {str(e)}")
 
 
@@ -349,7 +366,10 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
         # Set working directory to project root
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-        logger.info(f"Running command: {' '.join(cmd)}", extra={"execution_id": execution_id})
+        logger.info(
+            f"Running command: {' '.join(cmd)}",
+            extra={"execution_id": execution_id, "script": script_name},
+        )
 
         # Run the script
         process = await asyncio.create_subprocess_exec(
@@ -365,16 +385,24 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
         stdout, stderr = await process.communicate()
 
         execution["end_time"] = datetime.utcnow()
-        execution["output"] = stdout.decode() if stdout else ""
-        execution["error"] = stderr.decode() if stderr else ""
+        execution["output"] = _safe_decode(stdout)
+        execution["error"] = _safe_decode(stderr)
 
         if process.returncode == 0:
             execution["status"] = "completed"
             logger.info(f"Script {script_name} completed successfully", extra={"execution_id": execution_id})
         else:
             execution["status"] = "failed"
-            logger.error(f"Script {script_name} failed with return code {process.returncode}",
-                         extra={"execution_id": execution_id, "error": execution["error"]})
+            logger.error(
+                f"Script {script_name} failed with return code {process.returncode}",
+                extra={
+                    "execution_id": execution_id,
+                    "script": script_name,
+                    "returncode": process.returncode,
+                    "stderr_tail": _tail(execution["error"]),
+                    "stdout_tail": _tail(execution["output"]),
+                },
+            )
 
         # Broadcast script status update
         await broadcast_websocket_message({
@@ -395,8 +423,11 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
         execution = script_executions.get(execution_id, {})
         execution["status"] = "failed"
         execution["end_time"] = datetime.utcnow()
-        execution["error"] = str(e)
-        logger.error(f"Script execution failed: {str(e)}", extra={"execution_id": execution_id})
+        execution["error"] = f"{type(e).__name__}: {e}"
+        logger.exception(
+            "Script execution failed",
+            extra={"execution_id": execution_id, "script": script_name},
+        )
 
         # Broadcast script status update on failure
         await broadcast_websocket_message({
@@ -434,7 +465,10 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
             script_path = get_script_path("run_pipeline")
             cmd = [sys.executable, script_path, "--steps", step]
 
-            logger.info(f"Running pipeline step: {step}", extra={"execution_id": execution_id})
+            logger.info(
+                f"Running pipeline step: {step}",
+                extra={"execution_id": execution_id, "step": step, "cmd": " ".join(cmd)},
+            )
 
             # Run the step
             process = await asyncio.create_subprocess_exec(
@@ -445,15 +479,29 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
             )
 
             stdout, stderr = await process.communicate()
+            stdout_s = _safe_decode(stdout)
+            stderr_s = _safe_decode(stderr)
 
             if process.returncode == 0:
                 execution["completed_steps"].append(step)
-                execution["output"] += f"\n--- {step} ---\n{stdout.decode()}"
-                logger.info(f"Pipeline step {step} completed", extra={"execution_id": execution_id})
+                execution["output"] += f"\n--- {step} ---\n{stdout_s}"
+                logger.info(
+                    f"Pipeline step {step} completed",
+                    extra={"execution_id": execution_id, "step": step, "stdout_tail": _tail(stdout_s)},
+                )
             else:
                 execution["failed_steps"].append(step)
-                execution["error"] += f"\n--- {step} ---\n{stderr.decode()}"
-                logger.error(f"Pipeline step {step} failed", extra={"execution_id": execution_id})
+                execution["error"] += f"\n--- {step} ---\n{stderr_s}"
+                logger.error(
+                    f"Pipeline step {step} failed",
+                    extra={
+                        "execution_id": execution_id,
+                        "step": step,
+                        "returncode": process.returncode,
+                        "stderr_tail": _tail(stderr_s),
+                        "stdout_tail": _tail(stdout_s),
+                    },
+                )
                 break  # Stop on first failure
 
             # Broadcast pipeline status update after each step
@@ -498,8 +546,14 @@ async def run_pipeline_async(execution_id: str, steps: list[str], config):
         execution = script_executions.get(execution_id, {})
         execution["status"] = "failed"
         execution["end_time"] = datetime.utcnow()
-        execution["error"] = str(e)
-        logger.error(f"Pipeline execution failed: {str(e)}", extra={"execution_id": execution_id})
+        execution["error"] = f"{type(e).__name__}: {e}"
+        logger.exception(
+            "Pipeline execution failed",
+            extra={
+                "execution_id": execution_id,
+                "current_step": execution.get("current_step"),
+            },
+        )
 
         # Broadcast pipeline status update on failure
         await broadcast_websocket_message({

@@ -167,6 +167,68 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry, default=json_serializer)
 
 
+class HumanReadableFormatter(logging.Formatter):
+    """
+    Human-focused formatter for console logs.
+
+    Keeps the message readable, while still surfacing `extra=` fields that are
+    useful during development (e.g. execution_id, ticker, step, etc.).
+    """
+
+    _SKIP_KEYS = {
+        # logging.LogRecord builtin attributes
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "getMessage",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + "Z"
+        base = f"{timestamp} {record.levelname:<8} {record.name}: {record.getMessage()}"
+
+        extras = {}
+        for k, v in record.__dict__.items():
+            if k in self._SKIP_KEYS or v is None:
+                continue
+            extras[k] = v
+
+        if extras:
+            def _fmt_val(val: Any) -> str:
+                if isinstance(val, (dict, list, tuple)):
+                    try:
+                        return json.dumps(val, default=str)
+                    except Exception:
+                        return str(val)
+                return str(val)
+
+            extras_str = " ".join(f"{k}={_fmt_val(v)}" for k, v in sorted(extras.items()))
+            base = f"{base} | {extras_str}"
+
+        if record.exc_info:
+            # Use the standard exception formatting appended on new lines.
+            base = f"{base}\n{self.formatException(record.exc_info)}"
+
+        return base
+
+
 class SafeTimedRotatingFileHandler(TimedRotatingFileHandler):
     """Custom TimedRotatingFileHandler that handles permission errors during rollover."""
 
@@ -208,12 +270,14 @@ class TradingLogger:
         
         # Console handler
         console_handler = logging.StreamHandler(sys.stdout)
-        if self.config.get('structured_logging', True):
+        structured_file = self.config.get("structured_logging", True)
+        structured_console = self.config.get("structured_console", False)
+
+        # Default: human-readable console, JSON files (when structured_logging=True)
+        if structured_console:
             console_handler.setFormatter(JSONFormatter())
         else:
-            console_handler.setFormatter(logging.Formatter(
-                self.config.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            ))
+            console_handler.setFormatter(HumanReadableFormatter())
         self.logger.addHandler(console_handler)
         
         # File handler with rotation
@@ -237,7 +301,7 @@ class TradingLogger:
                 encoding='utf-8'
             )
         
-        if self.config.get('structured_logging', True):
+        if structured_file:
             file_handler.setFormatter(JSONFormatter())
         else:
             file_handler.setFormatter(logging.Formatter(
