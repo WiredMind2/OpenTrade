@@ -219,7 +219,7 @@ class HumanReadableFormatter(logging.Formatter):
         return '.'.join(parts[-max_parts:])
 
     def format(self, record: logging.LogRecord) -> str:
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + "Z"
+        timestamp = datetime.utcnow().strftime("%H:%M:%S")
         logger_name = self._short_logger_name(record.name, max_parts=3)
         
         color = self.COLORS.get(record.levelname, self.RESET)
