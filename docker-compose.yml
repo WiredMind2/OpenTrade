@@ -20,6 +20,8 @@ services:
       dockerfile: frontend/Dockerfile
     ports:
       - '5173:5173'
+    environment:
+      - BACKEND_HOST=backend
     volumes:
       - ./frontend:/app
       - /app/node_modules
