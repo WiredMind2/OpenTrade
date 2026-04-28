@@ -75,11 +75,14 @@ CREATE TABLE IF NOT EXISTS sentiment_predictions (
   article_id INTEGER,
   ticker TEXT,
   model TEXT,
+  model_version TEXT,
   horizon TEXT,                          -- '1d','3d','7d'
   predicted_return REAL,                 -- percent (0.012 = +1.2%)
   predicted_confidence REAL,
   features_used TEXT,
+  feature_schema_version TEXT,
   metadata JSON,
+  prediction_latency_ms REAL,
   produced_at TEXT DEFAULT (datetime('now')),
   training_run_id TEXT,
   FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE SET NULL,
@@ -246,5 +249,30 @@ CREATE TABLE IF NOT EXISTS model_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_model_jobs_model_name ON model_jobs(model_name);
 CREATE INDEX IF NOT EXISTS idx_model_jobs_status ON model_jobs(status);
+
+-- ML model registry (trained model artifacts + metrics)
+CREATE TABLE IF NOT EXISTS ml_model_registry (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_name TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  horizon TEXT NOT NULL,
+  feature_schema_version TEXT,
+  metrics JSON,
+  artifact_path TEXT,
+  is_active INTEGER DEFAULT 0,
+  trained_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ml_registry_horizon_active ON ml_model_registry(horizon, is_active);
+
+-- ML operational run log (training/prediction runs, etc.)
+CREATE TABLE IF NOT EXISTS ml_run_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  metadata JSON,
+  started_at TEXT DEFAULT (datetime('now')),
+  finished_at TEXT
+);
 
 -- End of schema

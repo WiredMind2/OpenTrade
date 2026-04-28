@@ -7,32 +7,20 @@ import sqlite3
 
 def ensure_ml_schema(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
-    cur.executescript(
+    cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS ml_model_registry (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            model_name TEXT NOT NULL,
-            model_version TEXT NOT NULL,
-            horizon TEXT NOT NULL,
-            feature_schema_version TEXT,
-            metrics JSON,
-            artifact_path TEXT,
-            is_active INTEGER DEFAULT 0,
-            trained_at TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_ml_registry_horizon_active ON ml_model_registry(horizon, is_active);
-
-        CREATE TABLE IF NOT EXISTS ml_run_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_type TEXT NOT NULL,
-            status TEXT NOT NULL,
-            metadata JSON,
-            started_at TEXT DEFAULT (datetime('now')),
-            finished_at TEXT
-        );
+        SELECT name
+        FROM sqlite_master
+        WHERE type='table' AND name IN ('ml_model_registry', 'ml_run_log', 'sentiment_predictions')
         """
     )
+    found = {r[0] for r in cur.fetchall()}
+    if missing := [t for t in ("sentiment_predictions", "ml_model_registry", "ml_run_log") if t not in found]:
+        raise RuntimeError(
+            "Database schema is missing required tables: "
+            + ", ".join(missing)
+            + ". Initialize the DB using db/schema.sql."
+        )
 
     cur.execute("PRAGMA table_info('sentiment_predictions')")
     cols = [r[1] for r in cur.fetchall()]
