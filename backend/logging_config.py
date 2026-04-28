@@ -220,7 +220,7 @@ class HumanReadableFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.utcnow().strftime("%H:%M:%S")
-        logger_name = self._short_logger_name(record.name, max_parts=3)
+        logger_name = self._short_logger_name(record.name, max_parts=3) 
         
         color = self.COLORS.get(record.levelname, self.RESET)
         ts_colored = f"{self.TIMESTAMP_COLOR}{timestamp}{self.RESET}"
@@ -230,10 +230,24 @@ class HumanReadableFormatter(logging.Formatter):
         base = f"{ts_colored} {level_colored} {logger_colored} {record.getMessage()}"
 
         extras = {}
+        multiline_blocks = []
+        
         for k, v in record.__dict__.items():
             if k in self._SKIP_KEYS or v is None:
                 continue
-            extras[k] = v
+            
+            # Extract large pipeline outputs like 'stdout_tail' into a readable block
+            if isinstance(v, dict) and "stdout_tail" in v:
+                v_copy = dict(v)
+                tail = v_copy.pop("stdout_tail")
+                multiline_blocks.append((f"{k}.stdout_tail", str(tail)))
+                if v_copy:
+                    extras[k] = v_copy
+            # Make any long string with newlines render separately, instead of as an inline dict string
+            elif isinstance(v, str) and '\n' in v:
+                multiline_blocks.append((k, v))
+            else:
+                extras[k] = v
 
         if extras:
             def _fmt_val(val: Any) -> str:
@@ -246,6 +260,12 @@ class HumanReadableFormatter(logging.Formatter):
 
             extras_str = " ".join(f"{k}={_fmt_val(v)}" for k, v in sorted(extras.items()))
             base = f"{base} | {extras_str}"
+
+        for name, text in multiline_blocks:
+            header = f"\n{color}--- {name} ---{self.RESET}"
+            footer = f"\n{color}{'-'* (len(name)+8)}{self.RESET}"
+            # Render blocks cleanly underneath the log line
+            base += f"{header}\n{text.strip()}{footer}"
 
         if record.exc_info:
             # Use the standard exception formatting appended on new lines.
@@ -679,6 +699,12 @@ def setup_logging():
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(HumanReadableFormatter())
         root_logger.addHandler(console_handler)
+
+    # Force uvicorn logging to use our root logger to maintain color, timestamps, and routing
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uv_logger = logging.getLogger(logger_name)
+        uv_logger.handlers.clear()
+        uv_logger.propagate = True
 
     # Keep the application logger available for component-specific logs.
     get_app_logger()
