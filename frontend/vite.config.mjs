@@ -2,6 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+const backendHost = process.env.BACKEND_HOST || 'localhost'
+const httpTarget = `http://${backendHost}:8000`
+const wsTarget = `ws://${backendHost}:8000`
+
+const httpProxy = { target: httpTarget, changeOrigin: true, secure: false }
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -13,65 +19,21 @@ export default defineConfig({
     port: 5173,
     open: true,
     proxy: {
-      '/udf': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/predictions': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/predict': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/scripts': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/portfolio': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/data': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/health': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/trading': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/backtest': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
-      '/jobs': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
-      },
+      '/udf': httpProxy,
+      '/predictions': httpProxy,
+      '/predict': httpProxy,
+      '/scripts': httpProxy,
+      '/portfolio': httpProxy,
+      '/data': httpProxy,
+      '/health': httpProxy,
+      '/trading': httpProxy,
+      '/backtest': httpProxy,
+      '/jobs': httpProxy,
+      '/api': httpProxy,
       '/ws': {
-        target: 'ws://backend:8000',
+        target: wsTarget,
         ws: true,
         changeOrigin: true
-      },
-      '/api': {
-        target: 'http://backend:8000',
-        changeOrigin: true,
-        secure: false
       }
     }
   }
