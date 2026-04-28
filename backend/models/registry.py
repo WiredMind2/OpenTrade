@@ -80,6 +80,9 @@ class ModelRegistry:
             for py_file in models_pkg_dir.glob("*.py"):
                 if py_file.name.startswith('_'):
                     continue
+                # Skip non-model modules that break discovery when imported out-of-package
+                if py_file.name in {"registry.py", "base.py"}:
+                    continue
 
                 try:
                     # Import the module
@@ -92,11 +95,17 @@ class ModelRegistry:
                         for name, obj in inspect.getmembers(module):
                             if (inspect.isclass(obj) and
                                 issubclass(obj, BaseModel) and
-                                obj != BaseModel):
-                                # Instantiate the model class
-                                model = obj()
-                                models.append(model)
-                                self.logger.info(f"Discovered Python model: {model.name}")
+                                obj != BaseModel and
+                                # Ensure the class is defined in this module (not just imported)
+                                getattr(obj, "__module__", None) == getattr(module, "__name__", None) and
+                                not inspect.isabstract(obj)):
+                                try:
+                                    model = obj()
+                                    models.append(model)
+                                    self.logger.info(f"Discovered Python model: {model.name}")
+                                except TypeError as e:
+                                    # Class likely requires constructor args; treat as non-discoverable.
+                                    self.logger.debug(f"Skipping model class {obj} (init args required): {e}")
 
                 except Exception as e:
                     self.logger.error(f"Failed to load model module {py_file}: {e}")

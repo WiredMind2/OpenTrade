@@ -33,7 +33,7 @@ class ScriptModelAdapter(BaseModelAdapter):
     def _get_db_connection(self) -> sqlite3.Connection:
         """Get database connection from app state."""
         from backend.main import app_state  # Import here to avoid circular imports
-        db_path = app_state.get("database_path", "data/backtest.db")
+        db_path = app_state.get("database_path") or "data/backtest.db"
         return sqlite3.connect(db_path)
 
     def _predict_impl(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
