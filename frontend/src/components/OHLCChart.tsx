@@ -134,8 +134,16 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
        const renderPredictionProjections = () => {
          if (!widgetRef.current) return;
 
-         const chart = widgetRef.current.chart();
-         if (!chart) return;
+          
+
+        let chart;
+        try {
+          chart = widgetRef.current.chart();
+        } catch (error) {
+          console.warn("[OHLCChart] Chart not ready or already removed");
+          return;
+        }
+        if (!chart) return;
 
          // Clear existing prediction entities
          predictionEntitiesRef.current.forEach(entityId => {
@@ -496,7 +504,12 @@ widgetRef.current = new TradingView.widget(widgetOptions);
 
     // Re-render prediction projections when settings change
     useEffect(() => {
-      renderPredictionProjections();
+     if (!widgetRef.current) return;
+
+  const timeout = setTimeout(() => {
+    renderPredictionProjections();
+    }, 300);
+    return () => clearTimeout(timeout);
     }, [predictionSettings, symbol]);
 
     // Expose public API via ref
