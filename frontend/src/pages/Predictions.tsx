@@ -47,6 +47,7 @@ export default function Predictions() {
   const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
 
   const chartRef = useRef<any>(null)
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fetchPredictions = async () => {
     setLoading(true)
@@ -258,27 +259,40 @@ export default function Predictions() {
                 <Input
                   value={tickerSearch}
                   onChange={(e) => {
-                    setTickerSearch(e.target.value.toUpperCase())
-                    setShowTickerSuggestions(false)
-                  }}
-                  onFocus={() => {
-                    if (tickerSuggestions.length > 0) {
-                      setShowTickerSuggestions(true)
+                    const val = e.target.value.toUpperCase()
+                    setTickerSearch(val)
+                    // Show local matches immediately
+                    const local = val
+                      ? availableTickers.filter(t => t.includes(val))
+                      : availableTickers
+                    setTickerSuggestions(local)
+                    setShowTickerSuggestions(true)
+                    // Then auto-search UDF after 400ms idle
+                    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+                    if (val.length >= 1) {
+                      searchDebounceRef.current = setTimeout(() => {
+                        void searchAndAddTicker(val)
+                      }, 400)
                     }
                   }}
+                  onFocus={() => {
+                    const local = tickerSearch
+                      ? availableTickers.filter(t => t.includes(tickerSearch))
+                      : availableTickers
+                    setTickerSuggestions(local)
+                    setShowTickerSuggestions(true)
+                  }}
                   onBlur={() => {
-                    // Delay closing so click events on suggestions can fire first.
                     window.setTimeout(() => setShowTickerSuggestions(false), 120)
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
-                      if (tickerSearch.trim()) {
-                        void searchAndAddTicker()
-                      }
+                      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+                      if (tickerSearch.trim()) void searchAndAddTicker()
                     }
                   }}
-                  placeholder="Search ticker (e.g. GOOGL)"
+                  placeholder="Ticker (e.g. AAPL)"
                   className="font-mono"
                 />
                 <Button
