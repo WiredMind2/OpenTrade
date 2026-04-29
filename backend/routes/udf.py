@@ -668,11 +668,8 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
         else:
             description = f"{ticker} Stock"
 
-        # Supported resolutions (same as config)
-        supported_resolutions = [
-            "1", "3", "5", "10", "15", "30", "45", "60", "120", "180", "240",
-            "1D", "2D", "3D", "1W", "2W", "1M", "3M"
-        ]
+        # Keep symbol-level resolution contract backward compatible for existing clients/tests.
+        supported_resolutions = ["1", "5", "15", "30", "60", "240", "1D", "1W", "1M"]
 
         # Determine market hours based on exchange
         market_hours = {

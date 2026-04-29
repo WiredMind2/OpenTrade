@@ -149,11 +149,43 @@ class SentimentMLStrategy(RecursiveForecastStrategy):
 
         return {"job_id": job_id, "status": "queued"}
 
+    @staticmethod
+    def _resolve_db_path() -> str:
+        """Resolve database path from app state when available."""
+        try:
+            from backend.main import app_state
+
+            db_path = app_state.get("database_path")
+            if db_path:
+                return db_path
+        except Exception:
+            pass
+        return "data/backtest.db"
+
+    @staticmethod
+    def _ensure_model_jobs_table(conn: sqlite3.Connection) -> None:
+        """Create model_jobs table when missing so tests and fresh DBs work."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_jobs (
+                id TEXT PRIMARY KEY,
+                model_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                config TEXT,
+                result TEXT,
+                error TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+
     def _store_job(self, job_id: str, model_name: str, status: str, config: dict = None):
         """Store job in database."""
-        db_path = "data/backtest.db"  # Default path, could be made configurable
+        db_path = self._resolve_db_path()
         conn = sqlite3.connect(db_path)
         try:
+            self._ensure_model_jobs_table(conn)
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO model_jobs (id, model_name, status, config)
@@ -165,9 +197,10 @@ class SentimentMLStrategy(RecursiveForecastStrategy):
 
     def _update_job_status(self, job_id: str, status: str, result: dict = None, error: str = None):
         """Update job status in database."""
-        db_path = "data/backtest.db"
+        db_path = self._resolve_db_path()
         conn = sqlite3.connect(db_path)
         try:
+            self._ensure_model_jobs_table(conn)
             cur = conn.cursor()
             cur.execute("""
                 UPDATE model_jobs

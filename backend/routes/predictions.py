@@ -174,7 +174,7 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
         model_key = f"lightgbm_{request.horizon}"
         models_loaded = app_state.get("models_loaded") or {}
         if model_key not in models_loaded:
-            raise HTTPException(status_code=503, detail=f"No model available for horizon {request.horizon}")
+            raise HTTPException(status_code=404, detail=f"No model available for horizon {request.horizon}")
         model_entry = models_loaded.get(model_key) or {}
         if "lgbm" in model_entry and model_entry.get("lgbm") is None:
             raise HTTPException(status_code=500, detail=f"Model for horizon {request.horizon} is not initialized")
@@ -235,7 +235,7 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
         raise
     except KeyError as e:
         if "No model available for horizon" in str(e):
-            raise HTTPException(status_code=503, detail=str(e))
+            raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Prediction failed for {request.ticker}: {str(e)}")
