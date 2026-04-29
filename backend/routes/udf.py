@@ -127,6 +127,7 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
             'High': 'high',
             'Low': 'low',
             'Close': 'close',
+            'Adj Close': 'adjusted_close',
             'Volume': 'volume'
         })
 
@@ -160,8 +161,8 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
                 if table == 'price_daily':
                     cur.execute(f'''
                         INSERT OR REPLACE INTO {table}
-                        (ticker, date, open, high, low, close, volume)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (ticker, date, open, high, low, close, adjusted_close, volume)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         row['ticker'],
                         row['date'],
@@ -169,6 +170,11 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
                         float(row['high']) if pd.notna(row['high']) else None,
                         float(row['low']) if pd.notna(row['low']) else None,
                         float(row['close']) if pd.notna(row['close']) else None,
+                        (
+                            float(row['adjusted_close'])
+                            if ('adjusted_close' in row and pd.notna(row['adjusted_close']))
+                            else (float(row['close']) if pd.notna(row['close']) else None)
+                        ),
                         int(row['volume']) if pd.notna(row['volume']) else None
                     ))
                 else:  # price_minute
@@ -201,6 +207,93 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
     except Exception as e:
         logger.error(f"Failed to fetch external data for {symbol}: {str(e)}")
         return False
+
+
+def _get_latest_dt_for_symbol(conn: sqlite3.Connection, table: str, symbol: str) -> Optional[datetime]:
+    """Return latest timestamp (UTC) we have for a symbol in a given table."""
+    date_col = "date" if table == "price_daily" else "dt"
+    cur = conn.cursor()
+    cur.execute(
+        f"SELECT MAX({date_col}) FROM {table} WHERE ticker = ?",
+        (symbol.upper(),),
+    )
+    row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        # Normalize to a naive UTC datetime to avoid tz-aware/naive arithmetic issues.
+        dt = pd.to_datetime(row[0], utc=True, errors="coerce").to_pydatetime()
+        return dt.replace(tzinfo=None) if dt else None
+    except Exception:
+        return None
+
+
+def _maybe_refresh_latest_data(symbol: str, table: str, to_date: datetime, from_date_hint: datetime) -> bool:
+    """Fetch and persist missing recent bars if DB data is stale.
+
+    This prevents the chart from getting stuck on old historical data when the DB already
+    contains *some* rows for the symbol but hasn't been updated recently.
+    """
+    try:
+        from backend.main import app_state
+        config = get_config()
+        db_path = app_state.get('database_path') or config.database.path
+
+        with sqlite3.connect(db_path) as conn:
+            latest = _get_latest_dt_for_symbol(conn, table, symbol)
+
+        if latest is None:
+            return False
+
+        # Choose minimal "freshness" threshold to avoid refetching on every request.
+        # Daily: if we're behind by >= 1 day. Minute: behind by >= 5 minutes.
+        if table == "price_daily":
+            latest_floor = latest.date()
+            if to_date.date() <= latest_floor:
+                return False
+            fetch_from = max(from_date_hint, datetime(latest_floor.year, latest_floor.month, latest_floor.day) + timedelta(days=1))
+        else:
+            # Minute data timestamps can be naive/UTC-ish in yfinance; treat as UTC strings in DB.
+            # Fetch a small overlap (1 minute) to guarantee we don't miss a boundary bar.
+            if (to_date - latest) <= timedelta(minutes=5):
+                return False
+            fetch_from = max(from_date_hint, latest - timedelta(minutes=1))
+
+        if fetch_from >= to_date:
+            return False
+
+        logger.info(
+            "UDF history: refreshing latest %s data for %s from %s to %s",
+            table,
+            symbol.upper(),
+            fetch_from,
+            to_date,
+        )
+        return fetch_external_data(symbol.upper(), table, fetch_from, to_date)
+    except Exception as e:
+        logger.warning("UDF history: latest refresh check failed for %s (%s): %s", symbol, table, e)
+        return False
+
+
+def _ensure_symbol_available(db_path: str, symbol: str) -> bool:
+    """Ensure a symbol exists in DB, bootstrapping via external fetch when needed."""
+    normalized_symbol = symbol.upper().strip()
+    validator = DataValidator(db_path)
+    if validator.validate_symbol_exists(normalized_symbol):
+        return True
+
+    logger.warning(
+        "UDF symbols: %s missing in DB, attempting bootstrap fetch",
+        normalized_symbol,
+    )
+    # Fetch a reasonable recent daily window; this also inserts into tickers table.
+    fetch_to = datetime.now()
+    fetch_from = fetch_to - timedelta(days=365 * 2)
+    if not fetch_external_data(normalized_symbol, "price_daily", fetch_from, fetch_to):
+        return False
+
+    validator = DataValidator(db_path)
+    return validator.validate_symbol_exists(normalized_symbol)
 
 
 @router.get("/config", tags=["UDF"])
@@ -412,10 +505,9 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
         if normalized_symbol.endswith('.US'):
             normalized_symbol = normalized_symbol[:-3]
 
-        # Validate symbol exists
-        if not validator.validate_symbol_exists(normalized_symbol):
-            logger.warning(f"Symbol {normalized_symbol} not found in database")
-            # Return UDF error format for consistency
+        # Validate symbol exists (bootstrap fetch for empty DBs).
+        if not _ensure_symbol_available(db_path, normalized_symbol):
+            logger.warning(f"Symbol {normalized_symbol} not found in database after bootstrap attempt")
             return {
                 "s": "error",
                 "errmsg": f"Symbol '{symbol}' not found"
@@ -696,6 +788,20 @@ async def get_historical_data(
                 f"UDF history: normalized stale/invalid range using countback={countback}: "
                 f"{from_date} to {to_date}"
             )
+        elif should_normalize_to_recent:
+            # Some clients send invalid/stale windows without countback on initial load.
+            # Use a safe recent fallback so bootstrap fetches can populate empty DBs.
+            if table == "price_daily":
+                lookback_delta = timedelta(days=365 * 2)
+            else:
+                lookback_delta = timedelta(days=30)
+
+            to_date = current_time
+            from_date = current_time - lookback_delta
+            logger.warning(
+                "UDF history: normalized stale/invalid range without countback: "
+                f"{from_date} to {to_date}"
+            )
 
         logger.info(f"UDF history: date range {from_date} to {to_date}")
 
@@ -725,6 +831,10 @@ async def get_historical_data(
                     "s": "error",
                     "errmsg": f"Failed to register symbol '{symbol}' after external fetch"
                 }
+
+        # If we already have data but it's stale (e.g. DB only contains historical Kaggle dump),
+        # pull the missing recent bars and persist them before serving the query.
+        _maybe_refresh_latest_data(symbol.upper(), table, to_date, from_date)
 
         # Let TradingView stop requesting older chunks naturally.
         if to_ts < 0 and from_ts < 0:

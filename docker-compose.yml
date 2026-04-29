@@ -10,7 +10,9 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./models:/app/models
-      - ./data:/app/data
+      # SQLite writes can hit Windows bind-mount limitations (disk I/O errors, locking).
+      # Use a named Docker volume for /app/data to make ingestion reliable and faster.
+      - backtesting-data:/app/data
       - ./db:/app/db
       - ./.env:/app/.env:ro
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -29,3 +31,6 @@ services:
       - /app/node_modules
     depends_on:
       - backend
+
+volumes:
+  backtesting-data:
