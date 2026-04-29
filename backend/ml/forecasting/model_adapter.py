@@ -41,4 +41,25 @@ def build_model_adapter(name: str, params: Dict[str, Any] | None = None) -> Mode
         import lightgbm as lgb
 
         return ModelAdapter("lightgbm", lgb.LGBMRegressor(**({"n_estimators": 300} | p)))
+    if key in {"xgboost", "xgb"}:
+        from xgboost import XGBRegressor
+
+        defaults = {
+            "objective": "reg:squarederror",
+            "tree_method": "hist",
+            "booster": "gbtree",
+            "n_estimators": 400,
+            "learning_rate": 0.03,
+            "max_depth": 4,
+            "min_child_weight": 8,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "gamma": 0.0,
+            "reg_alpha": 0.1,
+            "reg_lambda": 1.0,
+            "max_bin": 256,
+            "random_state": 42,
+            "n_jobs": -1,
+        }
+        return ModelAdapter("xgboost", XGBRegressor(**(defaults | p)))
     raise ValueError(f"Unsupported model: {name}")

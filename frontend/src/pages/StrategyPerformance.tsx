@@ -24,6 +24,7 @@ import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Skeleton } from '../components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import {
   getStrategyAnalyticsFilters,
   getStrategyAnalyticsSummary,
@@ -53,6 +54,7 @@ export default function StrategyPerformance() {
   const [selectedPreset, setSelectedPreset] = useState('MAX')
   const [selectedGranularity, setSelectedGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily')
   const [selectedRolling, setSelectedRolling] = useState(30)
+  const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -168,7 +170,19 @@ export default function StrategyPerformance() {
     [summary]
   )
 
-  const activeMetric: StrategyMetricPoint | undefined = summary?.metrics[0]
+  useEffect(() => {
+    const firstStrategy = summary?.metrics[0]?.strategy ?? null
+    if (!firstStrategy) {
+      setActiveStrategy(null)
+      return
+    }
+    if (!activeStrategy || !summary?.metrics.some((m) => m.strategy === activeStrategy)) {
+      setActiveStrategy(firstStrategy)
+    }
+  }, [summary, activeStrategy])
+
+  const activeMetric: StrategyMetricPoint | undefined =
+    summary?.metrics.find((m) => m.strategy === activeStrategy) ?? summary?.metrics[0]
   const activeDist = activeMetric ? distMap[activeMetric.strategy] : undefined
   const activeSeries = activeMetric ? seriesMap[activeMetric.strategy] : undefined
 
@@ -261,6 +275,25 @@ export default function StrategyPerformance() {
         </div>
       ) : (
         <>
+          <Card>
+            <CardHeader>
+              <CardTitle>Active Strategy</CardTitle>
+              <CardDescription>Select which strategy drives the detailed panels below.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              {(summary?.metrics ?? []).map((metric) => (
+                <Button
+                  key={metric.strategy}
+                  size="sm"
+                  variant={activeMetric?.strategy === metric.strategy ? 'default' : 'outline'}
+                  onClick={() => setActiveStrategy(metric.strategy)}
+                >
+                  {metric.strategy}
+                </Button>
+              ))}
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Card><CardHeader><CardDescription>Total Return</CardDescription><CardTitle className="text-2xl">{activeMetric ? fmtPct(activeMetric.total_return) : '-'}</CardTitle></CardHeader></Card>
             <Card><CardHeader><CardDescription>Sharpe / Sortino</CardDescription><CardTitle className="text-2xl">{activeMetric ? `${fmtNum(activeMetric.sharpe)} / ${fmtNum(activeMetric.sortino)}` : '-'}</CardTitle></CardHeader></Card>
@@ -268,172 +301,191 @@ export default function StrategyPerformance() {
             <Card><CardHeader><CardDescription>Win Rate</CardDescription><CardTitle className="text-2xl">{activeMetric ? fmtPct(activeMetric.win_rate) : '-'}</CardTitle></CardHeader></Card>
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5 text-primary" />Normalized Equity Comparison</CardTitle>
-              </CardHeader>
-              <CardContent className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={comparisonCurve}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" hide />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    {(summary?.metrics ?? []).map((m, idx) => (
-                      <Line key={m.strategy} dataKey={m.strategy} stroke={COLOR_PALETTE[idx % COLOR_PALETTE.length]} dot={false} strokeWidth={2} />
-                    ))}
-                    <Line dataKey={`${selectedBenchmark}_benchmark`} stroke="#94a3b8" strokeDasharray="6 3" dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+          <Tabs defaultValue="overview">
+            <TabsList>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="risk">Risk</TabsTrigger>
+              <TabsTrigger value="distributions">Distributions</TabsTrigger>
+              <TabsTrigger value="monthly">Monthly</TabsTrigger>
+            </TabsList>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Gauge className="h-5 w-5 text-primary" />Risk vs Return Scatter</CardTitle>
-              </CardHeader>
-              <CardContent className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart>
-                    <CartesianGrid />
-                    <XAxis type="number" dataKey="risk" name="Volatility" />
-                    <YAxis type="number" dataKey="return" name="CAGR" />
-                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                    <Scatter data={riskReturnScatter} fill="#3b82f6" />
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+            <TabsContent value="overview" className="mt-4">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5 text-primary" />Normalized Equity Comparison</CardTitle>
+                  </CardHeader>
+                  <CardContent className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={comparisonCurve}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="date" hide />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        {(summary?.metrics ?? []).map((m, idx) => (
+                          <Line key={m.strategy} dataKey={m.strategy} stroke={COLOR_PALETTE[idx % COLOR_PALETTE.length]} dot={false} strokeWidth={2} />
+                        ))}
+                        <Line dataKey={`${selectedBenchmark}_benchmark`} stroke="#94a3b8" strokeDasharray="6 3" dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5 text-primary" />Rolling Sharpe & Sortino</CardTitle>
-              </CardHeader>
-              <CardContent className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={activeSeries?.points ?? []}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" hide />
-                    <YAxis />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="rolling_sharpe" stroke="#3b82f6" dot={false} strokeWidth={2} />
-                    <Line type="monotone" dataKey="rolling_sortino" stroke="#10b981" dot={false} strokeWidth={2} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Target className="h-5 w-5 text-primary" />Metric Ranking</CardTitle>
-              </CardHeader>
-              <CardContent className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={rankingBars}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="strategy" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="cagr" fill="#3b82f6" />
-                    <Bar dataKey="sharpe" fill="#10b981" />
-                    <Line dataKey="maxDrawdown" stroke="#ef4444" dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="h-5 w-5 text-primary" />Returns Distribution</CardTitle></CardHeader>
-              <CardContent className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={activeDist?.returns_histogram ?? []}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="bucket" hide />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#6366f1" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle>Trade PnL Distribution</CardTitle></CardHeader>
-              <CardContent className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={activeDist?.trade_pnl_histogram ?? []}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="bucket" hide />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#0ea5e9" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle>PnL Contribution by Symbol</CardTitle></CardHeader>
-              <CardContent className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={activeDist?.pnl_by_symbol ?? []}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="bucket" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="value">
-                      {(activeDist?.pnl_by_symbol ?? []).map((_, idx) => (
-                        <Cell key={idx} fill={COLOR_PALETTE[idx % COLOR_PALETTE.length]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Monthly Returns Matrix</CardTitle>
-              <CardDescription>Heatmap-style table for rapid monthly seasonality comparison.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="text-left py-2 pr-3">Year</th>
-                      {Array.from({ length: 12 }, (_, i) => (
-                        <th key={i} className="text-right py-2 px-2">{String(i + 1).padStart(2, '0')}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(activeSeries?.monthly_returns ?? {}).map(([year, months]) => (
-                      <tr key={year} className="border-b border-border/50">
-                        <td className="py-2 pr-3 font-medium">{year}</td>
-                        {Array.from({ length: 12 }, (_, i) => {
-                          const key = String(i + 1).padStart(2, '0')
-                          const value = months[key]
-                          return (
-                            <td key={key} className="text-right py-2 px-2">
-                              {value === undefined ? (
-                                <Badge variant="outline">-</Badge>
-                              ) : (
-                                <Badge variant={value >= 0 ? 'success' : 'destructive'}>{fmtPct(value)}</Badge>
-                              )}
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><Gauge className="h-5 w-5 text-primary" />Risk vs Return Scatter</CardTitle>
+                  </CardHeader>
+                  <CardContent className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ScatterChart>
+                        <CartesianGrid />
+                        <XAxis type="number" dataKey="risk" name="Volatility" />
+                        <YAxis type="number" dataKey="return" name="CAGR" />
+                        <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                        <Scatter data={riskReturnScatter} fill="#3b82f6" />
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
               </div>
-            </CardContent>
-          </Card>
+            </TabsContent>
+
+            <TabsContent value="risk" className="mt-4">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5 text-primary" />Rolling Sharpe & Sortino</CardTitle>
+                  </CardHeader>
+                  <CardContent className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={activeSeries?.points ?? []}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="date" hide />
+                        <YAxis />
+                        <Tooltip />
+                        <Line type="monotone" dataKey="rolling_sharpe" stroke="#3b82f6" dot={false} strokeWidth={2} />
+                        <Line type="monotone" dataKey="rolling_sortino" stroke="#10b981" dot={false} strokeWidth={2} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><Target className="h-5 w-5 text-primary" />Metric Ranking</CardTitle>
+                  </CardHeader>
+                  <CardContent className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={rankingBars}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="strategy" />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="cagr" fill="#3b82f6" />
+                        <Bar dataKey="sharpe" fill="#10b981" />
+                        <Line dataKey="maxDrawdown" stroke="#ef4444" dot={false} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="distributions" className="mt-4">
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <Card>
+                  <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="h-5 w-5 text-primary" />Returns Distribution</CardTitle></CardHeader>
+                  <CardContent className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={activeDist?.returns_histogram ?? []}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="bucket" hide />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#6366f1" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader><CardTitle>Trade PnL Distribution</CardTitle></CardHeader>
+                  <CardContent className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={activeDist?.trade_pnl_histogram ?? []}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="bucket" hide />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#0ea5e9" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader><CardTitle>PnL Contribution by Symbol</CardTitle></CardHeader>
+                  <CardContent className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={activeDist?.pnl_by_symbol ?? []}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="bucket" />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="value">
+                          {(activeDist?.pnl_by_symbol ?? []).map((_, idx) => (
+                            <Cell key={idx} fill={COLOR_PALETTE[idx % COLOR_PALETTE.length]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="monthly" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Monthly Returns Matrix</CardTitle>
+                  <CardDescription>Heatmap-style table for rapid monthly seasonality comparison.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left py-2 pr-3">Year</th>
+                          {Array.from({ length: 12 }, (_, i) => (
+                            <th key={i} className="text-right py-2 px-2">{String(i + 1).padStart(2, '0')}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(activeSeries?.monthly_returns ?? {}).map(([year, months]) => (
+                          <tr key={year} className="border-b border-border/50">
+                            <td className="py-2 pr-3 font-medium">{year}</td>
+                            {Array.from({ length: 12 }, (_, i) => {
+                              const key = String(i + 1).padStart(2, '0')
+                              const value = months[key]
+                              return (
+                                <td key={key} className="text-right py-2 px-2">
+                                  {value === undefined ? (
+                                    <Badge variant="outline">-</Badge>
+                                  ) : (
+                                    <Badge variant={value >= 0 ? 'success' : 'destructive'}>{fmtPct(value)}</Badge>
+                                  )}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         </>
       )}
     </div>

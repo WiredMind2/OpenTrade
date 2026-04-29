@@ -234,23 +234,7 @@ def resample_ohlc_data(df: pd.DataFrame, resolution: str) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Convert resolution to pandas frequency
-    freq_map = {
-        '1': '1min',
-        '5': '5min',
-        '15': '15min',
-        '30': '30min',
-        '60': '1h',
-        '240': '4h',
-        '1D': '1D',
-        '1W': '1W',
-        '1M': '1M'
-    }
-
-    freq = freq_map.get(resolution)
-    if not freq:
-        # Default to 1 minute if resolution not recognized
-        freq = '1min'
+    freq = resolution_to_pandas_freq(resolution)
 
     # Set date as index and sort
     df = df.copy()
@@ -283,18 +267,26 @@ def parse_resolution(resolution: str) -> tuple[str, str]:
     Returns:
         Tuple of (table_name, target_resolution)
     """
-    # Determine table based on resolution
-    if resolution.endswith('D') or resolution.endswith('W') or resolution.endswith('M'):
-        table = 'price_daily'
-        # For daily+ resolutions, we might need to resample further
-        # But for now, return as-is since price_daily is already daily
-        target_resolution = resolution
-    else:
-        # Intraday resolutions
-        table = 'price_minute'
-        target_resolution = resolution
+    normalized = (resolution or "").strip().upper()
+    if not normalized:
+        return "price_daily", "1D"
 
-    return table, target_resolution
+    # Pure numeric resolutions are minute-based in TradingView/UDF (e.g. "1", "60", "120").
+    if normalized.isdigit():
+        return "price_minute", normalized
+
+    # Support higher timeframe strings like D/W/M and their multipliers (e.g. "D", "2W", "3M").
+    if normalized.endswith(("D", "W", "M")):
+        if normalized in {"D", "W", "M"}:
+            normalized = f"1{normalized}"
+        return "price_daily", normalized
+
+    # Support hour-form resolutions like "1H" and "4H" as intraday.
+    if normalized.endswith("H"):
+        return "price_minute", normalized
+
+    # Fallback to daily if unknown format is requested.
+    return "price_daily", "1D"
 
 
 def resolution_to_timeframe(resolution: str) -> str:
@@ -307,18 +299,69 @@ def resolution_to_timeframe(resolution: str) -> str:
     Returns:
         Timeframe string (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w, 1M)
     """
-    resolution_map = {
-        '1': '1m',
-        '5': '5m',
-        '15': '15m',
-        '30': '30m',
-        '60': '1h',
-        '240': '4h',
-        '1D': '1d',
-        '1W': '1w',
-        '1M': '1M'
-    }
-    return resolution_map.get(resolution, '1d')
+    normalized = (resolution or "").strip().upper()
+    if not normalized:
+        return "1d"
+
+    if normalized.isdigit():
+        minutes = int(normalized)
+        if minutes > 0 and minutes % 60 == 0:
+            return f"{minutes // 60}h"
+        return f"{max(minutes, 1)}m"
+
+    if normalized.endswith("H"):
+        hours_str = normalized[:-1] or "1"
+        hours = int(hours_str) if hours_str.isdigit() else 1
+        return f"{max(hours, 1)}h"
+
+    if normalized.endswith("D"):
+        days_str = normalized[:-1] or "1"
+        days = int(days_str) if days_str.isdigit() else 1
+        return f"{max(days, 1)}d"
+
+    if normalized.endswith("W"):
+        weeks_str = normalized[:-1] or "1"
+        weeks = int(weeks_str) if weeks_str.isdigit() else 1
+        return f"{max(weeks, 1)}w"
+
+    if normalized.endswith("M"):
+        months_str = normalized[:-1] or "1"
+        months = int(months_str) if months_str.isdigit() else 1
+        return f"{max(months, 1)}M"
+
+    return "1d"
+
+
+def resolution_to_pandas_freq(resolution: str) -> str:
+    """Convert UDF resolution to a pandas resampling frequency string."""
+    normalized = (resolution or "").strip().upper()
+    if not normalized:
+        return "1D"
+
+    if normalized.isdigit():
+        return f"{max(int(normalized), 1)}min"
+
+    if normalized.endswith("H"):
+        hours = normalized[:-1] or "1"
+        n = int(hours) if hours.isdigit() else 1
+        return f"{max(n, 1)}h"
+
+    if normalized.endswith("D"):
+        days = normalized[:-1] or "1"
+        n = int(days) if days.isdigit() else 1
+        return f"{max(n, 1)}D"
+
+    if normalized.endswith("W"):
+        weeks = normalized[:-1] or "1"
+        n = int(weeks) if weeks.isdigit() else 1
+        return f"{max(n, 1)}W"
+
+    if normalized.endswith("M"):
+        months = normalized[:-1] or "1"
+        n = int(months) if months.isdigit() else 1
+        return f"{max(n, 1)}ME"
+
+    return "1D"
 
 
 def timeframe_to_resolution(timeframe: str) -> str:

@@ -28,7 +28,12 @@ except ImportError:
 from backend.logging_config import get_component_logger
 from backend.config import get_config
 from backend.schemas.udf import DatafeedConfiguration, Exchange, DatafeedSymbolType, SymbolInfo
-from backend.data_processing import resample_ohlc_data, parse_resolution, resolution_to_timeframe
+from backend.data_processing import (
+    resample_ohlc_data,
+    parse_resolution,
+    resolution_to_timeframe,
+    resolution_to_pandas_freq,
+)
 from backend.data_validation import DataValidator
 from backend.cache import udf_history_cache
 
@@ -451,7 +456,10 @@ async def get_config_endpoint():
 
         # Supported resolutions based on available data
         # We have price_minute (intraday) and price_daily tables
-        supported_resolutions = ["1", "5", "15", "30", "60", "240", "1D", "1W", "1M"]
+        supported_resolutions = [
+            "1", "3", "5", "10", "15", "30", "45", "60", "120", "180", "240",
+            "1D", "2D", "3D", "1W", "2W", "1M", "3M"
+        ]
 
         # Create DatafeedConfiguration object
         udf_config = DatafeedConfiguration(
@@ -661,7 +669,10 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
             description = f"{ticker} Stock"
 
         # Supported resolutions (same as config)
-        supported_resolutions = ["1", "5", "15", "30", "60", "240", "1D", "1W", "1M"]
+        supported_resolutions = [
+            "1", "3", "5", "10", "15", "30", "45", "60", "120", "180", "240",
+            "1D", "2D", "3D", "1W", "2W", "1M", "3M"
+        ]
 
         # Determine market hours based on exchange
         market_hours = {
@@ -775,7 +786,10 @@ async def get_symbol_info_group(
                 description = f"{ticker} Stock"
 
             # Supported resolutions (same as config)
-            supported_resolutions = ["1", "5", "15", "30", "60", "240", "1D", "1W", "1M"]
+            supported_resolutions = [
+                "1", "3", "5", "10", "15", "30", "45", "60", "120", "180", "240",
+                "1D", "2D", "3D", "1W", "2W", "1M", "3M"
+            ]
 
             # Determine market hours based on exchange
             market_hours = {
@@ -1077,12 +1091,8 @@ async def get_historical_data(
                 df_resample['date'] = pd.to_datetime(df_resample['date'], errors='coerce')
                 df_resample = df_resample.dropna(subset=['date']).set_index('date').sort_index()
 
-                # Convert timeframe to pandas frequency
-                freq_map = {
-                    '5m': '5min', '15m': '15min', '30m': '30min',
-                    '1h': '1H', '4h': '4H', '1w': 'W', '1M': 'M'
-                }
-                freq = freq_map.get(timeframe, '1D')
+                # Convert requested resolution to pandas frequency dynamically.
+                freq = resolution_to_pandas_freq(resolution)
 
                 # Perform efficient OHLC resampling
                 ohlc_df = df_resample[['open', 'high', 'low', 'close']].resample(freq).agg({

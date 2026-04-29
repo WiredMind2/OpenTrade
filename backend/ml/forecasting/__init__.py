@@ -18,6 +18,10 @@ from backend.ml.forecasting.model_adapter import ModelAdapter, build_model_adapt
 from backend.ml.forecasting.recursive_forecaster import RecursiveForecaster
 from backend.ml.forecasting.evaluator import Evaluator
 from backend.ml.forecasting.backtest_bridge import BacktestBridge
+from backend.ml.forecasting.xgb_intraday_strategy import (
+    XGBIntradayConfig,
+    XGBIntradayStrategyRunner,
+)
 
 __all__ = [
     "BacktestBridge",
@@ -35,5 +39,7 @@ __all__ = [
     "TargetMode",
     "WalkForwardSplit",
     "WalkForwardSplitter",
+    "XGBIntradayConfig",
+    "XGBIntradayStrategyRunner",
     "build_model_adapter",
 ]

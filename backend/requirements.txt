@@ -3,6 +3,7 @@ pandas
 numpy
 backtrader
 lightgbm
+xgboost
 sentence-transformers
 kaggle
 yfinance
