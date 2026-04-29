@@ -137,8 +137,18 @@ export const getLatestPriceAnchor = async (ticker: string): Promise<LatestPriceA
   }
 }
 
-export const createPrediction = async (ticker: string, horizon: string) => {
-  const response = await instance.post('/predict', { ticker: ticker.toUpperCase(), horizon })
+export const createPrediction = async (
+  ticker: string,
+  horizon: string,
+  strategyName?: string,
+  strategyParams?: Record<string, any>
+) => {
+  const response = await instance.post('/predict', {
+    ticker: ticker.toUpperCase(),
+    horizon,
+    strategy_name: strategyName,
+    strategy_params: strategyParams,
+  })
   return response.data
 }
 

@@ -134,12 +134,47 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
     logger.info(f"Prediction request received: ticker={request.ticker}, horizon={request.horizon}")
 
     try:
+        strategy_name = (request.strategy_name or "").strip()
+        if strategy_name:
+            registry = app_state.get("strategy_registry")
+            if not registry:
+                raise HTTPException(status_code=500, detail="Strategy registry not available")
+
+            strategy = registry.get(strategy_name)
+            if not strategy:
+                raise HTTPException(status_code=404, detail=f"Strategy '{strategy_name}' not found")
+
+            projection_days = int(request.horizon.replace("d", ""))
+            strategy_params = dict(request.strategy_params or {})
+            strategy_params["symbol"] = request.ticker.upper()
+            summary = strategy.project(
+                parameters=strategy_params,
+                projection_days=projection_days,
+                initial_capital=1.0,
+            )
+            predicted_return = float(summary.get("projected_return", 0.0))
+            confidence = float(summary.get("confidence", 0.5))
+            return PredictionResponse(
+                ticker=request.ticker.upper(),
+                horizon=request.horizon,
+                predicted_return=predicted_return,
+                confidence=max(0.0, min(1.0, confidence)),
+                timestamp=datetime.utcnow(),
+                model_version=strategy_name,
+                features_used=[],
+                metadata={
+                    "strategy_name": strategy_name,
+                    "strategy_params": strategy_params,
+                    "strategy_summary": summary,
+                },
+            )
+
         if os.getenv("ML_PREDICTION_V2_ENABLED", "true").lower() not in {"true", "1", "yes"}:
             raise HTTPException(status_code=503, detail="ML prediction v2 is disabled by configuration")
         model_key = f"lightgbm_{request.horizon}"
         models_loaded = app_state.get("models_loaded") or {}
         if model_key not in models_loaded:
-            raise HTTPException(status_code=404, detail=f"No model available for horizon {request.horizon}")
+            raise HTTPException(status_code=503, detail=f"No model available for horizon {request.horizon}")
         model_entry = models_loaded.get(model_key) or {}
         if "lgbm" in model_entry and model_entry.get("lgbm") is None:
             raise HTTPException(status_code=500, detail=f"Model for horizon {request.horizon} is not initialized")
@@ -200,7 +235,7 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
         raise
     except KeyError as e:
         if "No model available for horizon" in str(e):
-            raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=503, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Prediction failed for {request.ticker}: {str(e)}")

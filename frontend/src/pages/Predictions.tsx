@@ -139,7 +139,14 @@ export default function Predictions() {
     try {
       const normalizedTicker = ticker.trim().toUpperCase()
       const results = await Promise.all(
-        ['1d', '3d', '7d'].map(h => createPrediction(normalizedTicker, h))
+        ['1d', '3d', '7d'].map(h =>
+          createPrediction(
+            normalizedTicker,
+            h,
+            projectionStrategy || undefined,
+            projectionStrategy ? projectionParams : undefined
+          )
+        )
       )
       setPreds(prev => [...results, ...prev])
       setSelectedTicker(normalizedTicker)
@@ -251,6 +258,11 @@ export default function Predictions() {
           <CardDescription>
             Search a ticker, then click Predict to generate 1-day, 3-day and 7-day forecasts
           </CardDescription>
+          {projectionStrategy && (
+            <p className="text-xs text-muted-foreground">
+              Active prediction strategy: <span className="font-mono">{projectionStrategy}</span>
+            </p>
+          )}
         </CardHeader>
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-3">

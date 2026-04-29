@@ -57,6 +57,7 @@ export default function StrategyPerformance() {
   const [selectedGranularity, setSelectedGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily')
   const [selectedRolling, setSelectedRolling] = useState(30)
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
+  const [analyticsTab, setAnalyticsTab] = useState<'overview' | 'risk' | 'distributions' | 'monthly'>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -171,16 +172,6 @@ export default function StrategyPerformance() {
       })),
     [summary]
   )
-  const rollingSeries = useMemo(
-    () =>
-      (activeSeries?.points ?? []).map((p) => ({
-        ...p,
-        rolling_sharpe: safeNumber(p.rolling_sharpe, 0),
-        rolling_sortino: safeNumber(p.rolling_sortino, 0),
-      })),
-    [activeSeries]
-  )
-
   useEffect(() => {
     const firstStrategy = summary?.metrics[0]?.strategy ?? null
     if (!firstStrategy) {
@@ -196,6 +187,15 @@ export default function StrategyPerformance() {
     summary?.metrics.find((m) => m.strategy === activeStrategy) ?? summary?.metrics[0]
   const activeDist = activeMetric ? distMap[activeMetric.strategy] : undefined
   const activeSeries = activeMetric ? seriesMap[activeMetric.strategy] : undefined
+  const rollingSeries = useMemo(
+    () =>
+      (activeSeries?.points ?? []).map((p) => ({
+        ...p,
+        rolling_sharpe: safeNumber(p.rolling_sharpe, 0),
+        rolling_sortino: safeNumber(p.rolling_sortino, 0),
+      })),
+    [activeSeries]
+  )
 
   const toggleStrategy = (strategy: string) => {
     setSelectedStrategies((prev) =>
@@ -368,7 +368,7 @@ export default function StrategyPerformance() {
             </CardContent>
           </Card>
 
-          <Tabs defaultValue="overview">
+          <Tabs value={analyticsTab} onValueChange={(v) => setAnalyticsTab(v as typeof analyticsTab)}>
             <TabsList>
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="risk">Risk</TabsTrigger>
@@ -377,12 +377,13 @@ export default function StrategyPerformance() {
             </TabsList>
 
             <TabsContent value="overview" className="mt-4">
+              {analyticsTab === 'overview' && (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5 text-primary" />Normalized Equity Comparison</CardTitle>
                   </CardHeader>
-                  <CardContent className="h-72">
+                  <CardContent className="h-72 min-w-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={comparisonCurve}>
                         <CartesianGrid strokeDasharray="3 3" />
@@ -403,7 +404,7 @@ export default function StrategyPerformance() {
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2"><Gauge className="h-5 w-5 text-primary" />Risk vs Return Scatter</CardTitle>
                   </CardHeader>
-                  <CardContent className="h-72">
+                  <CardContent className="h-72 min-w-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <ScatterChart>
                         <CartesianGrid />
@@ -416,15 +417,17 @@ export default function StrategyPerformance() {
                   </CardContent>
                 </Card>
               </div>
+              )}
             </TabsContent>
 
             <TabsContent value="risk" className="mt-4">
+              {analyticsTab === 'risk' && (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5 text-primary" />Rolling Sharpe & Sortino</CardTitle>
                   </CardHeader>
-                  <CardContent className="h-72">
+                  <CardContent className="h-72 min-w-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={rollingSeries}>
                         <CartesianGrid strokeDasharray="3 3" />
@@ -442,7 +445,7 @@ export default function StrategyPerformance() {
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2"><Target className="h-5 w-5 text-primary" />Metric Ranking</CardTitle>
                   </CardHeader>
-                  <CardContent className="h-72">
+                  <CardContent className="h-72 min-w-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={rankingBars}>
                         <CartesianGrid strokeDasharray="3 3" />
@@ -457,13 +460,15 @@ export default function StrategyPerformance() {
                   </CardContent>
                 </Card>
               </div>
+              )}
             </TabsContent>
 
             <TabsContent value="distributions" className="mt-4">
+              {analyticsTab === 'distributions' && (
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                 <Card>
                   <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="h-5 w-5 text-primary" />Returns Distribution</CardTitle></CardHeader>
-                  <CardContent className="h-64">
+                  <CardContent className="h-64 min-w-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={activeDist?.returns_histogram ?? []}>
                         <CartesianGrid strokeDasharray="3 3" />
@@ -477,7 +482,7 @@ export default function StrategyPerformance() {
                 </Card>
                 <Card>
                   <CardHeader><CardTitle>Trade PnL Distribution</CardTitle></CardHeader>
-                  <CardContent className="h-64">
+                  <CardContent className="h-64 min-w-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={activeDist?.trade_pnl_histogram ?? []}>
                         <CartesianGrid strokeDasharray="3 3" />
@@ -491,7 +496,7 @@ export default function StrategyPerformance() {
                 </Card>
                 <Card>
                   <CardHeader><CardTitle>PnL Contribution by Symbol</CardTitle></CardHeader>
-                  <CardContent className="h-64">
+                  <CardContent className="h-64 min-w-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={activeDist?.pnl_by_symbol ?? []}>
                         <CartesianGrid strokeDasharray="3 3" />
@@ -508,6 +513,7 @@ export default function StrategyPerformance() {
                   </CardContent>
                 </Card>
               </div>
+              )}
             </TabsContent>
 
             <TabsContent value="monthly" className="mt-4">

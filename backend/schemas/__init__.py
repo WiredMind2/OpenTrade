@@ -24,6 +24,8 @@ class PredictionRequest(BaseModel):
     ticker: str = Field(..., description="Stock ticker symbol")
     horizon: str = Field(..., description="Prediction horizon: 1d, 3d, or 7d")
     context: Optional[Dict[str, Any]] = Field(default={}, description="Additional context")
+    strategy_name: Optional[str] = Field(default=None, description="Optional strategy to drive prediction output")
+    strategy_params: Optional[Dict[str, Any]] = Field(default={}, description="Optional strategy parameter overrides")
 
     @field_validator('horizon')
     @classmethod
