@@ -132,12 +132,19 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
   };
 
   return (
-    <div>
-      <label htmlFor="strategy-select">Select Strategy:</label>
-      <select id="strategy-select" value={selectedStrategy} onChange={handleStrategyChange}>
-        <option value="">-- Select a Strategy --</option>
+    <div className="space-y-1.5">
+      <label htmlFor="strategy-select" className="text-sm font-medium text-foreground">
+        Select Strategy
+      </label>
+      <select
+        id="strategy-select"
+        value={selectedStrategy}
+        onChange={handleStrategyChange}
+        className={inputClass}
+      >
+        <option value="" className="bg-secondary text-foreground">-- Select a Strategy --</option>
         {strategies.map(strategy => (
-          <option key={strategy.name} value={strategy.name}>
+          <option key={strategy.name} value={strategy.name} className="bg-secondary text-foreground">
             {strategy.name} - {strategy.description}
           </option>
         ))}
