@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.config import get_config
@@ -50,7 +50,7 @@ logger = get_component_logger(__file__)
 
 # Global state
 app_state = {
-    "start_time": datetime.utcnow(),
+    "start_time": datetime.now(timezone.utc).replace(tzinfo=None),
     "models_loaded": {},  # Keep for backward compatibility
     "model_registry": ModelRegistry(),
     "strategy_registry": strategy_registry,
@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
     # Start chart broadcasting task
     # Avoid background workers during tests to prevent file-handle leaks
     # (especially on Windows where SQLite files can't be unlinked while open).
-    is_test_env = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"))
+    is_test_env = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING") or ("pytest" in sys.modules))
     if not is_test_env:
         app_state["chart_broadcast_task"] = asyncio.create_task(chart_broadcast_worker())
 

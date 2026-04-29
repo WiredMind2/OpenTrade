@@ -8,7 +8,7 @@ import os
 import logging
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
@@ -103,7 +103,7 @@ class JSONFormatter(logging.Formatter):
         """Format log record as JSON."""
         # Extract standard fields
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -216,7 +216,7 @@ class HumanReadableFormatter(logging.Formatter):
         return '.'.join(parts[-max_parts:])
 
     def format(self, record: logging.LogRecord) -> str:
-        timestamp = datetime.utcnow().strftime("%H:%M:%S")
+        timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
         logger_name = self._short_logger_name(record.name, max_parts=3) 
         
         color = self.COLORS.get(record.levelname, self.RESET)

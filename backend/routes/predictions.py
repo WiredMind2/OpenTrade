@@ -7,7 +7,7 @@ import pandas as pd
 import sqlite3
 import time
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 import sys
 import os
@@ -32,6 +32,11 @@ router = APIRouter()
 logger.info("Predictions router created")
 
 PROJECTION_COLORS = ["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B", "#EF4444", "#06B6D4"]
+
+
+def _utc_now() -> datetime:
+    """Current UTC timestamp normalized to naive datetime for internal arithmetic."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _get_app_state() -> Dict[str, Any]:
@@ -88,7 +93,7 @@ def _persist_fallback_prediction(db_path: str, ticker: str, horizon: str, model_
             cols = {row[1] for row in cur.execute("PRAGMA table_info(sentiment_predictions)").fetchall()}
             if not cols:
                 return
-            now = datetime.utcnow().isoformat()
+            now = _utc_now().isoformat()
             values = {
                 "ticker": ticker.upper(),
                 "model": model_name,
@@ -159,7 +164,7 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
                 horizon=request.horizon,
                 predicted_return=predicted_return,
                 confidence=max(0.0, min(1.0, confidence)),
-                timestamp=datetime.utcnow(),
+                timestamp=_utc_now(),
                 model_version=strategy_name,
                 features_used=[],
                 metadata={
@@ -190,7 +195,7 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
                     horizon=request.horizon,
                     predicted_return=0.0,
                     confidence=0.1,
-                    timestamp=datetime.utcnow(),
+                    timestamp=_utc_now(),
                     model_version=model_key,
                     features_used=[],
                     metadata={"fallback": True, "reason": "no_market_context"},
@@ -247,7 +252,7 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
             horizon=request.horizon,
             predicted_return=0.0,
             confidence=0.1,
-            timestamp=datetime.utcnow(),
+            timestamp=_utc_now(),
             model_version=model_key,
             features_used=[],
             metadata={"fallback": True, "error": str(e)},
@@ -436,14 +441,14 @@ async def get_prediction_projections(request: ProjectionSeriesRequest):
         avg_confidence = float(np.mean([p["confidence"] for p in points])) if points else 0.5
         projections.append(
             {
-                "id": f"{symbol}_{strategy_name}_{int(datetime.utcnow().timestamp())}",
+                "id": f"{symbol}_{strategy_name}_{int(_utc_now().timestamp())}",
                 "ticker": symbol,
                 "modelName": strategy_name,
                 "horizon": request.horizon_days,
                 "points": points,
                 "confidence": round(avg_confidence, 4),
                 "color": PROJECTION_COLORS[index % len(PROJECTION_COLORS)],
-                "createdAt": datetime.utcnow().isoformat(),
+                "createdAt": _utc_now().isoformat(),
                 "metadata": {
                     "strategyType": metadata_by_name[strategy_name].get("type"),
                     "parameters": strategy_params,
@@ -650,7 +655,7 @@ async def get_chart_data(
         ]
 
         # Calculate metadata
-        now = datetime.utcnow()
+        now = _utc_now()
         if historical_data:
             latest_date = max(pd.to_datetime(hdp.date) for hdp in historical_data)
             hours_old = (now - latest_date).total_seconds() / 3600

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import joblib
@@ -46,7 +46,7 @@ class PredictionService:
         model_key = self._resolve_model_key(horizon)
         model_data = self.models_loaded[model_key]
         model = model_data.get("lgbm", model_data)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         with sqlite3.connect(self.database_path) as conn:
             vector = self.pipeline.build_vector(conn, FeatureInput(ticker=ticker.upper(), as_of=now))
