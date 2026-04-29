@@ -21,7 +21,6 @@ import { Separator } from '../components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
-import { getStrategies } from '../services/strategyApi'
 import { resolveProjectionAnchor } from '../utils/projectionAnchor'
 
 export default function Predictions() {
@@ -48,7 +47,6 @@ export default function Predictions() {
   const [showPredictionProjections, setShowPredictionProjections] = useState(false)
   const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
   const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
-  const [registeredStrategies, setRegisteredStrategies] = useState<string[]>([])
 
   const chartRef = useRef<any>(null)
 
@@ -131,9 +129,6 @@ export default function Predictions() {
   useEffect(() => {
     fetchPredictions()
     fetchTickers()
-    getStrategies()
-      .then((items) => setRegisteredStrategies(items.map((item) => item.name)))
-      .catch((e) => console.error('Failed to fetch strategies for prediction overlays:', e))
   }, [])
 
   const submit = async () => {
@@ -190,11 +185,7 @@ export default function Predictions() {
 
     setProjectionAnchorWarning(null)
     try {
-      const strategiesToUse = registeredStrategies.length > 0
-        ? registeredStrategies
-        : projectionStrategy
-          ? [projectionStrategy]
-          : undefined
+      const strategiesToUse = projectionStrategy ? [projectionStrategy] : undefined
       const paramsByStrategy = projectionStrategy ? { [projectionStrategy]: projectionParams } : undefined
 
       const projections = await getPredictionProjections({
@@ -229,7 +220,7 @@ export default function Predictions() {
   useEffect(() => {
     if (!showPredictionProjections) return
     void generatePredictionProjections(selectedTicker)
-  }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy, registeredStrategies])
+  }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy])
 
   const handleStrategyChange = (strategy: string, params: Record<string, any>) => {
     setProjectionStrategy(strategy)

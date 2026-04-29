@@ -147,33 +147,53 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
          );
 
          relevantProjections.forEach(projection => {
-          // Draw explicit line segments to avoid any closed polygon behavior.
-          for (let i = 1; i < projection.points.length; i++) {
-            const start = projection.points[i - 1];
-            const end = projection.points[i];
-            const segmentId = chart.createMultipointShape([
-              { time: start.time, price: start.price },
-              { time: end.time, price: end.price },
-            ], {
-              shape: 'trend_line',
-              lock: true,
-              disableSelection: true,
-              disableSave: true,
-              overrides: {
-                linestyle: 0, // SOLID
-                linewidth: 2,
-                linecolor: projection.color,
-                transparency: 0
+          const drawProjectionLine = (
+            valueKey: 'price' | 'upperBound' | 'lowerBound',
+            style: { linestyle: number; linewidth: number; linecolor: string; transparency: number }
+          ) => {
+            for (let i = 1; i < projection.points.length; i++) {
+              const start = projection.points[i - 1];
+              const end = projection.points[i];
+              const startValue = start[valueKey];
+              const endValue = end[valueKey];
+              if (typeof startValue !== 'number' || typeof endValue !== 'number') continue;
+
+              const segmentId = chart.createMultipointShape([
+                { time: start.time, price: startValue },
+                { time: end.time, price: endValue },
+              ], {
+                shape: 'trend_line',
+                lock: true,
+                disableSelection: true,
+                disableSave: true,
+                overrides: style,
+              });
+
+              if (segmentId) {
+                predictionEntitiesRef.current.push(segmentId);
               }
-            });
-
-            if (segmentId) {
-              predictionEntitiesRef.current.push(segmentId);
             }
-           }
+          };
 
-          // Intentionally render only the primary (solid) prediction line.
-          // Confidence band outlines were visually noisy and have been removed.
+          // Draw explicit line segments to avoid any closed polygon behavior.
+          drawProjectionLine('price', {
+            linestyle: 0, // SOLID
+            linewidth: 2,
+            linecolor: projection.color,
+            transparency: 0
+          });
+          drawProjectionLine('upperBound', {
+            linestyle: 2, // DASHED
+            linewidth: 1,
+            linecolor: projection.color,
+            transparency: 35
+          });
+          drawProjectionLine('lowerBound', {
+            linestyle: 2, // DASHED
+            linewidth: 1,
+            linecolor: projection.color,
+            transparency: 35
+          });
 
            // Add start marker for each projection
            if (projection.points.length > 0) {
