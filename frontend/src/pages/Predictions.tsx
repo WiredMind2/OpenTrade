@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
 import { resolveProjectionAnchor } from '../utils/projectionAnchor'
+import { NewsSidebar } from '../components/NewsSidebar'
 
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
@@ -401,16 +402,32 @@ export default function Predictions() {
             </Card>
 
             {/* Chart */}
-            <OHLCChart
-              ref={chartRef}
-              symbol={selectedTicker}
-              height="600px"
-              strategyName={projectionStrategy}
-              params={projectionParams}
-              horizon={projectionHorizon}
-              showPredictionProjections={showPredictionProjections}
-              predictionProjections={predictionProjections}
-            />
+            <div className="flex flex-col lg:flex-row gap-4">
+              <div className="flex-1 min-w-0">
+                <OHLCChart 
+                  
+                  ref={chartRef}
+                  symbol={selectedTicker}
+                  height="600px"
+                  strategyName={projectionStrategy}
+                  params={projectionParams}
+                  horizon={projectionHorizon}
+                  showPredictionProjections={showPredictionProjections}
+                  predictionProjections={predictionProjections}
+                  onSymbolChange={(symbol) => {
+                    const normalized = symbol.trim().toUpperCase()
+                    if (normalized && normalized !== selectedTicker) {
+                      setSelectedTicker(normalized)
+                      setTickerSearch(normalized)
+                      setTicker(normalized)
+                    }
+                  }}
+                />
+              </div>
+              <div className="w-full lg:w-80 xl:w-96 flex-shrink-0">
+                <NewsSidebar ticker={selectedTicker} />
+              </div>
+            </div>
           </div>
         </TabsContent>
 

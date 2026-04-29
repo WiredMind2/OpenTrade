@@ -7,6 +7,7 @@ import TradingViewUDFDatafeed from "../services/tradingViewUDF";
 import { attachProjectionManager, detachProjectionManager } from "../lib/ChartProjectionManager";
 import { projectStrategy } from "../services/strategyApi";
 import type { ProjectionPoint, PredictionProjection } from "../types";
+import type { NewsArticle } from "@/api/news";
 
 /**
  * Candle data point
@@ -49,6 +50,12 @@ interface OHLCChartProps {
    showPredictionProjections?: boolean;
    /** Prediction projection data */
    predictionProjections?: PredictionProjection[];
+   /** Callback when symbol changes in TradingView */
+   onSymbolChange?: (symbol: string) => void;
+   /** News articles to display as markers on chart */
+   newsArticles?: NewsArticle[];
+   /** Callback when a news marker is clicked */
+   onNewsClick?: (article: NewsArticle) => void;
 }
 
 /**
@@ -92,6 +99,7 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      mode = "price",
      showPredictionProjections = false,
      predictionProjections = [],
+     onSymbolChange,
    }, ref) => {
        const containerRef = useRef<HTMLDivElement>(null);
        const widgetRef = useRef<IChartingLibraryWidget | null>(null);
@@ -305,6 +313,17 @@ widgetRef.current = new TradingView.widget(widgetOptions);
           // Attach projection manager when chart is ready
           widgetRef.current.onChartReady(() => {
             console.log("[OHLCChart] Chart ready, attaching projection manager");
+
+            // Listen for symbol changes in TradingView
+            if (onSymbolChange) {
+              widgetRef.current!.activeChart().onSymbolChanged().subscribe(null, (() => {
+                const currentSymbol = widgetRef.current!.activeChart().symbol();
+                console.log("[OHLCChart] Symbol changed to:", currentSymbol);
+                // Extract just the ticker symbol (e.g., "AAPL" from "NASDAQ:AAPL")
+                const ticker = currentSymbol.split(':').pop() || currentSymbol;
+                onSymbolChange(ticker);
+              }) as any);
+            }
 
             const projectionOptions = {
               onProjectionRequest: async (startPoint: { time: number; price: number }) => {
