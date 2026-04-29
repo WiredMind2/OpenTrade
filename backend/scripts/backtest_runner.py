@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 """
 Minimal backtest runner stub.
 
@@ -14,7 +16,6 @@ import os
 import logging
 from datetime import datetime, timedelta
 from backend.scripts.script_logger import logger
-
 
 def load_trading_predictions(conn, date_str):
     cur = conn.cursor()

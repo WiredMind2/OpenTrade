@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 """
 Price ingestion skeleton for Kaggle Yahoo CSV archives.
 
@@ -12,7 +14,7 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 from typing import Optional
-from script_logger import logger
+from backend.scripts.script_logger import logger
 
 
 def _configure_sqlite_for_ingest(conn: sqlite3.Connection) -> None:

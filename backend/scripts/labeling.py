@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 """
 Labeling pipeline: map articles to tickers (via article_ticker table) and compute 1d/3d/7d labels using `price_daily`.
 
@@ -11,7 +13,7 @@ import sqlite3
 import os
 import importlib.util
 from datetime import datetime, timedelta
-from script_logger import logger
+from backend.scripts.script_logger import logger
 
 
 def load_label_debug_module():

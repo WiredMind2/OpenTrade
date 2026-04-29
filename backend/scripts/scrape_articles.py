@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 """
 Scrape full article content from stored URLs and update the `articles` table.
 
@@ -22,7 +24,7 @@ except Exception:
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import os
-from script_logger import logger
+from backend.scripts.script_logger import logger
 
 load_dotenv()
 

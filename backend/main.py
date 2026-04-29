@@ -232,11 +232,14 @@ async def load_models():
     app_state["model_registry"].discover(models_dir, models_pkg_dir)
 
     # For backward compatibility, populate the old models_loaded dict
+    # Model filenames are like lightgbm_1d_20260428070915 but the route
+    # looks up lightgbm_1d, so we register under the short key (first two parts).
     registry = app_state["model_registry"]
     for model in registry.list():
         if hasattr(model, '_model_data'):
-            # For joblib models, keep the old format
-            app_state["models_loaded"][model.name] = model._model_data
+            parts = model.name.split('_')
+            short_key = '_'.join(parts[:2]) if len(parts) >= 3 else model.name
+            app_state["models_loaded"][short_key] = model._model_data
 
     logger.info(f"Loaded {len(registry.list())} models via registry")
 

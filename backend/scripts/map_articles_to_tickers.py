@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 """
 Map ingested articles to tickers using a simple heuristic:
 - For each article, search title + content for occurrences of ticker symbols (word-boundary, uppercase) and ticker names (if provided in `tickers.name`).
@@ -12,7 +14,7 @@ import sqlite3
 import argparse
 import re
 import os
-from script_logger import logger
+from backend.scripts.script_logger import logger
 
 
 def load_tickers(conn):

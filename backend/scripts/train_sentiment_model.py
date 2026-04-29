@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 # type: ignore[import, attr-defined, arg-type, union-attr]  # Complex file - ignoring type issues
 """
 Train a simple embedding + LightGBM regression model to predict 1-day return from article text.
@@ -15,7 +17,7 @@ import argparse
 import os
 import sqlite3
 import pandas as pd
-from script_logger import logger
+from backend.scripts.script_logger import logger
 from backend.ml.feature_pipeline import FeaturePipeline, FeatureInput
 from backend.ml.training_pipeline import ensure_training_columns, train_horizon_model
 

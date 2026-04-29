@@ -66,82 +66,106 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
     onStrategyChange(selectedStrategy, newParams);
   };
 
+  const inputClass = "w-full h-9 rounded-md border border-input bg-secondary px-3 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+
   const renderParamInput = (key: string, schema: ParameterSchema) => {
     const value = params[key];
     switch (schema.type) {
       case 'int':
         return (
           <input
+            id={`param-${key}`}
             type="number"
             step="1"
             value={value}
             onChange={e => handleParamChange(key, parseInt(e.target.value, 10))}
             placeholder={schema.description}
+            className={inputClass}
           />
         );
       case 'float':
         return (
           <input
+            id={`param-${key}`}
             type="number"
             step="any"
             value={value}
             onChange={e => handleParamChange(key, parseFloat(e.target.value))}
             placeholder={schema.description}
+            className={inputClass}
           />
         );
       case 'string':
         return (
           <input
+            id={`param-${key}`}
             type="text"
             value={value}
             onChange={e => handleParamChange(key, e.target.value)}
             placeholder={schema.description}
+            className={inputClass}
           />
         );
       case 'bool':
       case 'boolean':
         return (
           <input
+            id={`param-${key}`}
             type="checkbox"
             checked={value}
             onChange={e => handleParamChange(key, e.target.checked)}
+            className="h-4 w-4 rounded border-input accent-primary cursor-pointer"
           />
         );
       default:
         return (
           <input
+            id={`param-${key}`}
             type="text"
             value={value}
             onChange={e => handleParamChange(key, e.target.value)}
             placeholder={schema.description}
+            className={inputClass}
           />
         );
     }
   };
 
   return (
-    <div>
-      <label htmlFor="strategy-select">Select Strategy:</label>
-      <select id="strategy-select" value={selectedStrategy} onChange={handleStrategyChange}>
+    <div className="space-y-1.5">
+      <label htmlFor="strategy-select" className="text-sm font-medium text-foreground">
+        Select Strategy
+      </label>
+      <select
+        id="strategy-select"
+        value={selectedStrategy}
+        onChange={handleStrategyChange}
+        className={inputClass}
+      >
+        <option value="" className="bg-secondary text-foreground">-- Select a Strategy --</option>
         {strategies.map(strategy => (
-          <option key={strategy.name} value={strategy.name}>
+          <option key={strategy.name} value={strategy.name} className="bg-secondary text-foreground">
             {strategy.name} - {strategy.description}
           </option>
         ))}
       </select>
 
       {error && (
-        <p style={{ color: 'red', marginTop: '0.5rem' }}>{error}</p>
+        <p className="text-sm text-destructive">{error}</p>
       )}
 
       {selectedStrategy && (
-        <div>
-          <h3>Parameters</h3>
+        <div className="space-y-3 pt-1">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Parameters</p>
           {Object.entries(strategies.find(s => s.name === selectedStrategy)?.parameters_schema || {}).map(([key, schema]) => (
-            <div key={key} style={{ marginBottom: '10px' }}>
-              <label htmlFor={`param-${key}`}>{key}: </label>
-              {renderParamInput(key, schema)}
-              <small style={{ display: 'block', color: '#666' }}>{schema.description}</small>
+            <div key={key} className="space-y-1">
+              <label htmlFor={`param-${key}`} className="text-sm font-medium text-foreground capitalize">
+                {key}
+              </label>
+              <div className={schema.type === 'bool' || schema.type === 'boolean' ? '' : 'w-full'}>
+                {renderParamInput(key, schema)}
+              </div>
+              <p className="text-xs text-muted-foreground">{schema.description}</p>
             </div>
           ))}
         </div>

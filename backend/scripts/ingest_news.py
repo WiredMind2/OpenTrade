@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 """
 News ingestion skeleton using NewsAPI (modular connector). Stores articles into SQLite `articles` table.
 
@@ -11,7 +13,7 @@ import argparse
 import time
 from datetime import datetime
 from dotenv import load_dotenv
-from .script_logger import logger
+from backend.scripts.script_logger import logger
 
 load_dotenv()
 
