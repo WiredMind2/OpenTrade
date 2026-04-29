@@ -5,7 +5,6 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Badge } from '../components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
-import { Switch } from '../components/ui/switch'
 import { PredictionResponse, PredictionProjection } from '../types'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
@@ -16,14 +15,12 @@ import {
   Clock,
   Target,
   Activity,
-  Trash2,
   Eye
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
-import { getStrategies } from '../services/strategyApi'
 import { resolveProjectionAnchor } from '../utils/projectionAnchor'
 
 export default function Predictions() {
@@ -38,6 +35,8 @@ export default function Predictions() {
   const [availableTickers, setAvailableTickers] = useState<string[]>([])
   const [tickerSearch, setTickerSearch] = useState('')
   const [searchingTickers, setSearchingTickers] = useState(false)
+  const [tickerSuggestions, setTickerSuggestions] = useState<string[]>([])
+  const [showTickerSuggestions, setShowTickerSuggestions] = useState(false)
 
   // Projection controls state
   const [projectionStrategy, setProjectionStrategy] = useState('')
@@ -48,7 +47,6 @@ export default function Predictions() {
   const [showPredictionProjections, setShowPredictionProjections] = useState(false)
   const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
   const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
-  const [registeredStrategies, setRegisteredStrategies] = useState<string[]>([])
 
   const chartRef = useRef<any>(null)
 
@@ -88,8 +86,8 @@ export default function Predictions() {
     })
   }
 
-  const searchAndAddTicker = async () => {
-    const query = tickerSearch.trim().toUpperCase()
+  const searchAndAddTicker = async (queryOverride?: string) => {
+    const query = (queryOverride ?? tickerSearch).trim().toUpperCase()
     if (!query) return
     setSearchingTickers(true)
     try {
@@ -99,11 +97,15 @@ export default function Predictions() {
         .filter(Boolean)
       if (foundTickers.length > 0) {
         mergeTickers(foundTickers)
+        setTickerSuggestions(foundTickers)
+        setShowTickerSuggestions(true)
         setTicker(foundTickers[0])
         setSelectedTicker(foundTickers[0])
       } else {
         // Keep manual-symbol workflows possible even if provider returns no suggestions.
         mergeTickers([query])
+        setTickerSuggestions([query])
+        setShowTickerSuggestions(true)
         setTicker(query)
         setSelectedTicker(query)
       }
@@ -114,12 +116,19 @@ export default function Predictions() {
     }
   }
 
+  const handleTickerSelect = (symbol: string) => {
+    const normalized = symbol.trim().toUpperCase()
+    if (!normalized) return
+    mergeTickers([normalized])
+    setTickerSearch(normalized)
+    setTicker(normalized)
+    setSelectedTicker(normalized)
+    setShowTickerSuggestions(false)
+  }
+
   useEffect(() => {
     fetchPredictions()
     fetchTickers()
-    getStrategies()
-      .then((items) => setRegisteredStrategies(items.map((item) => item.name)))
-      .catch((e) => console.error('Failed to fetch strategies for prediction overlays:', e))
   }, [])
 
   const submit = async () => {
@@ -176,11 +185,7 @@ export default function Predictions() {
 
     setProjectionAnchorWarning(null)
     try {
-      const strategiesToUse = registeredStrategies.length > 0
-        ? registeredStrategies
-        : projectionStrategy
-          ? [projectionStrategy]
-          : undefined
+      const strategiesToUse = projectionStrategy ? [projectionStrategy] : undefined
       const paramsByStrategy = projectionStrategy ? { [projectionStrategy]: projectionParams } : undefined
 
       const projections = await getPredictionProjections({
@@ -205,6 +210,7 @@ export default function Predictions() {
     setShowPredictionProjections(enabled)
     if (!enabled) {
       setProjectionAnchorWarning(null)
+      setPredictionProjections([])
       return
     }
 
@@ -214,28 +220,13 @@ export default function Predictions() {
   useEffect(() => {
     if (!showPredictionProjections) return
     void generatePredictionProjections(selectedTicker)
-  }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy, registeredStrategies])
+  }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy])
 
   const handleStrategyChange = (strategy: string, params: Record<string, any>) => {
     setProjectionStrategy(strategy)
     setProjectionParams(params)
     if (chartRef.current) {
       chartRef.current.setProjectionStrategy(strategy, params, projectionHorizon)
-    }
-  }
-
-  const handleHorizonChange = (value: number) => {
-    setProjectionHorizon(value)
-    if (chartRef.current && projectionStrategy) {
-      chartRef.current.setProjectionStrategy(projectionStrategy, projectionParams, value)
-    }
-  }
-
-  const clearProjections = () => {
-    setProjectionStrategy('')
-    setProjectionParams({})
-    if (chartRef.current) {
-      chartRef.current.clearProjections()
     }
   }
 
@@ -257,39 +248,68 @@ export default function Predictions() {
             Generate New Prediction
           </CardTitle>
           <CardDescription>
-            Select a ticker and time horizon, then click Predict
+            Search a ticker and time horizon, then click Predict
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-3">
-            <div className="flex w-full sm:flex-1 gap-2">
-              <Input
-                value={tickerSearch}
-                onChange={(e) => setTickerSearch(e.target.value.toUpperCase())}
-                placeholder="Search ticker (e.g. GOOGL)"
-                className="font-mono"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={searchAndAddTicker}
-                disabled={searchingTickers || !tickerSearch.trim()}
-              >
-                {searchingTickers ? 'Searching...' : 'Search'}
-              </Button>
+            <div className="relative w-full sm:flex-1">
+              <div className="flex gap-2">
+                <Input
+                  value={tickerSearch}
+                  onChange={(e) => {
+                    setTickerSearch(e.target.value.toUpperCase())
+                    setShowTickerSuggestions(false)
+                  }}
+                  onFocus={() => {
+                    if (tickerSuggestions.length > 0) {
+                      setShowTickerSuggestions(true)
+                    }
+                  }}
+                  onBlur={() => {
+                    // Delay closing so click events on suggestions can fire first.
+                    window.setTimeout(() => setShowTickerSuggestions(false), 120)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      if (tickerSearch.trim()) {
+                        void searchAndAddTicker()
+                      }
+                    }
+                  }}
+                  placeholder="Search ticker (e.g. GOOGL)"
+                  className="font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void searchAndAddTicker()}
+                  disabled={searchingTickers || !tickerSearch.trim()}
+                >
+                  {searchingTickers ? 'Searching...' : 'Search'}
+                </Button>
+              </div>
+              {showTickerSuggestions && tickerSuggestions.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-md">
+                  <div className="max-h-56 overflow-y-auto py-1">
+                    {tickerSuggestions.map((symbol) => (
+                      <button
+                        key={symbol}
+                        type="button"
+                        className="w-full px-3 py-2 text-left text-sm font-mono hover:bg-accent"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          handleTickerSelect(symbol)
+                        }}
+                      >
+                        {symbol}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-            <Select value={ticker} onValueChange={setTicker}>
-              <SelectTrigger className="w-full sm:flex-1">
-                <SelectValue placeholder="Select ticker" />
-              </SelectTrigger>
-              <SelectContent>
-                {availableTickers.map((symbol) => (
-                  <SelectItem key={symbol} value={symbol}>
-                    {symbol}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
             <Select value={horizon} onValueChange={setHorizon}>
               <SelectTrigger className="w-full sm:w-[140px]">
                 <SelectValue />
@@ -360,65 +380,18 @@ export default function Predictions() {
                 <div className="space-y-4">
                   <StrategySelector onStrategyChange={handleStrategyChange} />
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Symbol</label>
-                      <Select value={selectedTicker} onValueChange={setSelectedTicker}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {availableTickers.map((symbol) => (
-                            <SelectItem key={symbol} value={symbol}>
-                              {symbol}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Horizon (days)</label>
-                      <Input
-                        type="number"
-                        value={projectionHorizon}
-                        onChange={e => handleHorizonChange(parseInt(e.target.value) || 30)}
-                        min="1"
-                        max="365"
-                        className="font-mono"
-                      />
-                    </div>
-
-                    <div className="flex items-end">
+                  <div className="flex items-end gap-2">
                       <Button
-                        onClick={clearProjections}
-                        variant="outline"
-                        className="w-full"
-                        disabled={!projectionStrategy}
+                        type="button"
+                        variant={showPredictionProjections ? 'default' : 'outline'}
+                        className="w-full md:w-auto"
+                        onClick={() => handlePredictionProjectionsToggle(!showPredictionProjections)}
                       >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Clear Projections
+                        <Eye className="mr-2 h-4 w-4" />
+                        Prediction Projections
                       </Button>
-                    </div>
                   </div>
 
-                  <Separator />
-
-                  {/* Prediction Projections Toggle */}
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <Eye className="h-4 w-4 text-primary" />
-                        <label className="text-sm font-medium">Prediction Projections</label>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Show AI model prediction overlays on the chart
-                      </p>
-                    </div>
-                    <Switch
-                      checked={showPredictionProjections}
-                      onCheckedChange={handlePredictionProjectionsToggle}
-                    />
-                  </div>
                   {projectionAnchorWarning && (
                     <p className="text-xs text-amber-500">{projectionAnchorWarning}</p>
                   )}
