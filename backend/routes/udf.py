@@ -1020,10 +1020,11 @@ async def get_historical_data(
             to_date_str = to_date.date().isoformat()
             current_date_str = current_time.date().isoformat()
         else:
-            # Minute table uses YYYY-MM-DDTHH:MM:SS format
-            from_date_str = from_date.isoformat()
-            to_date_str = to_date.isoformat()
-            current_date_str = current_time.isoformat()
+            # Minute table stores dt as "YYYY-MM-DD HH:MM:SS" (space, not "T").
+            # Keep query bounds in the same format so SQLite text comparisons match.
+            from_date_str = from_date.strftime('%Y-%m-%d %H:%M:%S')
+            to_date_str = to_date.strftime('%Y-%m-%d %H:%M:%S')
+            current_date_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
 
         # Add current time as additional filter to ensure no future data
         params = [symbol.upper(), from_date_str, to_date_str, current_date_str]

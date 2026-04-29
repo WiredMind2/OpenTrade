@@ -259,6 +259,9 @@ export const getStrategyAnalyticsSummary = async (
       ...query,
       strategies: query.strategies ?? [],
     },
+    paramsSerializer: {
+      indexes: null,
+    },
   })
   return response.data
 }

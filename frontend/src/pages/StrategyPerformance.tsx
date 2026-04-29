@@ -43,6 +43,8 @@ const COLOR_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ef4444', '#
 
 const fmtPct = (value: number) => `${(value * 100).toFixed(2)}%`
 const fmtNum = (value: number) => value.toFixed(2)
+const safeNumber = (value: unknown, fallback: number = 0) =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback
 
 export default function StrategyPerformance() {
   const [filters, setFilters] = useState<StrategyAnalyticsFilters | null>(null)
@@ -134,15 +136,15 @@ export default function StrategyPerformance() {
 
   const comparisonCurve = useMemo(() => {
     const byDate: Record<string, any> = {}
-    Object.values(seriesMap).forEach((series, i) => {
+    Object.values(seriesMap).forEach((series) => {
       series.points.forEach((p) => {
         if (!byDate[p.date]) byDate[p.date] = { date: p.date }
-        byDate[p.date][series.strategy] = p.normalized_equity
+        byDate[p.date][series.strategy] = safeNumber(p.normalized_equity, 0)
       })
       if (series.benchmark_points.length > 0) {
         series.benchmark_points.forEach((bp) => {
           if (!byDate[bp.date]) byDate[bp.date] = { date: bp.date }
-          byDate[bp.date][`${selectedBenchmark}_benchmark`] = bp.normalized_equity
+          byDate[bp.date][`${selectedBenchmark}_benchmark`] = safeNumber(bp.normalized_equity, 0)
         })
       }
     })
@@ -153,8 +155,8 @@ export default function StrategyPerformance() {
     () =>
       (summary?.metrics ?? []).map((m) => ({
         strategy: m.strategy,
-        risk: m.volatility,
-        return: m.cagr,
+        risk: safeNumber(m.volatility, 0),
+        return: safeNumber(m.cagr, 0),
       })),
     [summary]
   )
@@ -163,11 +165,20 @@ export default function StrategyPerformance() {
     () =>
       (summary?.metrics ?? []).map((m) => ({
         strategy: m.strategy,
-        cagr: m.cagr,
-        sharpe: m.sharpe,
-        maxDrawdown: m.max_drawdown,
+        cagr: safeNumber(m.cagr, 0),
+        sharpe: safeNumber(m.sharpe, 0),
+        maxDrawdown: safeNumber(m.max_drawdown, 0),
       })),
     [summary]
+  )
+  const rollingSeries = useMemo(
+    () =>
+      (activeSeries?.points ?? []).map((p) => ({
+        ...p,
+        rolling_sharpe: safeNumber(p.rolling_sharpe, 0),
+        rolling_sortino: safeNumber(p.rolling_sortino, 0),
+      })),
+    [activeSeries]
   )
 
   useEffect(() => {
@@ -191,6 +202,12 @@ export default function StrategyPerformance() {
       prev.includes(strategy) ? prev.filter((s) => s !== strategy) : [...prev, strategy].slice(0, 6)
     )
   }
+
+  useEffect(() => {
+    if (!filters) return
+    if (selectedStrategies.length === 0) return
+    void loadDashboard()
+  }, [selectedStrategies, selectedBenchmark, selectedPreset, selectedGranularity, selectedRolling])
 
   return (
     <div className="space-y-6">
@@ -301,6 +318,56 @@ export default function StrategyPerformance() {
             <Card><CardHeader><CardDescription>Win Rate</CardDescription><CardTitle className="text-2xl">{activeMetric ? fmtPct(activeMetric.win_rate) : '-'}</CardTitle></CardHeader></Card>
           </div>
 
+          <Card>
+            <CardHeader>
+              <CardTitle>Strategy Comparison Grid</CardTitle>
+              <CardDescription>All key fields side-by-side for selected strategies.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-2 pr-3">Strategy</th>
+                      <th className="text-right py-2 px-2">Runs</th>
+                      <th className="text-right py-2 px-2">Trades</th>
+                      <th className="text-right py-2 px-2">Total Return</th>
+                      <th className="text-right py-2 px-2">CAGR</th>
+                      <th className="text-right py-2 px-2">Sharpe</th>
+                      <th className="text-right py-2 px-2">Sortino</th>
+                      <th className="text-right py-2 px-2">Calmar</th>
+                      <th className="text-right py-2 px-2">Volatility</th>
+                      <th className="text-right py-2 px-2">Max DD</th>
+                      <th className="text-right py-2 px-2">Win Rate</th>
+                      <th className="text-right py-2 px-2">Profit Factor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(summary?.metrics ?? []).map((metric) => (
+                      <tr
+                        key={metric.strategy}
+                        className={`border-b border-border/50 ${activeMetric?.strategy === metric.strategy ? 'bg-muted/30' : ''}`}
+                      >
+                        <td className="py-2 pr-3 font-medium">{metric.strategy}</td>
+                        <td className="text-right py-2 px-2">{metric.run_count}</td>
+                        <td className="text-right py-2 px-2">{metric.total_trades}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(metric.total_return)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(metric.cagr)}</td>
+                        <td className="text-right py-2 px-2">{fmtNum(metric.sharpe)}</td>
+                        <td className="text-right py-2 px-2">{fmtNum(metric.sortino)}</td>
+                        <td className="text-right py-2 px-2">{fmtNum(metric.calmar)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(metric.volatility)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(metric.max_drawdown)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(metric.win_rate)}</td>
+                        <td className="text-right py-2 px-2">{fmtNum(metric.profit_factor)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
           <Tabs defaultValue="overview">
             <TabsList>
               <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -343,7 +410,7 @@ export default function StrategyPerformance() {
                         <XAxis type="number" dataKey="risk" name="Volatility" />
                         <YAxis type="number" dataKey="return" name="CAGR" />
                         <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                        <Scatter data={riskReturnScatter} fill="#3b82f6" />
+                        <Scatter data={riskReturnScatter} fill="#3b82f6" name="Strategies" />
                       </ScatterChart>
                     </ResponsiveContainer>
                   </CardContent>
@@ -359,7 +426,7 @@ export default function StrategyPerformance() {
                   </CardHeader>
                   <CardContent className="h-72">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={activeSeries?.points ?? []}>
+                      <LineChart data={rollingSeries}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="date" hide />
                         <YAxis />
