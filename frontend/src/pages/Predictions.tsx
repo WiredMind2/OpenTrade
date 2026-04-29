@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Badge } from '../components/ui/badge'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { PredictionResponse, PredictionProjection } from '../types'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
@@ -26,7 +25,6 @@ import { resolveProjectionAnchor } from '../utils/projectionAnchor'
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
   const [ticker, setTicker] = useState('AAPL')
-  const [horizon, setHorizon] = useState('1d')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -139,8 +137,10 @@ export default function Predictions() {
     setSubmitting(true)
     try {
       const normalizedTicker = ticker.trim().toUpperCase()
-      const data = await createPrediction(normalizedTicker, horizon)
-      setPreds(prev => [data, ...prev])
+      const results = await Promise.all(
+        ['1d', '3d', '7d'].map(h => createPrediction(normalizedTicker, h))
+      )
+      setPreds(prev => [...results, ...prev])
       setSelectedTicker(normalizedTicker)
       setTicker(normalizedTicker)
     } catch (e: any) {
@@ -248,7 +248,7 @@ export default function Predictions() {
             Generate New Prediction
           </CardTitle>
           <CardDescription>
-            Search a ticker and time horizon, then click Predict
+            Search a ticker, then click Predict to generate 1-day, 3-day and 7-day forecasts
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -310,31 +310,6 @@ export default function Predictions() {
                 </div>
               )}
             </div>
-            <Select value={horizon} onValueChange={setHorizon}>
-              <SelectTrigger className="w-full sm:w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1d">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4" />
-                    1 Day
-                  </div>
-                </SelectItem>
-                <SelectItem value="3d">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4" />
-                    3 Days
-                  </div>
-                </SelectItem>
-                <SelectItem value="7d">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4" />
-                    7 Days
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
             <Button
               onClick={submit}
               disabled={submitting || !ticker.trim()}
@@ -445,79 +420,82 @@ export default function Predictions() {
                   </p>
                 </CardContent>
               </Card>
-            ) : (
-              <div className="grid gap-4">
-                {preds.map((p, i) => {
-                  const confidenceBadge = getConfidenceBadge(p.confidence)
-                  const returnColor = getReturnColor(p.predicted_return)
-                  const isPositive = p.predicted_return > 0
-
-                  return (
-                    <Card key={i} className="border-muted">
-                      <CardContent className="p-6">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                          {/* Left Section */}
-                          <div className="space-y-3">
-                            <div className="flex items-center gap-3">
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => handleTickerClick(p.ticker)}
-                                  className="text-2xl font-bold font-mono hover:text-primary transition-colors cursor-pointer"
-                                >
-                                  {p.ticker}
-                                </button>
-                                <Badge variant="outline" className="font-normal">
-                                  {p.horizon}
-                                </Badge>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              {isPositive ? (
-                                <TrendingUp className="h-4 w-4 text-success" />
-                              ) : (
-                                <TrendingDown className="h-4 w-4 text-destructive" />
-                              )}
-                              <span className={`text-lg font-semibold ${returnColor}`}>
-                                {(p.predicted_return * 100).toFixed(2)}%
-                              </span>
-                              <span className="text-sm text-muted-foreground">
-                                predicted return
-                              </span>
-                            </div>
-                          </div>
-
-                          <Separator orientation="vertical" className="hidden sm:block h-16" />
-
-                          {/* Right Section */}
-                          <div className="flex flex-col items-start sm:items-end gap-2">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm text-muted-foreground">Confidence:</span>
-                              <Badge variant={confidenceBadge.variant}>
-                                {confidenceBadge.label} ({(p.confidence * 100).toFixed(0)}%)
-                              </Badge>
-                            </div>
-
+            ) : (() => {
+              // Group predictions by ticker, preserving insertion order (most recent first)
+              const groups = preds.reduce<Record<string, typeof preds>>((acc, p) => {
+                if (!acc[p.ticker]) acc[p.ticker] = []
+                acc[p.ticker].push(p)
+                return acc
+              }, {})
+              const horizonOrder = ['1d', '3d', '7d']
+              return (
+                <div className="grid gap-4">
+                  {Object.entries(groups).map(([tickerKey, tickerPreds]) => {
+                    const byHorizon: Record<string, typeof preds[0]> = {}
+                    tickerPreds.forEach(p => { byHorizon[p.horizon] = p })
+                    const latest = tickerPreds[0]
+                    return (
+                      <Card key={tickerKey} className="border-muted">
+                        <CardContent className="p-6 space-y-4">
+                          {/* Header */}
+                          <div className="flex items-center justify-between">
+                            <button
+                              onClick={() => handleTickerClick(tickerKey)}
+                              className="text-2xl font-bold font-mono hover:text-primary transition-colors cursor-pointer"
+                            >
+                              {tickerKey}
+                            </button>
                             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                               <Clock className="h-3 w-3" />
-                              {new Date(p.timestamp).toLocaleString()}
+                              {new Date(latest.timestamp).toLocaleString()}
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              model: {p.model_version}
-                            </div>
-                            {(p.interval_lower !== undefined && p.interval_upper !== undefined) && (
-                              <div className="text-xs text-muted-foreground">
-                                range: {(p.interval_lower! * 100).toFixed(2)}% to {(p.interval_upper! * 100).toFixed(2)}%
-                              </div>
-                            )}
                           </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )
-                })}
-              </div>
-            )}
+
+                          <Separator />
+
+                          {/* 3 horizons side by side */}
+                          <div className="grid grid-cols-3 gap-4">
+                            {horizonOrder.map(h => {
+                              const p = byHorizon[h]
+                              if (!p) return (
+                                <div key={h} className="flex flex-col items-center gap-1 text-muted-foreground text-sm">
+                                  <span className="font-medium">{h}</span>
+                                  <span>—</span>
+                                </div>
+                              )
+                              const isPositive = p.predicted_return > 0
+                              const returnColor = getReturnColor(p.predicted_return)
+                              const confidenceBadge = getConfidenceBadge(p.confidence)
+                              return (
+                                <div key={h} className="flex flex-col items-center gap-2">
+                                  <Badge variant="outline" className="font-mono text-xs">{h}</Badge>
+                                  <div className="flex items-center gap-1">
+                                    {isPositive
+                                      ? <TrendingUp className="h-4 w-4 text-success" />
+                                      : <TrendingDown className="h-4 w-4 text-destructive" />}
+                                    <span className={`text-lg font-bold ${returnColor}`}>
+                                      {(p.predicted_return * 100).toFixed(2)}%
+                                    </span>
+                                  </div>
+                                  <Badge variant={confidenceBadge.variant} className="text-xs">
+                                    {confidenceBadge.label} ({(p.confidence * 100).toFixed(0)}%)
+                                  </Badge>
+                                  {(p.interval_lower !== undefined && p.interval_upper !== undefined) && (
+                                    <span className="text-xs text-muted-foreground text-center">
+                                      {(p.interval_lower! * 100).toFixed(1)}% → {(p.interval_upper! * 100).toFixed(1)}%
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              )
+            })()}
           </div>
         </TabsContent>
 
