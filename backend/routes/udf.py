@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import sys
 import os
+from urllib.parse import quote_plus
+from urllib.request import urlopen
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -146,57 +148,86 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
         config = get_config()
         db_path = app_state.get('database_path') or config.database.path
 
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.cursor()
+            table_columns = {
+                row[1] for row in cur.execute(f"PRAGMA table_info({table})").fetchall()
+            }
 
-        # Ensure ticker exists in tickers table
-        cur.execute('INSERT OR IGNORE INTO tickers (ticker, name, exchange) VALUES (?, ?, ?)',
-                    (symbol.upper(), None, None))
+            # Ensure ticker exists in tickers table
+            cur.execute(
+                "INSERT OR IGNORE INTO tickers (ticker, name, exchange) VALUES (?, ?, ?)",
+                (symbol.upper(), None, None),
+            )
 
-        inserted = 0
-        date_col = 'date' if table == 'price_daily' else 'dt'
+            inserted = 0
+            date_col = "date" if table == "price_daily" else "dt"
+            has_adjusted_close = "adjusted_close" in table_columns
 
-        for _, row in df.iterrows():
-            try:
-                if table == 'price_daily':
-                    cur.execute(f'''
-                        INSERT OR REPLACE INTO {table}
-                        (ticker, date, open, high, low, close, adjusted_close, volume)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        row['ticker'],
-                        row['date'],
-                        float(row['open']) if pd.notna(row['open']) else None,
-                        float(row['high']) if pd.notna(row['high']) else None,
-                        float(row['low']) if pd.notna(row['low']) else None,
-                        float(row['close']) if pd.notna(row['close']) else None,
-                        (
-                            float(row['adjusted_close'])
-                            if ('adjusted_close' in row and pd.notna(row['adjusted_close']))
-                            else (float(row['close']) if pd.notna(row['close']) else None)
-                        ),
-                        int(row['volume']) if pd.notna(row['volume']) else None
-                    ))
-                else:  # price_minute
-                    cur.execute(f'''
-                        INSERT OR REPLACE INTO {table}
-                        (ticker, dt, open, high, low, close, volume)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        row['ticker'],
-                        row['dt'],
-                        float(row['open']) if pd.notna(row['open']) else None,
-                        float(row['high']) if pd.notna(row['high']) else None,
-                        float(row['low']) if pd.notna(row['low']) else None,
-                        float(row['close']) if pd.notna(row['close']) else None,
-                        int(row['volume']) if pd.notna(row['volume']) else None
-                    ))
-                inserted += 1
-            except Exception as e:
-                logger.error(f"Error inserting row for {row['ticker']} at {row[date_col]}: {e}")
+            for _, row in df.iterrows():
+                try:
+                    if table == "price_daily":
+                        if has_adjusted_close:
+                            cur.execute(
+                                f"""
+                                INSERT OR REPLACE INTO {table}
+                                (ticker, date, open, high, low, close, adjusted_close, volume)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    row["ticker"],
+                                    row["date"],
+                                    float(row["open"]) if pd.notna(row["open"]) else None,
+                                    float(row["high"]) if pd.notna(row["high"]) else None,
+                                    float(row["low"]) if pd.notna(row["low"]) else None,
+                                    float(row["close"]) if pd.notna(row["close"]) else None,
+                                    (
+                                        float(row["adjusted_close"])
+                                        if ("adjusted_close" in row and pd.notna(row["adjusted_close"]))
+                                        else (float(row["close"]) if pd.notna(row["close"]) else None)
+                                    ),
+                                    int(row["volume"]) if pd.notna(row["volume"]) else None,
+                                ),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                INSERT OR REPLACE INTO {table}
+                                (ticker, date, open, high, low, close, volume)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    row["ticker"],
+                                    row["date"],
+                                    float(row["open"]) if pd.notna(row["open"]) else None,
+                                    float(row["high"]) if pd.notna(row["high"]) else None,
+                                    float(row["low"]) if pd.notna(row["low"]) else None,
+                                    float(row["close"]) if pd.notna(row["close"]) else None,
+                                    int(row["volume"]) if pd.notna(row["volume"]) else None,
+                                ),
+                            )
+                    else:  # price_minute
+                        cur.execute(
+                            f"""
+                            INSERT OR REPLACE INTO {table}
+                            (ticker, dt, open, high, low, close, volume)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                row["ticker"],
+                                row["dt"],
+                                float(row["open"]) if pd.notna(row["open"]) else None,
+                                float(row["high"]) if pd.notna(row["high"]) else None,
+                                float(row["low"]) if pd.notna(row["low"]) else None,
+                                float(row["close"]) if pd.notna(row["close"]) else None,
+                                int(row["volume"]) if pd.notna(row["volume"]) else None,
+                            ),
+                        )
+                    inserted += 1
+                except Exception as e:
+                    logger.error(f"Error inserting row for {row['ticker']} at {row[date_col]}: {e}")
 
-        conn.commit()
-        conn.close()
+            conn.commit()
 
         # Invalidate cache for this symbol
         invalidate_symbol_cache(symbol.upper())
@@ -296,6 +327,84 @@ def _ensure_symbol_available(db_path: str, symbol: str) -> bool:
     return validator.validate_symbol_exists(normalized_symbol)
 
 
+def _search_yahoo_symbols(q: str, exchange: str, limit: int) -> List[Dict[str, Any]]:
+    """Search Yahoo Finance symbols to support symbols not yet stored locally."""
+    cleaned = q.strip()
+    if not cleaned:
+        return []
+
+    payload: Dict[str, Any] = {}
+    try:
+        max_results = max(1, min(limit, 50))
+        search_url = (
+            "https://query1.finance.yahoo.com/v1/finance/search"
+            f"?q={quote_plus(cleaned)}&quotesCount={max_results}&newsCount=0"
+        )
+        with urlopen(search_url, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        logger.warning("UDF yahoo search failed for %s: %s", cleaned, e)
+
+    wanted_exchange = exchange.upper().strip() if exchange else ""
+    exchange_aliases = {
+        "NASDAQ": {"NASDAQ", "NMS", "NGM", "NCM"},
+        "NYSE": {"NYSE", "NYQ"},
+        "AMEX": {"AMEX", "ASE"},
+        "OTC": {"OTC", "PNK"},
+    }
+    results: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in payload.get("quotes", []) or []:
+        symbol = str(item.get("symbol") or "").upper().strip()
+        if not symbol or symbol in seen:
+            continue
+
+        quote_type = str(item.get("quoteType") or "").upper()
+        if quote_type and quote_type not in {"EQUITY", "ETF"}:
+            continue
+
+        exchange_code = str(item.get("exchange") or "").upper().strip()
+        accepted_codes = exchange_aliases.get(wanted_exchange, {wanted_exchange}) if wanted_exchange else set()
+        if wanted_exchange and exchange_code and exchange_code not in accepted_codes:
+            continue
+
+        short_name = str(item.get("shortname") or item.get("longname") or "").strip()
+        if wanted_exchange:
+            display_exchange = wanted_exchange
+        else:
+            display_exchange = exchange_code or "UNKNOWN"
+        results.append({
+            "symbol": symbol,
+            "full_name": f"{display_exchange}:{symbol}",
+            "description": short_name or f"{symbol} Stock",
+            "exchange": display_exchange,
+            "ticker": symbol,
+            "type": "stock",
+        })
+        seen.add(symbol)
+        if len(results) >= max_results:
+            break
+
+    if results:
+        return results
+
+    # Last-resort fallback: allow exact ticker-like queries even when upstream search is throttled.
+    ticker_like = cleaned.replace(".", "").replace("-", "").isalnum() and len(cleaned) <= 10
+    if ticker_like:
+        fallback_symbol = cleaned.upper()
+        display_exchange = wanted_exchange or "UNKNOWN"
+        return [{
+            "symbol": fallback_symbol,
+            "full_name": f"{display_exchange}:{fallback_symbol}",
+            "description": f"{fallback_symbol} Stock",
+            "exchange": display_exchange,
+            "ticker": fallback_symbol,
+            "type": "stock",
+        }]
+
+    return []
+
+
 @router.get("/config", tags=["UDF"])
 async def get_config_endpoint():
     """Return datafeed configuration for TradingView charting library."""
@@ -386,9 +495,6 @@ async def search_symbols(
         config = get_config()
         db_path = app_state.get('database_path') or config.database.path
 
-        # Initialize data validator
-        validator = DataValidator(db_path)
-
         # Build search query with fuzzy matching
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -472,6 +578,17 @@ async def search_symbols(
                 "type": "stock"
             }
             results.append(result)
+
+        # Fallback to Yahoo search so empty DBs can discover new symbols.
+        if q and len(results) < min(limit, 100):
+            yahoo_results = _search_yahoo_symbols(q, exchange, min(limit, 100))
+            existing = {item["ticker"] for item in results}
+            for item in yahoo_results:
+                if item["ticker"] not in existing:
+                    results.append(item)
+                    existing.add(item["ticker"])
+                if len(results) >= min(limit, 100):
+                    break
 
         logger.info(f"UDF search: query='{q}', type='{type}', exchange='{exchange}', limit={limit}, returned {len(results)} results")
         return results
@@ -761,7 +878,21 @@ async def get_historical_data(
             from_ts < 0 < to_ts and
             to_date < stale_cutoff
         )
-        should_normalize_to_recent = has_invalid_order or has_malformed_mixed_sign_epoch
+        if has_invalid_order:
+            logger.warning(
+                "UDF history: invalid date range for %s (from_ts=%s, to_ts=%s)",
+                symbol,
+                from_ts,
+                to_ts,
+            )
+            return {
+                "s": "error",
+                "errmsg": (
+                    "Invalid date range: 'from' timestamp must be earlier than 'to' timestamp."
+                ),
+            }
+
+        should_normalize_to_recent = has_malformed_mixed_sign_epoch
 
         if countback and countback > 0 and should_normalize_to_recent:
             timeframe = resolution_to_timeframe(resolution)
@@ -889,6 +1020,19 @@ async def get_historical_data(
 
         logger.info(f"UDF history: query returned {len(df)} rows for {symbol}")
         if df.empty:
+            # Avoid noisy provider calls for tiny daily windows (weekends/holidays/backfill gaps).
+            # These commonly return empty data and produce misleading "possibly delisted" errors.
+            if table == "price_daily" and (to_date.date() - from_date.date()).days <= 2:
+                logger.info(
+                    "UDF history: no local rows for narrow daily window %s -> %s; returning no_data without external fetch",
+                    from_date.date(),
+                    to_date.date(),
+                )
+                return {
+                    "s": "no_data",
+                    "errmsg": "No data available for requested range",
+                }
+
             logger.warning(f"UDF history: no data found for {symbol} in table {table}, attempting external fetch")
 
             # Attempt to fetch data from external sources

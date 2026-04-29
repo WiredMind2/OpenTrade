@@ -19,6 +19,27 @@ from backend.logging_config import get_component_logger
 logger = get_component_logger(__file__)
 router = APIRouter()
 
+
+def _resolve_db_path() -> str:
+    """Resolve DB path regardless of import style used by the test/runtime."""
+    # Some tests import `main` while runtime imports `backend.main`; support both.
+    for module_name in ("main", "backend.main"):
+        try:
+            module = __import__(module_name, fromlist=["app_state"])
+            app_state = getattr(module, "app_state", None)
+            if isinstance(app_state, dict) and app_state.get("database_path"):
+                return app_state["database_path"]
+        except Exception:
+            continue
+
+    env_db = os.getenv("DB_PATH")
+    if env_db:
+        return env_db
+
+    from backend.config import get_config
+    return get_config().database.path
+
+
 def _refresh_latest_daily_prices(db_path: str, ticker: str, end_date: Optional[datetime]) -> None:
     """Fetch and upsert missing recent daily bars into SQLite.
 
@@ -118,17 +139,15 @@ async def get_price_data(
     limit: int = Query(100, ge=1, le=1000, description="Maximum records")
 ):
     """Get historical price data."""
-    from backend.main import app_state  # Import here to avoid circular imports
-
     # Validate date range
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=422, detail="Start date must be before or equal to end date")
 
     try:
-        # Best-effort refresh to ensure latest candles exist in DB.
-        _refresh_latest_daily_prices(app_state["database_path"], ticker, end_date)
+        db_path = _resolve_db_path()
 
-        conn = sqlite3.connect(app_state["database_path"])
+        # Best-effort refresh to ensure latest candles exist in DB.
+        _refresh_latest_daily_prices(db_path, ticker, end_date)
 
         query = "SELECT date, open, high, low, close, adjusted_close, volume FROM price_daily WHERE ticker = ?"
         params = [ticker.upper()]
@@ -144,8 +163,8 @@ async def get_price_data(
         query += " ORDER BY date DESC LIMIT ?"
         params.append(limit)  # type: ignore[arg-type]
 
-        df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
+        with sqlite3.connect(db_path) as conn:
+            df = pd.read_sql_query(query, conn, params=params)
 
         if df.empty:
             return {"ticker": ticker.upper(), "data": []}

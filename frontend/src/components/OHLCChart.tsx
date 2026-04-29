@@ -230,7 +230,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             library_path: "/charting_library/",
             locale: "en",
             disabled_features: [
-              "header_symbol_search" as any,
               "header_compare" as any,
               "header_undo_redo" as any,
               "header_screenshot" as any,

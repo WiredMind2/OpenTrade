@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { getPredictions, createPrediction, getTickers, getPredictionProjections, getLatestPriceAnchor } from '../services/api'
+import { getPredictions, createPrediction, getTickers, getPredictionProjections, getLatestPriceAnchor, searchUdfSymbols } from '../services/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -36,6 +36,8 @@ export default function Predictions() {
   const [selectedTicker, setSelectedTicker] = useState('AAPL')
   const [activeTab, setActiveTab] = useState('chart')
   const [availableTickers, setAvailableTickers] = useState<string[]>([])
+  const [tickerSearch, setTickerSearch] = useState('')
+  const [searchingTickers, setSearchingTickers] = useState(false)
 
   // Projection controls state
   const [projectionStrategy, setProjectionStrategy] = useState('')
@@ -71,6 +73,44 @@ export default function Predictions() {
       console.error('Failed to fetch tickers:', e)
       // Fallback to hardcoded list if API fails
       setAvailableTickers(['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'AMD'])
+    }
+  }
+
+  const mergeTickers = (symbols: string[]) => {
+    setAvailableTickers((prev) => {
+      const merged = new Set<string>(prev)
+      symbols.forEach((s) => {
+        if (s?.trim()) {
+          merged.add(s.trim().toUpperCase())
+        }
+      })
+      return Array.from(merged).sort()
+    })
+  }
+
+  const searchAndAddTicker = async () => {
+    const query = tickerSearch.trim().toUpperCase()
+    if (!query) return
+    setSearchingTickers(true)
+    try {
+      const results = await searchUdfSymbols(query, '', 20)
+      const foundTickers = results
+        .map((item) => (item.ticker || item.symbol || '').toUpperCase())
+        .filter(Boolean)
+      if (foundTickers.length > 0) {
+        mergeTickers(foundTickers)
+        setTicker(foundTickers[0])
+        setSelectedTicker(foundTickers[0])
+      } else {
+        // Keep manual-symbol workflows possible even if provider returns no suggestions.
+        mergeTickers([query])
+        setTicker(query)
+        setSelectedTicker(query)
+      }
+    } catch (e) {
+      console.error('Ticker search failed:', e)
+    } finally {
+      setSearchingTickers(false)
     }
   }
 
@@ -222,6 +262,22 @@ export default function Predictions() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex w-full sm:flex-1 gap-2">
+              <Input
+                value={tickerSearch}
+                onChange={(e) => setTickerSearch(e.target.value.toUpperCase())}
+                placeholder="Search ticker (e.g. GOOGL)"
+                className="font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={searchAndAddTicker}
+                disabled={searchingTickers || !tickerSearch.trim()}
+              >
+                {searchingTickers ? 'Searching...' : 'Search'}
+              </Button>
+            </div>
             <Select value={ticker} onValueChange={setTicker}>
               <SelectTrigger className="w-full sm:flex-1">
                 <SelectValue placeholder="Select ticker" />

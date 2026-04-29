@@ -79,6 +79,34 @@ export const getTickers = async () => {
   return response.data
 }
 
+export interface UdfSearchSymbol {
+  symbol: string
+  full_name: string
+  description: string
+  exchange: string
+  ticker: string
+  type: string
+}
+
+export const searchUdfSymbols = async (
+  query: string,
+  exchange: string = '',
+  limit: number = 20
+): Promise<UdfSearchSymbol[]> => {
+  const response = await instance.get('/udf/search', {
+    params: {
+      q: query,
+      type: 'stock',
+      exchange,
+      limit,
+    },
+  })
+  if (response.data?.s === 'error') {
+    return []
+  }
+  return Array.isArray(response.data) ? response.data : []
+}
+
 export interface LatestPriceAnchor {
   latestPrice: number
   latestTime: number

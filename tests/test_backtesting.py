@@ -425,21 +425,6 @@ class TestBacktesting:
         assert result2.get('successful') == 1
         active_connections.clear()
 
-    def test_auth_utilities(self):
-        """Lightweight tests for auth utilities (token creation/validation where available)."""
-        try:
-            from backend.auth_utils import create_jwt_token, verify_jwt_token
-
-            token = create_jwt_token({'sub': 'test_user'})
-            assert isinstance(token, str) and len(token) > 0
-
-            payload = verify_jwt_token(token)
-            assert payload.get('sub') == 'test_user'
-        except Exception:
-            # If the project doesn't implement JWT helpers, at minimum import should not crash
-            import importlib
-            importlib.import_module('backend.auth_utils')
-
     def test_coverage_verification(self):
         """Basic coverage smoke test: ensure tests are exercising core modules."""
         import inspect

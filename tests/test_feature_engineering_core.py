@@ -7,6 +7,8 @@ import numpy as np
 import tempfile
 import os
 import sqlite3
+import gc
+import time
 from unittest.mock import patch, MagicMock, PropertyMock
 from backend.feature_engineering import (
     FeatureEngineer, create_feature_engineer, FeatureDefinition, FeatureType
@@ -77,7 +79,13 @@ class TestFeatureEngineerCore:
     def teardown_method(self):
         """Clean up test files."""
         if os.path.exists(self.temp_db.name):
-            os.unlink(self.temp_db.name)
+            for _ in range(10):
+                try:
+                    os.unlink(self.temp_db.name)
+                    break
+                except PermissionError:
+                    gc.collect()
+                    time.sleep(0.05)
 
     def test_initialization(self):
         """Test FeatureEngineer initialization."""

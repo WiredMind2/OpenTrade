@@ -60,6 +60,23 @@ app_state = {
 }
 
 
+def _ensure_legacy_columns(conn):
+    """Patch minimal legacy schemas used by tests before applying full schema."""
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='articles'")
+    if not cur.fetchone():
+        return
+
+    existing_columns = {row[1] for row in cur.execute("PRAGMA table_info(articles)").fetchall()}
+    if "canonical_timestamp" not in existing_columns:
+        cur.execute("ALTER TABLE articles ADD COLUMN canonical_timestamp TEXT")
+        # Backfill from published_at when available so downstream queries still work.
+        if "published_at" in existing_columns:
+            cur.execute(
+                "UPDATE articles SET canonical_timestamp = published_at WHERE canonical_timestamp IS NULL"
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan management."""
@@ -168,6 +185,7 @@ async def init_database():
         try:
             # Keep behavior consistent with schema.sql
             conn.execute("PRAGMA foreign_keys = ON;")
+            _ensure_legacy_columns(conn)
 
             # Apply schema.sql (idempotent because it uses IF NOT EXISTS)
             schema_path = (Path(__file__).resolve().parent.parent / "db" / "schema.sql")

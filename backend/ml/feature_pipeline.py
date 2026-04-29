@@ -53,28 +53,30 @@ class FeaturePipeline:
     ) -> List[Tuple[str, str, str, float]]:
         cur = conn.cursor()
         since = (as_of - timedelta(days=7)).date().isoformat()
+        columns = {row[1] for row in cur.execute("PRAGMA table_info(articles)").fetchall()}
+        timestamp_col = "canonical_timestamp" if "canonical_timestamp" in columns else "published_at"
         try:
             cur.execute(
                 """
-                SELECT a.title, a.content, a.canonical_timestamp, a.sentiment_score
+                SELECT a.title, a.content, a.{timestamp_col}, a.sentiment_score
                 FROM articles a
                 JOIN article_ticker at ON at.article_id = a.id
-                WHERE at.ticker = ? AND a.canonical_timestamp >= ?
-                ORDER BY a.canonical_timestamp DESC
+                WHERE at.ticker = ? AND a.{timestamp_col} >= ?
+                ORDER BY a.{timestamp_col} DESC
                 LIMIT 50
-                """,
+                """.format(timestamp_col=timestamp_col),
                 (ticker.upper(), since),
             )
             return cur.fetchall()
         except sqlite3.OperationalError:
             cur.execute(
                 """
-                SELECT title, content, canonical_timestamp, 0.0 as sentiment_score
+                SELECT title, content, {timestamp_col}, 0.0 as sentiment_score
                 FROM articles
-                WHERE canonical_timestamp >= ?
-                ORDER BY canonical_timestamp DESC
+                WHERE {timestamp_col} >= ?
+                ORDER BY {timestamp_col} DESC
                 LIMIT 50
-                """,
+                """.format(timestamp_col=timestamp_col),
                 (since,),
             )
             return cur.fetchall()

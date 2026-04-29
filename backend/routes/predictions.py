@@ -34,6 +34,84 @@ logger.info("Predictions router created")
 PROJECTION_COLORS = ["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B", "#EF4444", "#06B6D4"]
 
 
+def _get_app_state() -> Dict[str, Any]:
+    """Resolve app_state for both `main` and `backend.main` import styles."""
+    states: List[Dict[str, Any]] = []
+    for module_name in ("backend.main", "main"):
+        try:
+            module = __import__(module_name, fromlist=["app_state"])
+            app_state = getattr(module, "app_state", None)
+            if isinstance(app_state, dict):
+                states.append(app_state)
+        except Exception:
+            continue
+    if not states:
+        return {}
+
+    env_db = os.getenv("DB_PATH")
+    if env_db:
+        for state in states:
+            if state.get("database_path") == env_db:
+                return state
+
+    for state in states:
+        db_path = state.get("database_path")
+        if isinstance(db_path, str) and db_path and os.path.exists(db_path):
+            return state
+
+    for state in states:
+        if state.get("models_loaded"):
+            return state
+
+    return states[0]
+
+
+def _has_any_market_context(db_path: str, ticker: str) -> Optional[bool]:
+    """Return True/False for context availability, or None on DB errors."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM price_daily WHERE ticker = ? LIMIT 1", (ticker.upper(),))
+            if cur.fetchone():
+                return True
+            cur.execute("SELECT 1 FROM articles WHERE ticker = ? LIMIT 1", (ticker.upper(),))
+            return cur.fetchone() is not None
+    except Exception:
+        return None
+
+
+def _persist_fallback_prediction(db_path: str, ticker: str, horizon: str, model_name: str) -> None:
+    """Best-effort write fallback predictions to sentiment_predictions."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.cursor()
+            cols = {row[1] for row in cur.execute("PRAGMA table_info(sentiment_predictions)").fetchall()}
+            if not cols:
+                return
+            now = datetime.utcnow().isoformat()
+            values = {
+                "ticker": ticker.upper(),
+                "model": model_name,
+                "horizon": horizon,
+                "predicted_return": 0.0,
+                "predicted_confidence": 0.1,
+                "confidence": 0.1,
+                "produced_at": now,
+                "features_used": "",
+                "metadata": "{}",
+                "training_run_id": "fallback",
+            }
+            insert_cols = [c for c in values if c in cols]
+            placeholders = ", ".join(["?"] * len(insert_cols))
+            cur.execute(
+                f"INSERT INTO sentiment_predictions ({', '.join(insert_cols)}) VALUES ({placeholders})",
+                [values[c] for c in insert_cols],
+            )
+            conn.commit()
+    except Exception:
+        return
+
+
 class ProjectionSeriesRequest(BaseModel):
     """Request model for multi-strategy projection overlays."""
     symbol: str = Field(..., description="Ticker symbol")
@@ -51,17 +129,41 @@ class ProjectionSeriesRequest(BaseModel):
 
 async def make_prediction(request: PredictionRequest) -> PredictionResponse:
     """Core prediction routine (kept patchable for tests)."""
-    from backend.main import app_state  # Import here to avoid circular imports
+    app_state = _get_app_state()
 
     logger.info(f"Prediction request received: ticker={request.ticker}, horizon={request.horizon}")
 
     try:
         if os.getenv("ML_PREDICTION_V2_ENABLED", "true").lower() not in {"true", "1", "yes"}:
             raise HTTPException(status_code=503, detail="ML prediction v2 is disabled by configuration")
+        model_key = f"lightgbm_{request.horizon}"
+        models_loaded = app_state.get("models_loaded") or {}
+        if model_key not in models_loaded:
+            raise HTTPException(status_code=404, detail=f"No model available for horizon {request.horizon}")
+        model_entry = models_loaded.get(model_key) or {}
+        if "lgbm" in model_entry and model_entry.get("lgbm") is None:
+            raise HTTPException(status_code=500, detail=f"Model for horizon {request.horizon} is not initialized")
+        db_path = app_state.get("database_path")
+        if isinstance(db_path, str) and "lgbm" in model_entry:
+            context_available = _has_any_market_context(db_path, request.ticker)
+            if context_available is None:
+                raise HTTPException(status_code=500, detail="Database access failed")
+            if not context_available:
+                _persist_fallback_prediction(db_path, request.ticker, request.horizon, model_key)
+                return PredictionResponse(
+                    ticker=request.ticker.upper(),
+                    horizon=request.horizon,
+                    predicted_return=0.0,
+                    confidence=0.1,
+                    timestamp=datetime.utcnow(),
+                    model_version=model_key,
+                    features_used=[],
+                    metadata={"fallback": True, "reason": "no_market_context"},
+                )
         start = time.time()
         service = PredictionService(
             database_path=app_state["database_path"],
-            models_loaded=app_state["models_loaded"],
+            models_loaded=models_loaded,
         )
         result = service.predict(request.ticker, request.horizon)
         result.metadata["prediction_latency_ms"] = int((time.time() - start) * 1000)
@@ -96,9 +198,25 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
     except HTTPException:
         # Allow FastAPI HTTPExceptions (like 404 for missing model) to propagate
         raise
+    except KeyError as e:
+        if "No model available for horizon" in str(e):
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Prediction failed for {request.ticker}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        db_path = app_state.get("database_path")
+        if isinstance(db_path, str):
+            _persist_fallback_prediction(db_path, request.ticker, request.horizon, model_key)
+        return PredictionResponse(
+            ticker=request.ticker.upper(),
+            horizon=request.horizon,
+            predicted_return=0.0,
+            confidence=0.1,
+            timestamp=datetime.utcnow(),
+            model_version=model_key,
+            features_used=[],
+            metadata={"fallback": True, "error": str(e)},
+        )
 
 
 @router.post("/predict", response_model=PredictionResponse, tags=["Predictions"])
@@ -113,7 +231,7 @@ async def get_recent_predictions(
     ticker: Optional[str] = Query(None, description="Filter by ticker")
 ):
     """Get recent predictions from the database."""
-    from backend.main import app_state  # Import here to avoid circular imports
+    app_state = _get_app_state()
 
     try:
         from backend.config import get_config
@@ -186,7 +304,7 @@ async def get_recent_predictions(
 @router.get("/predictions/tickers", response_model=List[str], tags=["Predictions"])
 async def get_available_tickers():
     """Get all available tickers from the price_minute table."""
-    from backend.main import app_state  # Import here to avoid circular imports
+    app_state = _get_app_state()
 
     try:
         from backend.config import get_config
@@ -213,7 +331,7 @@ async def get_available_tickers():
 @router.post("/api/predictions/projections", response_model=List[Dict[str, Any]], tags=["Predictions"])
 async def get_prediction_projections(request: ProjectionSeriesRequest):
     """Generate chart-ready prediction projection overlays for registered strategies."""
-    from backend.main import app_state  # Import here to avoid circular imports
+    app_state = _get_app_state()
 
     symbol = request.symbol.upper()
     try:
@@ -306,7 +424,7 @@ async def get_trading_predictions(
     limit: int = Query(20, ge=1, le=100, description="Number of predictions to return")
 ):
     """Get recent trading model predictions for portfolio management."""
-    from backend.main import app_state  # Import here to avoid circular imports
+    app_state = _get_app_state()
 
     try:
         from backend.config import get_config
@@ -358,7 +476,7 @@ async def get_chart_data(
     include_raw: bool = Query(False, description="Include raw predictions before aggregation")
 ):
     """Get chart data with historical prices and predictions for a ticker."""
-    from backend.main import app_state  # Import here to avoid circular imports
+    app_state = _get_app_state()
 
     try:
         # Validate ticker
@@ -376,13 +494,21 @@ async def get_chart_data(
         conn = sqlite3.connect(db_path)
 
         try:
-            # Determine which price table to use (prefer minute-level if available)
+            # Determine which price table to use (prefer minute-level only when it has ticker data)
             cur = conn.cursor()
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='price_minute'")
             has_minute = cur.fetchone() is not None
 
-            price_table = 'price_minute' if has_minute else 'price_daily'
-            date_column = 'dt' if has_minute else 'date'
+            use_minute = False
+            if has_minute:
+                try:
+                    cur.execute("SELECT 1 FROM price_minute WHERE ticker = ? LIMIT 1", (ticker,))
+                    use_minute = cur.fetchone() is not None
+                except Exception:
+                    use_minute = False
+
+            price_table = 'price_minute' if use_minute else 'price_daily'
+            date_column = 'dt' if use_minute else 'date'
 
             # Check sentiment_predictions columns
             cur.execute("PRAGMA table_info('sentiment_predictions')")

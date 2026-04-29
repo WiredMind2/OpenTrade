@@ -10,6 +10,8 @@ import sqlite3
 import tempfile
 import os
 import asyncio
+import gc
+import time
 from main import app, app_state
 
 
@@ -53,8 +55,16 @@ class TestAPIUDFEndpoints:
 
     def teardown_method(self):
         """Clean up temporary database."""
+        if hasattr(self, "client"):
+            self.client.close()
         if os.path.exists(self.temp_db.name):
-            os.unlink(self.temp_db.name)
+            for _ in range(10):
+                try:
+                    os.unlink(self.temp_db.name)
+                    break
+                except PermissionError:
+                    gc.collect()
+                    time.sleep(0.05)
 
     def test_udf_config_endpoint(self):
         """Test UDF config endpoint returns 200 OK."""
@@ -265,7 +275,8 @@ class TestAPIUDFEndpoints:
         assert "errmsg" in data
         assert "not found" in data["errmsg"].lower()
 
-    def test_udf_history_endpoint_automatic_fetch(self):
+    @patch("backend.routes.udf.fetch_external_data")
+    def test_udf_history_endpoint_automatic_fetch(self, mock_fetch_external_data):
         """Test UDF history endpoint automatically fetches data when none is available."""
         # Create empty price_daily table
         conn = sqlite3.connect(self.temp_db.name)
@@ -283,8 +294,23 @@ class TestAPIUDFEndpoints:
         conn.commit()
         conn.close()
 
+        def _mock_fetch(symbol, table, from_date, to_date):
+            conn_inner = sqlite3.connect(self.temp_db.name)
+            conn_inner.execute(
+                """
+                INSERT INTO price_daily (ticker, date, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (symbol.upper(), "2024-01-05", 150.0, 155.0, 149.0, 152.0, 1000),
+            )
+            conn_inner.commit()
+            conn_inner.close()
+            return True
+
+        mock_fetch_external_data.side_effect = _mock_fetch
+
         from_ts = int(datetime(2024, 1, 1).timestamp())
-        to_ts = int(datetime(2024, 1, 3).timestamp())
+        to_ts = int(datetime(2024, 1, 10).timestamp())
 
         response = self.client.get(f"/udf/history?symbol=AAPL&resolution=1D&from_ts={from_ts}&to_ts={to_ts}")
         assert response.status_code == 200
@@ -303,3 +329,65 @@ class TestAPIUDFEndpoints:
         # Should have fetched at least some data
         assert len(data["t"]) > 0
         assert len(data["o"]) == len(data["h"]) == len(data["l"]) == len(data["c"]) == len(data["v"])
+        assert mock_fetch_external_data.called
+
+    def test_udf_history_endpoint_invalid_date_range_returns_clear_error(self):
+        """Invalid from/to ordering should return explicit UDF error message."""
+        from_ts = int(datetime(2024, 1, 3).timestamp())
+        to_ts = int(datetime(2024, 1, 1).timestamp())
+
+        response = self.client.get(f"/udf/history?symbol=AAPL&resolution=1D&from_ts={from_ts}&to_ts={to_ts}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["s"] == "error"
+        assert "invalid date range" in data["errmsg"].lower()
+
+    @patch("backend.routes.udf.fetch_external_data")
+    def test_udf_history_daily_narrow_window_skips_external_fetch(self, mock_fetch_external_data):
+        """Narrow daily windows with no rows should return no_data without provider calls."""
+        conn = sqlite3.connect(self.temp_db.name)
+        conn.execute("""
+            CREATE TABLE price_daily (
+                ticker TEXT,
+                date TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume INTEGER
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        # Weekend-like one-day window where no daily bar is expected.
+        from_ts = int(datetime(2025, 1, 4).timestamp())
+        to_ts = int(datetime(2025, 1, 5).timestamp())
+        response = self.client.get(
+            f"/udf/history?symbol=AAPL&resolution=1D&from_ts={from_ts}&to_ts={to_ts}&countback=1"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["s"] == "no_data"
+        mock_fetch_external_data.assert_not_called()
+
+    @patch("backend.routes.udf._search_yahoo_symbols")
+    def test_udf_search_uses_external_fallback_when_local_empty(self, mock_search):
+        """Search should include external candidates when local DB has no matches."""
+        mock_search.return_value = [
+            {
+                "symbol": "GOOG",
+                "full_name": "NASDAQ:GOOG",
+                "description": "Alphabet Inc.",
+                "exchange": "NASDAQ",
+                "ticker": "GOOG",
+                "type": "stock",
+            }
+        ]
+
+        response = self.client.get("/udf/search?q=GOOG&type=stock&exchange=NASDAQ&limit=50")
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert any(item.get("ticker") == "GOOG" for item in data)
+        mock_search.assert_called_once()

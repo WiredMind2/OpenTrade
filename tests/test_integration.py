@@ -5,6 +5,8 @@ import pytest
 import sqlite3
 import tempfile
 import os
+import gc
+import time
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
@@ -141,8 +143,16 @@ class TestIntegrationWorkflow:
 
     def teardown_method(self):
         """Clean up test environment."""
+        if hasattr(self, "client"):
+            self.client.close()
         if os.path.exists(self.temp_db.name):
-            os.unlink(self.temp_db.name)
+            for _ in range(10):
+                try:
+                    os.unlink(self.temp_db.name)
+                    break
+                except PermissionError:
+                    gc.collect()
+                    time.sleep(0.05)
 
     def test_data_ingestion_to_prediction_workflow(self):
         """Test complete workflow from data ingestion to prediction."""
@@ -460,11 +470,8 @@ class TestIntegrationWorkflow:
             }
         }
 
-        # Mock authentication and strategy.train method
-        with patch('backend.auth_utils.get_user_from_token') as mock_auth, \
-             patch('backend.strategies.sentiment_ml.SentimentMLStrategy.train') as mock_train:
-
-            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+        # Mock strategy.train method
+        with patch('backend.strategies.sentiment_ml.SentimentMLStrategy.train') as mock_train:
             mock_train.return_value = {"job_id": "test_job_123", "status": "queued"}
 
             response = self.client.post("/api/strategies/sentiment_ml/train", json=payload, headers=self.auth_headers)
@@ -479,17 +486,13 @@ class TestIntegrationWorkflow:
         """Test training a strategy that doesn't support training."""
         payload = {"config": {}}
 
-        # Mock authentication
-        with patch('backend.auth_utils.get_user_from_token') as mock_auth:
-            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+        # Try to train a rule-based strategy (assuming moving_average doesn't support training)
+        response = self.client.post("/api/strategies/moving_average/train", json=payload, headers=self.auth_headers)
+        assert response.status_code == 400
 
-            # Try to train a rule-based strategy (assuming moving_average doesn't support training)
-            response = self.client.post("/api/strategies/moving_average/train", json=payload, headers=self.auth_headers)
-            assert response.status_code == 400
-
-            data = response.json()
-            assert "detail" in data
-            assert "does not support training" in data["detail"]
+        data = response.json()
+        assert "detail" in data
+        assert "does not support training" in data["detail"]
 
     def test_get_model_job_status(self):
         """Test GET /api/model_jobs/{job_id} endpoint."""
@@ -502,32 +505,24 @@ class TestIntegrationWorkflow:
         conn.commit()
         conn.close()
 
-        # Mock authentication
-        with patch('backend.auth_utils.get_user_from_token') as mock_auth:
-            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+        # Test getting job status
+        response = self.client.get("/api/model_jobs/test_job_456", headers=self.auth_headers)
+        assert response.status_code == 200
 
-            # Test getting job status
-            response = self.client.get("/api/model_jobs/test_job_456", headers=self.auth_headers)
-            assert response.status_code == 200
-
-            data = response.json()
-            assert data["job_id"] == "test_job_456"
-            assert data["model_name"] == "sentiment_ml"
-            assert data["status"] == "completed"
-            assert data["config"] == '{"param": "value"}'
+        data = response.json()
+        assert data["job_id"] == "test_job_456"
+        assert data["model_name"] == "sentiment_ml"
+        assert data["status"] == "completed"
+        assert data["config"] == '{"param": "value"}'
 
     def test_get_model_job_status_not_found(self):
         """Test GET /api/model_jobs/{job_id} for non-existent job."""
-        # Mock authentication
-        with patch('backend.auth_utils.get_user_from_token') as mock_auth:
-            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
+        response = self.client.get("/api/model_jobs/non_existent_job", headers=self.auth_headers)
+        assert response.status_code == 404
 
-            response = self.client.get("/api/model_jobs/non_existent_job", headers=self.auth_headers)
-            assert response.status_code == 404
-
-            data = response.json()
-            assert "detail" in data
-            assert "not found" in data["detail"]
+        data = response.json()
+        assert "detail" in data
+        assert "not found" in data["detail"]
 
     @pytest.mark.asyncio
     async def test_full_training_workflow_integration(self):
@@ -536,12 +531,10 @@ class TestIntegrationWorkflow:
         import asyncio
 
         # Step 1: Mock the training subprocess to succeed quickly
-        with patch('backend.auth_utils.get_user_from_token') as mock_auth, \
-             patch('backend.strategies.sentiment_ml.subprocess.run') as mock_subprocess, \
+        with patch('backend.strategies.sentiment_ml.subprocess.run') as mock_subprocess, \
              patch('backend.strategies.sentiment_ml.broadcast_websocket_message') as mock_broadcast, \
              patch('backend.strategies.sentiment_ml.psutil.cpu_percent', return_value=50.0), \
              patch('backend.strategies.sentiment_ml.psutil.virtual_memory') as mock_memory:
-            mock_auth.return_value = {"id": 1, "username": "test", "role": "admin"}
 
             # Mock memory
             mock_memory.return_value.percent = 60.0

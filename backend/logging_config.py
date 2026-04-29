@@ -56,8 +56,6 @@ COMPONENT_LOGGER_MAPPING = {
     "backend.error_handling": "core",
     "backend.logging_config": "core",
     "backend.schemas": "core",
-    # Auth
-    "backend.auth_utils": "auth",
     # Main
     "backend.main": "main",
     "main": "main",
@@ -69,7 +67,6 @@ CATEGORY_FILE_MAPPING = {
     "routes": "logs/routes.log",
     "scripts": "logs/scripts.log",
     "core": "logs/core.log",
-    "auth": "logs/auth.log",
     "main": "logs/main.log",
 }
 

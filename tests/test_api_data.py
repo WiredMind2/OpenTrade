@@ -10,6 +10,8 @@ import sqlite3
 import tempfile
 import os
 import asyncio
+import gc
+import time
 
 
 @pytest.mark.unit
@@ -144,8 +146,17 @@ class TestAPIDataEndpoints:
 
     def teardown_method(self):
         """Clean up temporary database."""
+        if hasattr(self, "client"):
+            self.client.close()
         if os.path.exists(self.temp_db.name):
-            os.unlink(self.temp_db.name)
+            # Windows can keep transient handles briefly after requests complete.
+            for _ in range(10):
+                try:
+                    os.unlink(self.temp_db.name)
+                    break
+                except PermissionError:
+                    gc.collect()
+                    time.sleep(0.05)
 
     def test_get_price_data_success(self):
         """Test getting price data successfully."""

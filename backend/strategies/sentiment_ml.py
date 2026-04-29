@@ -15,6 +15,7 @@ import json
 import re
 from datetime import datetime
 from typing import Dict, Any, Type, List
+from pathlib import Path
 import backtrader as bt
 import joblib
 
@@ -111,8 +112,13 @@ class SentimentMLStrategy(RecursiveForecastStrategy):
             self.model_name = self.current_version
 
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
-        """Create and return the shared recursive forecast runtime strategy."""
-        return super().create_backtrader_strategy(parameters)
+        """Create a strategy class with the legacy SentimentMLBacktrader name."""
+        base_strategy = super().create_backtrader_strategy(parameters)
+
+        class SentimentMLBacktrader(base_strategy):
+            pass
+
+        return SentimentMLBacktrader
 
     def train(self, config: Dict[str, Any]) -> Any:
         """Train the sentiment model by enqueuing a background training job."""
@@ -239,8 +245,8 @@ class SentimentMLStrategy(RecursiveForecastStrategy):
                 # Refresh model registry
                 registry = app_state["model_registry"]
                 registry.discover(
-                    models_dir=app_state.get("models_dir", "models"),
-                    models_pkg_dir=app_state.get("models_pkg_dir")
+                    models_dir=Path(app_state.get("models_dir", "models")),
+                    models_pkg_dir=Path(app_state.get("models_pkg_dir") or (Path(__file__).resolve().parent.parent / "models"))
                 )
 
                 # Log model saving event

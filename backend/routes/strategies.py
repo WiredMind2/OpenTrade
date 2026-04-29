@@ -40,8 +40,19 @@ class ProjectionRequest(BaseModel):
 
 def _get_db_connection():
     """Get database connection from app state."""
-    from backend.main import app_state
-    db_path = app_state.get("database_path", "data/backtest.db")
+    db_path = None
+    for module_name in ("backend.main", "main"):
+        try:
+            module = __import__(module_name, fromlist=["app_state"])
+            app_state = getattr(module, "app_state", None)
+            if isinstance(app_state, dict) and app_state.get("database_path"):
+                db_path = app_state.get("database_path")
+                break
+        except Exception:
+            continue
+    if not db_path:
+        from backend.config import get_config
+        db_path = get_config().database.path
     return sqlite3.connect(db_path)
 
 
