@@ -29,6 +29,16 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
     getStrategies()
       .then((data: Strategy[]) => {
         setStrategies(data);
+        if (data.length > 0) {
+          const first = data[0];
+          const initialParams: Record<string, any> = {};
+          for (const [key, schema] of Object.entries(first.parameters_schema)) {
+            initialParams[key] = schema.default;
+          }
+          setSelectedStrategy(first.name);
+          setParams(initialParams);
+          onStrategyChange(first.name, initialParams);
+        }
       })
       .catch(err => {
         console.error('Failed to fetch strategies:', err);
@@ -47,9 +57,6 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
       }
       setParams(initialParams);
       onStrategyChange(name, initialParams);
-    } else {
-      setParams({});
-      onStrategyChange('', {});
     }
   };
 
@@ -116,7 +123,6 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
     <div>
       <label htmlFor="strategy-select">Select Strategy:</label>
       <select id="strategy-select" value={selectedStrategy} onChange={handleStrategyChange}>
-        <option value="">-- Select a Strategy --</option>
         {strategies.map(strategy => (
           <option key={strategy.name} value={strategy.name}>
             {strategy.name} - {strategy.description}

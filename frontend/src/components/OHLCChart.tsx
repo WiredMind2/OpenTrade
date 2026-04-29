@@ -124,7 +124,7 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
         * Render prediction projections on the chart
         */
        const renderPredictionProjections = () => {
-         if (!widgetRef.current || !predictionSettings.showPredictionProjections) return;
+         if (!widgetRef.current) return;
 
          const chart = widgetRef.current.chart();
          if (!chart) return;
@@ -138,6 +138,8 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
            }
          });
          predictionEntitiesRef.current = [];
+
+         if (!predictionSettings.showPredictionProjections) return;
 
          // Filter projections for current symbol
          const relevantProjections = predictionSettings.predictionProjections.filter(
