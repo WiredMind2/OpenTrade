@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 """
 Scan `data/kaggle_yahoo/` for CSV files, insert tickers into the `tickers` table, and report which default tickers are present.
 
@@ -8,7 +10,7 @@ import os
 import sqlite3
 import argparse
 from pathlib import Path
-from script_logger import logger
+from backend.scripts.script_logger import logger
 
 DEFAULT_TICKERS = ['AAPL','MSFT','AMZN','GOOG','NVDA','META','TSLA','JPM','BAC','JNJ']
 

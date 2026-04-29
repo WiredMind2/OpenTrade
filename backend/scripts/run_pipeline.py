@@ -12,11 +12,15 @@ import argparse
 import subprocess
 import sys
 import os
+
+# Add project root to sys.path so scripts can use absolute imports from `backend.scripts`
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
 from datetime import datetime
 import io
 from contextlib import redirect_stdout, redirect_stderr
 import traceback
-from script_logger import logger
+from backend.scripts.script_logger import logger
 
 
 DEFAULT_STEPS = [
@@ -225,13 +229,13 @@ def run_step(name: str, func, args, log_dir: str):
 
 
 def run_apply_schema(args):
-    import apply_schema
+    from backend.scripts import apply_schema
     schema_path = os.path.join(os.path.dirname(args.db), '..', 'db', 'schema.sql')
     apply_schema.apply_schema(args.db, schema_path)
 
 
 def run_download_kaggle(args):
-    import download_kaggle
+    from backend.scripts import download_kaggle
     if download_kaggle.KAGGLE_USERNAME and download_kaggle.KAGGLE_KEY:
         download_kaggle.write_kaggle_json(download_kaggle.KAGGLE_USERNAME, download_kaggle.KAGGLE_KEY)
     else:
@@ -241,7 +245,7 @@ def run_download_kaggle(args):
 
 def run_ingest_prices(args):
     import os
-    import ingest_prices
+    from backend.scripts import ingest_prices
     # recursively find CSVs
     paths = []
     for root, _, files in os.walk(args.csv_dir):
@@ -256,12 +260,12 @@ def run_ingest_prices(args):
 
 
 def run_scan_csvs(args):
-    import scan_csvs
+    from backend.scripts import scan_csvs
     scan_csvs.scan_and_register(args.db, args.csv_dir)
 
 
 def run_ingest_news(args):
-    import ingest_news
+    from backend.scripts import ingest_news
     if not ingest_news.NEWSAPI_KEY:
         print('NEWSAPI_KEY not set in environment. Export it or add to .env file.')
         return
@@ -271,13 +275,13 @@ def run_ingest_news(args):
 
 
 def run_scrape_articles(args):
-    import scrape_articles
+    from backend.scripts import scrape_articles
     scrape_articles.scrape(args.db, args.scrape_limit, args.scrape_pause)
 
 
 def run_map_articles_to_tickers(args):
     import sqlite3
-    import map_articles_to_tickers
+    from backend.scripts import map_articles_to_tickers
     conn = sqlite3.connect(args.db)
     tickers = map_articles_to_tickers.load_tickers(conn)
     if not tickers:
@@ -290,12 +294,12 @@ def run_map_articles_to_tickers(args):
 
 
 def run_labeling(args):
-    import labeling
+    from backend.scripts import labeling
     labeling.label_articles(args.db, args.horizons)
 
 
 def run_ingest_minute_prices(args):
-    import ingest_minute_prices
+    from backend.scripts import ingest_minute_prices
     # Fetch minute data for top tickers (you can modify this list)
     tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']
     tickers_str = ','.join(tickers)
@@ -315,7 +319,7 @@ def run_ingest_minute_prices(args):
 
 
 def run_backtest_runner(args):
-    import backtest_runner
+    from backend.scripts import backtest_runner
     backtest_runner.run_backtest(args.db, args.backtest_start, args.backtest_end)
 
 
