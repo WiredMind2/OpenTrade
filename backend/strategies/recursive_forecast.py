@@ -9,10 +9,12 @@ to avoid duplicating runtime signal logic.
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from typing import Any, Dict, List, Type
 
 import backtrader as bt
 
+from backend.domain.trading import TargetAllocation
 from backend.logging_config import get_component_logger
 from backend.ml.forecasting import BacktestBridge
 from backend.ml.prediction_service import PredictionService
@@ -106,6 +108,15 @@ class RecursiveForecastStrategy(BaseStrategy):
                     return "3d"
                 return "7d"
 
+            def _candidate_horizons(self) -> List[str]:
+                primary = self._resolve_horizon()
+                fallbacks = [primary, "3d", "1d"]
+                ordered: List[str] = []
+                for horizon in fallbacks:
+                    if horizon not in ordered:
+                        ordered.append(horizon)
+                return ordered
+
             def _get_prediction(self, ticker: str, date: str) -> Dict[str, Any] | None:
                 cache_key = (ticker, date)
                 if cache_key in self._prediction_cache:
@@ -143,7 +154,15 @@ class RecursiveForecastStrategy(BaseStrategy):
                         database_path=app_state.get("database_path", self.db_path),
                         models_loaded=app_state.get("models_loaded", {}),
                     )
-                    result = service.predict(ticker=ticker, horizon=self._resolve_horizon())
+                    result = None
+                    for horizon in self._candidate_horizons():
+                        try:
+                            result = service.predict(ticker=ticker, horizon=horizon)
+                            break
+                        except KeyError:
+                            continue
+                    if result is None:
+                        raise KeyError(f"No model available for horizons {self._candidate_horizons()}")
                     targets = result.metadata.get("predicted_path_targets") or [result.predicted_return]
                     signal = self.signal_bridge.to_signal(type("ForecastProxy", (), {"predicted_targets": targets})())
                     payload = {
@@ -172,3 +191,78 @@ class RecursiveForecastStrategy(BaseStrategy):
                     )
 
         return RecursiveForecastBacktrader
+
+    def generate_target_allocations(
+        self,
+        parameters: Dict[str, Any],
+        symbols: List[str],
+        as_of: datetime,
+        current_prices: Dict[str, float],
+    ) -> List[TargetAllocation]:
+        params = parameters or {}
+        threshold = float(params.get("prediction_threshold", 0.002))
+        max_position_pct = float(params.get("max_position_pct", 0.1))
+        horizon_days = max(1, int(params.get("forecast_horizon_days", 5)))
+        if horizon_days <= 1:
+            candidate_horizons = ["1d"]
+        elif horizon_days <= 3:
+            candidate_horizons = ["3d", "1d"]
+        else:
+            candidate_horizons = ["7d", "3d", "1d"]
+
+        from backend.main import app_state
+
+        service = PredictionService(
+            database_path=app_state.get("database_path", "data/backtest.db"),
+            models_loaded=app_state.get("models_loaded", {}),
+        )
+
+        allocations: List[TargetAllocation] = []
+        for symbol in symbols:
+            if float(current_prices.get(symbol, 0.0) or 0.0) <= 0:
+                continue
+            result = None
+            used_horizon = None
+            for horizon in candidate_horizons:
+                try:
+                    result = service.predict(ticker=symbol, horizon=horizon)
+                    used_horizon = horizon
+                    break
+                except KeyError:
+                    continue
+            if result is None:
+                allocations.append(
+                    TargetAllocation(
+                        ticker=symbol.upper(),
+                        target_pct=0.0,
+                        reason="no_model_available",
+                        confidence=0.0,
+                        timestamp=as_of,
+                        metadata={"requested_horizons": candidate_horizons, "strategy": self.name},
+                    )
+                )
+                continue
+            predicted_return = float(result.predicted_return)
+            confidence = float(result.confidence)
+            if abs(predicted_return) < threshold:
+                target_pct = 0.0
+                reason = "below_threshold"
+            else:
+                direction = 1.0 if predicted_return > 0 else -1.0
+                target_pct = direction * max_position_pct
+                reason = "forecast_signal"
+            allocations.append(
+                TargetAllocation(
+                    ticker=symbol.upper(),
+                    target_pct=target_pct,
+                    reason=reason,
+                    confidence=confidence,
+                    timestamp=as_of,
+                    metadata={
+                        "predicted_return": predicted_return,
+                        "horizon": used_horizon,
+                        "strategy": self.name,
+                    },
+                )
+            )
+        return allocations

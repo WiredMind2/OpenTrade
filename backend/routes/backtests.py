@@ -83,6 +83,8 @@ async def run_backtest(
             equity_curve=[]
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to start backtest: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -104,8 +106,12 @@ async def get_backtest_result(
                    total_return, annualized_return, sharpe_ratio, max_drawdown,
                    win_rate, total_trades, avg_trade_return, volatility,
                    equity_curve, metrics
-            FROM backtest_runs WHERE id = ?
-        """, (backtest_id,))
+            FROM backtest_runs
+            WHERE CAST(id AS TEXT) = ?
+               OR json_extract(metrics, '$.backtest_id') = ?
+            ORDER BY completed_at DESC, id DESC
+            LIMIT 1
+        """, (backtest_id, backtest_id))
 
         row = cur.fetchone()
         conn.close()
@@ -170,7 +176,7 @@ async def list_backtests(
         cur.execute("""
             SELECT id, name, started_at, completed_at, initial_capital, final_value,
                    total_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
-                   metrics
+                   metrics, equity_curve
             FROM backtest_runs
             ORDER BY completed_at DESC
             LIMIT ? OFFSET ?
@@ -180,9 +186,22 @@ async def list_backtests(
         for row in cur.fetchall():
             (bt_id, name, started_at, completed_at, initial_capital, final_value,
              total_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
-             metrics_json) = row
+             metrics_json, equity_curve_json) = row
 
             metrics = json.loads(metrics_json) if metrics_json else {}
+            execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
+            equity_curve = json.loads(equity_curve_json) if equity_curve_json else []
+            chart_data = []
+            for idx, point in enumerate(equity_curve):
+                if not isinstance(point, dict):
+                    continue
+                value = point.get("value")
+                if value is None:
+                    continue
+                chart_data.append({
+                    "day": idx,
+                    "value": value,
+                })
 
             backtests.append({
                 "id": bt_id,
@@ -197,7 +216,17 @@ async def list_backtests(
                 "win_rate": win_rate,
                 "total_trades": total_trades,
                 "status": metrics.get("status", "completed"),
+                "error": metrics.get("error"),
+                "execution_engine": execution_summary.get("engine"),
+                "signals_emitted": execution_summary.get("signals_emitted", 0),
+                "order_intents": execution_summary.get("order_intents", 0),
+                "order_fills": execution_summary.get("order_fills", 0),
                 "timestamp": completed_at
+                if completed_at
+                else started_at
+                if started_at
+                else datetime.utcnow().isoformat(),
+                "chart_data": chart_data,
             })
 
         conn.close()

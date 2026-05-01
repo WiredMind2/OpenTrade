@@ -4,6 +4,7 @@ Strategy listing endpoints for the Trading Backtester API.
 from typing import List, Dict, Any, Optional
 import sqlite3
 import json
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List
@@ -38,6 +39,21 @@ class ProjectionRequest(BaseModel):
     horizon: int = Field(default=30, ge=1, le=365, description="Number of days to project forward")
 
 
+class ForecastRequest(BaseModel):
+    symbol: str = Field(..., description="Ticker symbol")
+    as_of: Optional[datetime] = Field(default=None, description="Anchor timestamp (defaults to utcnow)")
+    current_price: Optional[float] = Field(default=None, gt=0, description="Optional override current price")
+    params: Optional[Dict[str, Any]] = Field(default={}, description="Strategy parameters")
+    horizon_days: int = Field(default=5, ge=1, le=365)
+
+
+class SignalRequest(BaseModel):
+    symbols: List[str] = Field(..., min_length=1, description="Ticker symbols")
+    as_of: Optional[datetime] = Field(default=None, description="Signal generation timestamp")
+    current_prices: Optional[Dict[str, float]] = Field(default={}, description="Optional symbol->price overrides")
+    params: Optional[Dict[str, Any]] = Field(default={}, description="Strategy parameters")
+
+
 def _get_db_connection():
     """Get database connection from app state."""
     db_path = None
@@ -54,6 +70,30 @@ def _get_db_connection():
         from backend.config import get_config
         db_path = get_config().database.path
     return sqlite3.connect(db_path)
+
+
+def _load_latest_prices(symbols: List[str]) -> Dict[str, float]:
+    prices: Dict[str, float] = {}
+    conn = _get_db_connection()
+    try:
+        cur = conn.cursor()
+        for symbol in symbols:
+            cur.execute(
+                """
+                SELECT close
+                FROM price_daily
+                WHERE ticker = ?
+                ORDER BY date DESC
+                LIMIT 1
+                """,
+                (symbol.upper(),),
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                prices[symbol.upper()] = float(row[0])
+    finally:
+        conn.close()
+    return prices
 
 
 def validate_parameters(parameters: Dict[str, Any], schema: Dict[str, Any]) -> None:
@@ -285,3 +325,122 @@ async def project_strategy(request: Request, name: str, req: ProjectionRequest):
     except Exception as e:
         logger.error(f"Error projecting strategy '{name}': {e}")
         raise HTTPException(status_code=500, detail=f"Projection failed: {str(e)}")
+
+
+@router.post("/strategies/{name}/forecast", response_model=Dict[str, Any], tags=["Strategies"])
+async def forecast_strategy(name: str, req: ForecastRequest):
+    """Generate structured forecast output for a single symbol."""
+    from backend.main import app_state
+
+    registry = app_state.get("strategy_registry")
+    if not registry:
+        raise HTTPException(status_code=500, detail="Strategy registry not available")
+    strategy = registry.get(name)
+    if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+
+    as_of = req.as_of or datetime.utcnow()
+    symbol = req.symbol.upper()
+    prices = _load_latest_prices([symbol])
+    current_price = req.current_price or prices.get(symbol)
+    if not current_price or current_price <= 0:
+        raise HTTPException(status_code=400, detail=f"No valid current price available for {symbol}")
+
+    try:
+        forecast = strategy.forecast(
+            parameters=req.params or {},
+            symbol=symbol,
+            as_of=as_of,
+            current_price=float(current_price),
+            horizon_days=req.horizon_days,
+        )
+        return {
+            "symbol": forecast.symbol,
+            "horizon_days": forecast.horizon_days,
+            "predicted_return": forecast.predicted_return,
+            "confidence": forecast.confidence,
+            "predicted_path": forecast.predicted_path,
+            "metadata": forecast.metadata,
+        }
+    except Exception as e:
+        logger.error(f"Error forecasting strategy '{name}': {e}")
+        raise HTTPException(status_code=500, detail=f"Forecast failed: {str(e)}")
+
+
+@router.post("/strategies/{name}/signals", response_model=Dict[str, Any], tags=["Strategies"])
+async def generate_strategy_signals(name: str, req: SignalRequest):
+    """Generate executable target allocations for requested symbols."""
+    from backend.main import app_state
+
+    registry = app_state.get("strategy_registry")
+    if not registry:
+        raise HTTPException(status_code=500, detail="Strategy registry not available")
+    strategy = registry.get(name)
+    if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+
+    symbols = [s.upper() for s in req.symbols]
+    prices = _load_latest_prices(symbols)
+    merged_prices = {**prices, **{k.upper(): float(v) for k, v in (req.current_prices or {}).items()}}
+    as_of = req.as_of or datetime.utcnow()
+
+    try:
+        allocations = strategy.generate_target_allocations(
+            parameters=req.params or {},
+            symbols=symbols,
+            as_of=as_of,
+            current_prices=merged_prices,
+        )
+        return {
+            "strategy": name,
+            "as_of": as_of.isoformat(),
+            "signals": [
+                {
+                    "ticker": a.ticker,
+                    "target_pct": a.target_pct,
+                    "reason": a.reason,
+                    "confidence": a.confidence,
+                    "timestamp": a.timestamp.isoformat(),
+                    "metadata": a.metadata,
+                }
+                for a in allocations
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Error generating signals for strategy '{name}': {e}")
+        raise HTTPException(status_code=500, detail=f"Signal generation failed: {str(e)}")
+
+
+@router.get("/strategies/{name}/signals/schema", response_model=Dict[str, Any], tags=["Strategies"])
+async def get_strategy_signal_schema(name: str):
+    """Return input and output contract schema for signal generation."""
+    from backend.main import app_state
+
+    registry = app_state.get("strategy_registry")
+    if not registry:
+        raise HTTPException(status_code=500, detail="Strategy registry not available")
+    strategy = registry.get(name)
+    if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+
+    return {
+        "strategy": name,
+        "input": {
+            "symbols": "string[]",
+            "as_of": "datetime (optional)",
+            "current_prices": "record<string, number> (optional)",
+            "params": strategy.parameters_schema,
+        },
+        "output": {
+            "signals": [
+                {
+                    "ticker": "string",
+                    "target_pct": "number (-1..1)",
+                    "reason": "string",
+                    "confidence": "number (0..1)",
+                    "timestamp": "datetime",
+                    "metadata": "object",
+                }
+            ]
+        },
+    }

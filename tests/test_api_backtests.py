@@ -179,8 +179,8 @@ class TestAPIBacktestEndpoints:
             "parameters": {}
         }
         response = self.client.post("/backtest", json=payload)
-        # Should return 400 due to date range validation
-        assert response.status_code == 500  # TODO: Fix validation to return 400
+        # Validation now correctly returns 400 for oversized date ranges.
+        assert response.status_code == 400
 
     def test_get_backtest_result_not_found(self):
         """Test getting backtest result for non-existent ID."""

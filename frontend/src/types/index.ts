@@ -57,6 +57,10 @@ export interface BacktestResult {
   metrics: Record<string, any>;
   equity_curve: Array<Record<string, any>>;
   chart_data?: Array<Record<string, any>>;
+  execution_engine?: string;
+  signals_emitted?: number;
+  order_intents?: number;
+  order_fills?: number;
 }
 
 export interface ModelInfo {
@@ -284,6 +288,24 @@ export interface StrategyMetadata {
   type: string;
   parameters_schema: Record<string, any>;
   can_train: boolean;
+}
+
+export interface StrategyForecastResponse {
+  symbol: string;
+  horizon_days: number;
+  predicted_return: number;
+  confidence: number;
+  predicted_path: Array<{ time: string; price: number }>;
+  metadata: Record<string, any>;
+}
+
+export interface StrategySignalPoint {
+  ticker: string;
+  target_pct: number;
+  reason: string;
+  confidence: number;
+  timestamp: string;
+  metadata: Record<string, any>;
 }
 
 export interface ProjectionPoint {

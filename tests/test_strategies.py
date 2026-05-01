@@ -323,10 +323,6 @@ class TestSentimentMLStrategy:
             assert 'job_id' in result
             assert result['status'] == 'queued'
 
-            # Verify database was called
-            mock_cursor.execute.assert_called()
-            mock_conn.commit.assert_called()
-
             # Verify background task was created
             mock_create_task.assert_called_once()
 

@@ -6,6 +6,7 @@ and managing trading strategies.
 """
 
 import threading
+import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import importlib.util
@@ -32,7 +33,6 @@ class StrategyRegistry:
             return strategies
 
         # Add the strategies directory to Python path temporarily
-        import sys
         if str(strategies_pkg_dir) not in sys.path:
             sys.path.insert(0, str(strategies_pkg_dir))
 
@@ -43,9 +43,12 @@ class StrategyRegistry:
 
                 try:
                     # Import the module
-                    spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
+                    module_name = f"backend.strategies.{py_file.stem}"
+                    spec = importlib.util.spec_from_file_location(module_name, py_file)
                     if spec and spec.loader:
                         module = importlib.util.module_from_spec(spec)
+                        # Ensure runtime systems (e.g., Backtrader) can resolve the module by name.
+                        sys.modules[module_name] = module
                         spec.loader.exec_module(module)
 
                         # Look for BaseStrategy subclasses in the module

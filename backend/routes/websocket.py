@@ -4,6 +4,7 @@ WebSocket endpoints for the Trading Backtester API.
 import json
 from typing import Dict, Set, Tuple
 from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 
 from backend.logging_config import get_component_logger
 
@@ -42,6 +43,9 @@ async def broadcast_websocket_message(message: dict):
     if not connections:
         return {"sent": False, "clients": 0, "failed": 0}
 
+    # Normalize payload before sending to avoid datetime serialization failures.
+    payload = jsonable_encoder(message)
+
     # Log message content for debugging
     logger.debug(f"Broadcasting websocket message: {message}")
 
@@ -51,7 +55,7 @@ async def broadcast_websocket_message(message: dict):
 
     for websocket in connections:
         try:
-            await websocket.send_json(message)
+            await websocket.send_json(payload)
             sent_count += 1
         except Exception as e:
             logger.warning("Failed to send websocket message", websocket=websocket, error=e)

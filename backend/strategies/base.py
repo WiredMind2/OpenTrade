@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Type, Literal, List
 import backtrader as bt
 
+from backend.domain.trading import ForecastOutput, TargetAllocation
+
 
 class BaseStrategy(ABC):
     """Abstract base class for all trading strategies."""
@@ -82,3 +84,84 @@ class BaseStrategy(ABC):
             )
 
         return points
+
+    def forecast(
+        self,
+        parameters: Dict[str, Any],
+        symbol: str,
+        as_of: datetime,
+        current_price: float,
+        horizon_days: int = 5,
+    ) -> ForecastOutput:
+        """Generate a forecast artifact for signal generation."""
+        if horizon_days < 1:
+            raise ValueError("horizon_days must be >= 1")
+        if current_price <= 0:
+            raise ValueError("current_price must be positive")
+        points = self.project_series(
+            parameters={**(parameters or {}), "symbol": symbol},
+            anchor_time=as_of,
+            anchor_price=current_price,
+            projection_days=horizon_days,
+        )
+        if points:
+            final_price = float(points[-1].get("price", current_price))
+            confidence = float(points[-1].get("confidence", 0.5))
+        else:
+            final_price = current_price
+            confidence = 0.5
+        predicted_return = 0.0 if current_price == 0 else (final_price - current_price) / current_price
+        confidence = max(0.0, min(1.0, confidence))
+        return ForecastOutput(
+            symbol=symbol.upper(),
+            horizon_days=horizon_days,
+            predicted_return=predicted_return,
+            confidence=confidence,
+            predicted_path=points,
+            metadata={"strategy": self.name},
+        )
+
+    def generate_target_allocations(
+        self,
+        parameters: Dict[str, Any],
+        symbols: List[str],
+        as_of: datetime,
+        current_prices: Dict[str, float],
+    ) -> List[TargetAllocation]:
+        """Convert forecast outputs to executable target allocations."""
+        params = parameters or {}
+        threshold = max(float(params.get("prediction_threshold", 0.002)), 0.0)
+        max_position_pct = min(max(float(params.get("max_position_pct", 0.1)), 0.0), 1.0)
+        horizon_days = int(params.get("forecast_horizon_days", 5))
+
+        allocations: List[TargetAllocation] = []
+        for symbol in symbols:
+            price = float(current_prices.get(symbol, 0.0) or 0.0)
+            if price <= 0:
+                continue
+            forecast = self.forecast(
+                parameters=params,
+                symbol=symbol,
+                as_of=as_of,
+                current_price=price,
+                horizon_days=horizon_days,
+            )
+            if abs(forecast.predicted_return) < threshold:
+                target_pct = 0.0
+                reason = "below_threshold"
+            else:
+                direction = 1.0 if forecast.predicted_return > 0 else -1.0
+                scaled = min(abs(forecast.predicted_return) / max(threshold, 1e-9), 1.0)
+                target_pct = direction * max_position_pct * scaled
+                reason = "forecast_signal"
+            allocations.append(
+                TargetAllocation(
+                    ticker=symbol.upper(),
+                    target_pct=max(-max_position_pct, min(max_position_pct, target_pct)),
+                    reason=reason,
+                    confidence=forecast.confidence,
+                    timestamp=as_of,
+                    metadata={"predicted_return": forecast.predicted_return, "strategy": self.name},
+                )
+            )
+        return allocations

@@ -709,6 +709,7 @@ class TestBacktesting:
     async def test_backtest_engine_full_execution(self, populated_test_db):
         """Test full backtest engine execution to cover more lines."""
         from backend.routes.backtest_engine import run_backtest_background
+        from backend.strategies.moving_average import MovingAverageStrategy
 
         # Insert test predictions
         conn = sqlite3.connect(populated_test_db)
@@ -719,12 +720,21 @@ class TestBacktesting:
         conn.commit()
         conn.close()
 
-        app_state = {'database_path': populated_test_db}
+        class _Registry:
+            def get(self, strategy_name):
+                if strategy_name == "moving_average":
+                    return MovingAverageStrategy()
+                return None
+
+        app_state = {
+            'database_path': populated_test_db,
+            'strategy_registry': _Registry(),
+        }
 
         # This should execute the full backtest logic
         await run_backtest_background(
             backtest_id="test_full",
-            strategy_name="sentiment_momentum",
+            strategy_name="moving_average",
             start_date=datetime(2024, 1, 1),
             end_date=datetime(2024, 1, 2),
             initial_capital=10000.0,
@@ -735,7 +745,10 @@ class TestBacktesting:
         # Verify results were stored
         conn = sqlite3.connect(populated_test_db)
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM backtest_runs WHERE id = 'test_full'")
+        cur.execute(
+            "SELECT COUNT(*) FROM backtest_runs WHERE json_extract(metrics, '$.backtest_id') = ?",
+            ("test_full",),
+        )
         count = cur.fetchone()[0]
         assert count == 1
         conn.close()

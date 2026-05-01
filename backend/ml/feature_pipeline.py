@@ -178,17 +178,34 @@ class FeaturePipeline:
         """Return (open, high, low, close, volume) rows, newest first, up to 300 days."""
         cur = conn.cursor()
         since = (as_of - timedelta(days=300)).date().isoformat()
-        cur.execute(
-            """
-            SELECT open, high, low, close, volume
-            FROM price_daily
-            WHERE ticker = ? AND date <= ? AND date >= ?
-            ORDER BY date DESC
-            LIMIT 300
-            """,
-            (ticker.upper(), as_of.date().isoformat(), since),
-        )
-        return cur.fetchall()
+        columns = {row[1] for row in cur.execute("PRAGMA table_info(price_daily)").fetchall()}
+        if {"open", "high", "low", "close", "volume"}.issubset(columns):
+            cur.execute(
+                """
+                SELECT open, high, low, close, volume
+                FROM price_daily
+                WHERE ticker = ? AND date <= ? AND date >= ?
+                ORDER BY date DESC
+                LIMIT 300
+                """,
+                (ticker.upper(), as_of.date().isoformat(), since),
+            )
+            return cur.fetchall()
+        # Legacy/minimal test schemas may only have close and optional volume.
+        if "close" in columns:
+            volume_expr = "volume" if "volume" in columns else "0"
+            cur.execute(
+                f"""
+                SELECT close AS open, close AS high, close AS low, close, {volume_expr} AS volume
+                FROM price_daily
+                WHERE ticker = ? AND date <= ? AND date >= ?
+                ORDER BY date DESC
+                LIMIT 300
+                """,
+                (ticker.upper(), as_of.date().isoformat(), since),
+            )
+            return cur.fetchall()
+        return []
 
     def _compute_feature_map(
         self,

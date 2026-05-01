@@ -196,6 +196,27 @@ export const runBacktest = async (data: {
   return response.data
 }
 
+export const forecastStrategy = async (strategyName: string, data: {
+  symbol: string
+  horizon_days?: number
+  params?: Record<string, any>
+  as_of?: string
+  current_price?: number
+}) => {
+  const response = await instance.post(`/api/strategies/${strategyName}/forecast`, data)
+  return response.data
+}
+
+export const generateStrategySignals = async (strategyName: string, data: {
+  symbols: string[]
+  params?: Record<string, any>
+  as_of?: string
+  current_prices?: Record<string, number>
+}) => {
+  const response = await instance.post(`/api/strategies/${strategyName}/signals`, data)
+  return response.data
+}
+
 // MA Predictions API functions
 export const generateMAPredictions = async (data: {
   start_date: string

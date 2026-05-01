@@ -299,6 +299,30 @@ class StrategyAnalyticsQuery(BaseModel):
     rolling_window: int = Field(default=30)
 
 
+class StrategyForecastRequest(BaseModel):
+    symbol: str
+    as_of: Optional[datetime] = None
+    current_price: Optional[float] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    horizon_days: int = Field(default=5, ge=1, le=365)
+
+
+class StrategySignalRequest(BaseModel):
+    symbols: List[str]
+    as_of: Optional[datetime] = None
+    current_prices: Dict[str, float] = Field(default_factory=dict)
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategySignalPoint(BaseModel):
+    ticker: str
+    target_pct: float
+    reason: str
+    confidence: float
+    timestamp: datetime
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class StrategyFilterMetadataResponse(BaseModel):
     """Available filters for the strategy analytics dashboard."""
     strategies: List[str]

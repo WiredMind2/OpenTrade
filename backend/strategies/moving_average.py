@@ -4,10 +4,14 @@ Moving Average Crossover Strategy
 This module implements a simple moving average crossover trading strategy.
 """
 
+import sqlite3
+from datetime import datetime
 from typing import Dict, Any, Type, List
 import backtrader as bt
+import numpy as np
 
 from backend.strategies.base import BaseStrategy
+from backend.domain.trading import TargetAllocation
 
 
 class MovingAverageStrategy(BaseStrategy):
@@ -138,6 +142,83 @@ class MovingAverageStrategy(BaseStrategy):
                     })
 
         return MovingAverageCrossover
+
+    def generate_target_allocations(
+        self,
+        parameters: Dict[str, Any],
+        symbols: List[str],
+        as_of: datetime,
+        current_prices: Dict[str, float],
+    ) -> List[TargetAllocation]:
+        from backend.main import app_state
+
+        params = parameters or {}
+        short_window = int(params.get("short_window", 10))
+        long_window = int(params.get("long_window", 30))
+        max_position_pct = float(params.get("max_position_pct", 0.1))
+        db_path = app_state.get("database_path") or "data/backtest.db"
+
+        allocations: List[TargetAllocation] = []
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            for symbol in symbols:
+                cur.execute(
+                    """
+                    SELECT close
+                    FROM price_daily
+                    WHERE ticker = ? AND date <= ?
+                    ORDER BY date DESC
+                    LIMIT ?
+                    """,
+                    (symbol.upper(), as_of.date().isoformat(), max(long_window, short_window)),
+                )
+                rows = [float(r[0]) for r in cur.fetchall() if r[0] is not None]
+                if len(rows) < max(short_window, long_window):
+                    allocations.append(
+                        TargetAllocation(
+                            ticker=symbol.upper(),
+                            target_pct=0.0,
+                            reason="insufficient_history",
+                            confidence=0.0,
+                            timestamp=as_of,
+                            metadata={"strategy": self.name},
+                        )
+                    )
+                    continue
+                closes = np.array(rows[::-1], dtype=float)
+                short_ma = float(np.mean(closes[-short_window:]))
+                long_ma = float(np.mean(closes[-long_window:]))
+                if short_ma > long_ma:
+                    target_pct = max_position_pct
+                    reason = "ma_bullish"
+                    confidence = min(1.0, abs(short_ma - long_ma) / max(long_ma, 1e-9))
+                elif short_ma < long_ma:
+                    target_pct = 0.0
+                    reason = "ma_bearish"
+                    confidence = min(1.0, abs(short_ma - long_ma) / max(long_ma, 1e-9))
+                else:
+                    target_pct = 0.0
+                    reason = "ma_flat"
+                    confidence = 0.1
+                allocations.append(
+                    TargetAllocation(
+                        ticker=symbol.upper(),
+                        target_pct=target_pct,
+                        reason=reason,
+                        confidence=float(confidence),
+                        timestamp=as_of,
+                        metadata={
+                            "strategy": self.name,
+                            "short_ma": short_ma,
+                            "long_ma": long_ma,
+                            "current_price": float(current_prices.get(symbol, 0.0) or 0.0),
+                        },
+                    )
+                )
+        finally:
+            conn.close()
+        return allocations
 
     def train(self, config: Dict[str, Any]) -> Any:
         """Training not supported for rule-based strategies."""

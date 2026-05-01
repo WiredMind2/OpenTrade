@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { getBacktests, runBacktest } from '../services/api'
+import { listStrategies } from '../api/strategies'
 import websocketService from '../services/websocket'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
@@ -22,9 +23,24 @@ import {
 import { Separator } from '../components/ui/separator'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
 
+type BacktestListItem = BacktestResult & {
+  id?: string | number
+  status?: string
+  error?: string
+  chart_data?: Array<{ day: number; value: number }>
+  execution_engine?: string
+  signals_emitted?: number
+  order_intents?: number
+  order_fills?: number
+}
+
 export default function Backtests() {
-  const [backtests, setBacktests] = useState<BacktestResult[]>([])
-  const [strategy, setStrategy] = useState('sentiment_momentum')
+  const [backtests, setBacktests] = useState<BacktestListItem[]>([])
+  const [strategy, setStrategy] = useState('')
+  const [strategyQuery, setStrategyQuery] = useState('')
+  const [strategyOptions, setStrategyOptions] = useState<string[]>([])
+  const [showStrategySuggestions, setShowStrategySuggestions] = useState(false)
+  const [strategyLoadError, setStrategyLoadError] = useState<string | null>(null)
   const [startDate, setStartDate] = useState('2023-01-01')
   const [endDate, setEndDate] = useState('2023-12-31')
   const [running, setRunning] = useState(false)
@@ -36,7 +52,7 @@ export default function Backtests() {
     setError(null)
     try {
       const data = await getBacktests()
-      setBacktests(data)
+      setBacktests(data as BacktestListItem[])
     } catch (e: any) {
       setError(e.message || 'Failed to fetch backtests')
     } finally {
@@ -49,39 +65,91 @@ export default function Backtests() {
   }, [])
 
   useEffect(() => {
+    const fetchStrategies = async () => {
+      try {
+        const data = await listStrategies()
+        const names = data
+          .map((item) => item.name?.trim())
+          .filter((name): name is string => Boolean(name))
+          .sort()
+        setStrategyOptions(names)
+        setStrategyLoadError(null)
+        if (names.length > 0) {
+          setStrategy((prev) => prev.trim() ? prev : names[0])
+          setStrategyQuery((prev) => prev.trim() ? prev : names[0])
+        } else {
+          setStrategy('')
+          setStrategyQuery('')
+          setStrategyLoadError('No strategies available. Create a strategy before running backtests.')
+        }
+      } catch (e) {
+        console.error('Failed to fetch strategy options:', e)
+        setStrategy('')
+        setStrategyQuery('')
+        setStrategyLoadError('Failed to load strategies. Please refresh and try again.')
+      }
+    }
+
+    void fetchStrategies()
+  }, [])
+
+  const filteredStrategyOptions = strategyOptions
+    .filter((name) => name.toLowerCase().includes(strategyQuery.trim().toLowerCase()))
+    .slice(0, 10)
+
+  const handleStrategySelect = (selected: string) => {
+    setStrategy(selected)
+    setStrategyQuery(selected)
+    setShowStrategySuggestions(false)
+  }
+
+  const hasValidStrategySelection = strategyOptions.includes(strategy)
+
+  useEffect(() => {
     const handleBacktestStatus = (message: any) => {
-      const backtestResult = message.data as BacktestResult
+      const backtestResult = message.data as BacktestListItem
+      const equityCurve = Array.isArray(backtestResult.equity_curve) ? backtestResult.equity_curve : []
+      const chartData = equityCurve
+        .map((point: any, idx: number) => ({
+          day: idx,
+          value: point?.value,
+        }))
+        .filter((point) => typeof point.value === 'number')
+      const normalizedResult: BacktestListItem = {
+        ...backtestResult,
+        chart_data: chartData,
+        status: backtestResult.metrics?.status ?? backtestResult.status,
+        error: backtestResult.metrics?.error ?? backtestResult.error,
+      }
 
       // Update the backtests list with the new status
       setBacktests(prev => {
         // Find existing backtest by strategy_name and timestamp, or add new one
         const existingIndex = prev.findIndex(b =>
-          b.strategy_name === backtestResult.strategy_name &&
-          b.timestamp === backtestResult.timestamp
+          b.strategy_name === normalizedResult.strategy_name &&
+          b.timestamp === normalizedResult.timestamp
         )
 
         if (existingIndex >= 0) {
           // Update existing backtest
           const updated = [...prev]
-          updated[existingIndex] = backtestResult
+          updated[existingIndex] = normalizedResult
           return updated
         } else {
           // Add new backtest at the beginning
-          return [backtestResult, ...prev]
+          return [normalizedResult, ...prev]
         }
       })
     }
 
     // Register the listener
-    const unsubscribe = websocketService.registerListener('backtest_status', handleBacktestStatus)
-
     // Cleanup on unmount
-    return unsubscribe
+    return websocketService.registerListener('backtest_status', handleBacktestStatus)
   }, [])
 
   const startBacktest = async () => {
-    if (!strategy.trim()) {
-      alert('Please enter a strategy name')
+    if (!hasValidStrategySelection) {
+      alert('Please select an existing strategy from the dropdown')
       return
     }
     setRunning(true)
@@ -93,7 +161,7 @@ export default function Backtests() {
         initial_capital: 100000
       })
 
-      setBacktests(prev => [{ ...data, id: data.metrics?.backtest_id }, ...prev])
+      setBacktests(prev => [{ ...data, id: data.metrics?.backtest_id, status: 'running', chart_data: [] }, ...prev])
     } catch (e: any) {
       alert('Failed to start backtest: ' + (e.message || 'Unknown error'))
     } finally {
@@ -140,11 +208,56 @@ export default function Backtests() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Strategy Name</label>
-                <Input 
-                  value={strategy} 
-                  onChange={e => setStrategy(e.target.value)} 
-                  placeholder="e.g., sentiment_momentum"
-                />
+                <div className="relative">
+                  <Input
+                    value={strategyQuery}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setStrategyQuery(value)
+                      if (strategyOptions.includes(value)) {
+                        setStrategy(value)
+                      } else {
+                        setStrategy('')
+                      }
+                      setShowStrategySuggestions(true)
+                    }}
+                    onFocus={() => setShowStrategySuggestions(true)}
+                    onBlur={() => {
+                      if (!strategyOptions.includes(strategyQuery)) {
+                        setStrategy('')
+                      }
+                      window.setTimeout(() => setShowStrategySuggestions(false), 120)
+                    }}
+                    placeholder="Search and select an existing strategy"
+                  />
+                  {showStrategySuggestions && filteredStrategyOptions.length > 0 && (
+                    <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-md">
+                      <div className="max-h-56 overflow-y-auto py-1">
+                        {filteredStrategyOptions.map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            className="w-full px-3 py-2 text-left text-sm hover:bg-accent"
+                            onMouseDown={(e) => {
+                              e.preventDefault()
+                              handleStrategySelect(name)
+                            }}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {strategyLoadError && (
+                  <p className="text-xs text-destructive">{strategyLoadError}</p>
+                )}
+                {!strategyLoadError && strategyQuery.trim() && !hasValidStrategySelection && (
+                  <p className="text-xs text-muted-foreground">
+                    Select one of the existing strategies from the list.
+                  </p>
+                )}
               </div>
               
               <div className="space-y-2">
@@ -174,7 +287,7 @@ export default function Backtests() {
 
             <Button 
               onClick={startBacktest} 
-              disabled={running || !strategy.trim()}
+              disabled={running || !hasValidStrategySelection}
               className="w-full md:w-auto"
               size="lg"
             >
@@ -236,6 +349,9 @@ export default function Backtests() {
               const returnColor = getReturnColor(returnPercent)
               const returnBadge = getReturnBadge(returnPercent)
               const isPositive = returnPercent > 0
+              const status = b.status ?? b.metrics?.status ?? 'completed'
+              const isFailed = status === 'failed'
+              const chartData = Array.isArray(b.chart_data) ? b.chart_data : []
               
               return (
                 <Card 
@@ -256,6 +372,9 @@ export default function Backtests() {
                       </div>
                       
                       <div className="flex items-center gap-3">
+                        <Badge variant={isFailed ? 'destructive' : status === 'running' ? 'secondary' : 'outline'}>
+                          {status}
+                        </Badge>
                         <Badge variant={returnBadge.variant}>
                           {returnBadge.label}
                         </Badge>
@@ -277,10 +396,15 @@ export default function Backtests() {
                   <Separator />
                   
                   <CardContent className="pt-6">
+                    {isFailed && (
+                      <p className="mb-3 text-sm text-destructive">
+                        Backtest failed: {b.error || b.metrics?.error || 'Unknown error'}
+                      </p>
+                    )}
                     {/* Mini Chart */}
                     <div className="mb-4">
                       <ResponsiveContainer width="100%" height={150}>
-                        <LineChart data={b.chart_data}>
+                        <LineChart data={chartData}>
                           <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                           <XAxis 
                             dataKey="day" 
@@ -340,6 +464,9 @@ export default function Backtests() {
                           </p>
                         </div>
                       </div>
+                    </div>
+                    <div className="mt-3 text-xs text-muted-foreground">
+                      Engine: {b.execution_engine ?? b.metrics?.execution_summary?.engine ?? 'backtrader'} | Signals: {b.signals_emitted ?? b.metrics?.execution_summary?.signals_emitted ?? 0} | Intents: {b.order_intents ?? b.metrics?.execution_summary?.order_intents ?? 0} | Fills: {b.order_fills ?? b.metrics?.execution_summary?.order_fills ?? 0}
                     </div>
                   </CardContent>
                 </Card>

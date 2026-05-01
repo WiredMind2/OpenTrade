@@ -156,6 +156,46 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 CREATE INDEX IF NOT EXISTS idx_trades_backtest ON trades(backtest_run_id);
 
+-- Signal-level artifacts for signal-driven execution
+CREATE TABLE IF NOT EXISTS strategy_signals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  backtest_id TEXT NOT NULL,
+  signal_time TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  target_pct REAL NOT NULL,
+  reason TEXT,
+  confidence REAL,
+  metadata JSON
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_signals_backtest ON strategy_signals(backtest_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_signals_ticker_time ON strategy_signals(ticker, signal_time);
+
+CREATE TABLE IF NOT EXISTS order_intents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  backtest_id TEXT NOT NULL,
+  intent_time TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  side TEXT NOT NULL,
+  notional_delta REAL NOT NULL,
+  reason TEXT,
+  metadata JSON
+);
+CREATE INDEX IF NOT EXISTS idx_order_intents_backtest ON order_intents(backtest_id);
+
+CREATE TABLE IF NOT EXISTS order_fills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  backtest_id TEXT NOT NULL,
+  fill_time TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  side TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  fill_price REAL NOT NULL,
+  fees REAL DEFAULT 0,
+  slippage REAL DEFAULT 0,
+  metadata JSON
+);
+CREATE INDEX IF NOT EXISTS idx_order_fills_backtest ON order_fills(backtest_id);
+
 -- Portfolio snapshots for time-series of portfolio value
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   backtest_run_id INTEGER,

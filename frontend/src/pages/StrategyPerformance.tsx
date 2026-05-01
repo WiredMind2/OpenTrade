@@ -60,6 +60,11 @@ export default function StrategyPerformance() {
   const [analyticsTab, setAnalyticsTab] = useState<'overview' | 'risk' | 'distributions' | 'monthly'>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const strategyOptions = useMemo(() => {
+    const fromFilters = filters?.strategies ?? []
+    const fromSummary = (summary?.metrics ?? []).map((m) => m.strategy)
+    return Array.from(new Set([...fromFilters, ...fromSummary]))
+  }, [filters, summary])
 
   const loadDashboard = async (seedStrategies?: string[]) => {
     setLoading(true)
@@ -263,7 +268,7 @@ export default function StrategyPerformance() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {(filters?.strategies ?? []).map((strategy) => (
+            {strategyOptions.map((strategy) => (
               <Button
                 key={strategy}
                 variant={selectedStrategies.includes(strategy) ? 'default' : 'outline'}
@@ -274,7 +279,12 @@ export default function StrategyPerformance() {
               </Button>
             ))}
           </div>
-          <Button onClick={() => loadDashboard()} disabled={loading || selectedStrategies.length === 0}>
+          {strategyOptions.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No strategy names discovered yet. Run at least one backtest, then click refresh.
+            </p>
+          )}
+          <Button onClick={() => loadDashboard()} disabled={loading}>
             {loading ? 'Refreshing...' : 'Refresh Analytics'}
           </Button>
         </CardContent>
@@ -298,16 +308,22 @@ export default function StrategyPerformance() {
               <CardDescription>Select which strategy drives the detailed panels below.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
-              {(summary?.metrics ?? []).map((metric) => (
-                <Button
-                  key={metric.strategy}
-                  size="sm"
-                  variant={activeMetric?.strategy === metric.strategy ? 'default' : 'outline'}
-                  onClick={() => setActiveStrategy(metric.strategy)}
-                >
-                  {metric.strategy}
-                </Button>
-              ))}
+              {(summary?.metrics ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No strategy metrics returned yet for the current filters.
+                </p>
+              ) : (
+                (summary?.metrics ?? []).map((metric) => (
+                  <Button
+                    key={metric.strategy}
+                    size="sm"
+                    variant={activeMetric?.strategy === metric.strategy ? 'default' : 'outline'}
+                    onClick={() => setActiveStrategy(metric.strategy)}
+                  >
+                    {metric.strategy}
+                  </Button>
+                ))
+              )}
             </CardContent>
           </Card>
 

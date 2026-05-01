@@ -6,15 +6,305 @@ import sqlite3
 import numpy as np
 import pandas as pd
 import backtrader as bt
-from datetime import datetime
-from typing import Dict, Any
+from datetime import datetime, timedelta
+from typing import Dict, Any, List
 
+from backend.domain.trading import ExecutionConfig, OrderIntent, TargetAllocation
 from backend.logging_config import get_component_logger
-from backend.strategies import StrategyRegistry
+from backend.storage.backtest_repository import BacktestRepository
 from .websocket import broadcast_websocket_message
 
 
 logger = get_component_logger(__file__)
+
+
+def _build_execution_config(parameters: Dict[str, Any]) -> ExecutionConfig:
+    return ExecutionConfig(
+        min_trade_notional=float(parameters.get("min_trade_notional", 100.0)),
+        commission_per_share=float(parameters.get("commission_per_share", 0.005)),
+        slippage_bps=float(parameters.get("slippage_bps", 0.0)),
+        max_gross_exposure=float(parameters.get("max_gross_exposure", 1.0)),
+        rebalance_frequency=str(parameters.get("rebalance_frequency", "daily")),
+    )
+
+
+def _run_signal_execution_backtest(
+    strategy: Any,
+    strategy_name: str,
+    start_date: datetime,
+    end_date: datetime,
+    initial_capital: float,
+    parameters: Dict[str, Any],
+    price_frames: Dict[str, pd.DataFrame],
+) -> Dict[str, Any]:
+    exec_config = _build_execution_config(parameters)
+    all_dates = sorted(
+        {
+            pd.to_datetime(d).date().isoformat()
+            for df in price_frames.values()
+            for d in df["date"].tolist()
+        }
+    )
+    cash = float(initial_capital)
+    positions: Dict[str, float] = {}
+    equity_curve: List[Dict[str, Any]] = []
+    trades: List[Dict[str, Any]] = []
+    signal_records: List[TargetAllocation] = []
+    order_intents: List[OrderIntent] = []
+    order_fills: List[Dict[str, Any]] = []
+
+    for date_str in all_dates:
+        current_prices: Dict[str, float] = {}
+        symbols: List[str] = []
+        for ticker, df in price_frames.items():
+            row = df[df["date"] == date_str]
+            if row.empty:
+                continue
+            close_px = float(row.iloc[0]["close"])
+            current_prices[ticker] = close_px
+            symbols.append(ticker)
+        if not symbols:
+            continue
+        as_of = datetime.fromisoformat(date_str)
+        allocations = strategy.generate_target_allocations(
+            parameters=parameters,
+            symbols=symbols,
+            as_of=as_of,
+            current_prices=current_prices,
+        )
+        signal_records.extend(allocations)
+
+        total_value = cash + sum((positions.get(t, 0.0) * current_prices.get(t, 0.0)) for t in current_prices)
+        for alloc in allocations:
+            ticker = alloc.ticker
+            px = current_prices.get(ticker)
+            if not px or px <= 0:
+                continue
+            target_notional = alloc.target_pct * total_value
+            current_shares = positions.get(ticker, 0.0)
+            current_notional = current_shares * px
+            delta_notional = target_notional - current_notional
+            if abs(delta_notional) < exec_config.min_trade_notional:
+                continue
+            side = "buy" if delta_notional > 0 else "sell"
+            order_intents.append(
+                OrderIntent(
+                    ticker=ticker,
+                    side=side,
+                    notional_delta=delta_notional,
+                    reason=alloc.reason,
+                    timestamp=as_of,
+                    metadata=alloc.metadata,
+                )
+            )
+            qty = int(abs(delta_notional) / px)
+            if qty <= 0:
+                continue
+            trade_notional = qty * px
+            slippage = trade_notional * (exec_config.slippage_bps / 10000.0)
+            fees = qty * exec_config.commission_per_share
+            if side == "buy":
+                total_cost = trade_notional + fees + slippage
+                if total_cost > cash:
+                    qty = int(max((cash - fees - slippage), 0) / px)
+                    if qty <= 0:
+                        continue
+                    trade_notional = qty * px
+                    total_cost = trade_notional + fees + slippage
+                cash -= total_cost
+                positions[ticker] = positions.get(ticker, 0.0) + qty
+            else:
+                qty = min(qty, int(max(current_shares, 0)))
+                if qty <= 0:
+                    continue
+                trade_notional = qty * px
+                cash += trade_notional - fees - slippage
+                positions[ticker] = positions.get(ticker, 0.0) - qty
+                if positions[ticker] <= 0:
+                    positions.pop(ticker, None)
+            trades.append(
+                {
+                    "date": date_str,
+                    "ticker": ticker,
+                    "side": side,
+                    "size": qty,
+                    "price": px,
+                    "pnl": 0.0,
+                    "pnlcomm": -(fees + slippage),
+                }
+            )
+            order_fills.append(
+                {
+                    "fill_time": as_of.isoformat(),
+                    "ticker": ticker,
+                    "side": side,
+                    "quantity": qty,
+                    "fill_price": px,
+                    "fees": fees,
+                    "slippage": slippage,
+                    "metadata": {"reason": alloc.reason},
+                }
+            )
+        mtm_value = cash + sum((positions.get(t, 0.0) * current_prices.get(t, 0.0)) for t in current_prices)
+        equity_curve.append({"date": date_str, "value": mtm_value})
+
+    final_value = equity_curve[-1]["value"] if equity_curve else float(initial_capital)
+    total_return = (final_value - initial_capital) / initial_capital if initial_capital else 0.0
+    equity_values = [float(point["value"]) for point in equity_curve]
+    if len(equity_values) > 1:
+        returns = np.diff(equity_values) / np.maximum(equity_values[:-1], 1e-9)
+        volatility = float(np.std(returns) * np.sqrt(252))
+        sharpe_ratio = float((np.mean(returns) / np.std(returns)) * np.sqrt(252)) if np.std(returns) > 0 else 0.0
+    else:
+        volatility = 0.0
+        sharpe_ratio = 0.0
+    running_peak = -np.inf
+    max_drawdown = 0.0
+    for v in equity_values:
+        running_peak = max(running_peak, v)
+        if running_peak > 0:
+            max_drawdown = max(max_drawdown, (running_peak - v) / running_peak)
+    pnl_comm = [float(t.get("pnlcomm", 0.0)) for t in trades]
+    total_trades = len(trades)
+    win_trades = len([v for v in pnl_comm if v > 0])
+    win_rate = (win_trades / total_trades) if total_trades else 0.0
+    avg_trade_return = float(np.mean(pnl_comm)) if pnl_comm else 0.0
+    days = max((end_date.date() - start_date.date()).days, 1)
+    annualized_return = float(((1 + total_return) ** (365 / days)) - 1) if total_return > -1 else -1.0
+    return {
+        "final_value": final_value,
+        "total_return": total_return,
+        "annualized_return": annualized_return,
+        "sharpe_ratio": sharpe_ratio,
+        "max_drawdown": max_drawdown,
+        "win_rate": win_rate,
+        "total_trades": total_trades,
+        "avg_trade_return": avg_trade_return,
+        "volatility": volatility,
+        "equity_curve": equity_curve,
+        "trades": trades,
+        "signal_records": signal_records,
+        "order_intents": order_intents,
+        "order_fills": order_fills,
+        "execution_summary": {
+            "engine": "signal",
+            "signals_emitted": len(signal_records),
+            "order_intents": len(order_intents),
+            "order_fills": len(order_fills),
+        },
+    }
+
+
+def _refresh_daily_prices_for_backtest(
+    db_path: str,
+    ticker: str,
+    fetch_start: datetime,
+    fetch_end: datetime,
+) -> bool:
+    """Best-effort refresh of daily OHLCV data for one ticker."""
+    try:
+        import yfinance as yf
+    except Exception:
+        logger.warning("yfinance not available; cannot refresh %s", ticker)
+        return False
+
+    tkr = (ticker or "").upper().strip()
+    if not tkr:
+        return False
+
+    try:
+        # Yahoo end date is exclusive.
+        history = yf.Ticker(tkr).history(
+            start=fetch_start.date().isoformat(),
+            end=(fetch_end.date() + timedelta(days=1)).isoformat(),
+            interval="1d",
+        )
+        if history is None or history.empty:
+            return False
+
+        df = history.reset_index().rename(
+            columns={
+                "Date": "date",
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Adj Close": "adjusted_close",
+                "Volume": "volume",
+            }
+        )
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        df = df[df["date"].notna()]
+        if df.empty:
+            return False
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            columns = {row[1] for row in cur.execute("PRAGMA table_info(price_daily)").fetchall()}
+            has_adjusted_close = "adjusted_close" in columns
+            has_tickers_table = bool(
+                cur.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tickers'"
+                ).fetchone()
+            )
+
+            if has_tickers_table:
+                cur.execute(
+                    "INSERT OR IGNORE INTO tickers (ticker, name, exchange) VALUES (?, ?, ?)",
+                    (tkr, None, None),
+                )
+
+            if has_adjusted_close:
+                cur.executemany(
+                    """
+                    INSERT OR REPLACE INTO price_daily
+                    (ticker, date, open, high, low, close, adjusted_close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            tkr,
+                            r["date"],
+                            float(r["open"]) if pd.notna(r["open"]) else None,
+                            float(r["high"]) if pd.notna(r["high"]) else None,
+                            float(r["low"]) if pd.notna(r["low"]) else None,
+                            float(r["close"]) if pd.notna(r["close"]) else None,
+                            float(r["adjusted_close"])
+                            if ("adjusted_close" in df.columns and pd.notna(r.get("adjusted_close")))
+                            else (float(r["close"]) if pd.notna(r["close"]) else None),
+                            int(r["volume"]) if pd.notna(r["volume"]) else None,
+                        )
+                        for _, r in df.iterrows()
+                    ],
+                )
+            else:
+                cur.executemany(
+                    """
+                    INSERT OR REPLACE INTO price_daily
+                    (ticker, date, open, high, low, close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            tkr,
+                            r["date"],
+                            float(r["open"]) if pd.notna(r["open"]) else None,
+                            float(r["high"]) if pd.notna(r["high"]) else None,
+                            float(r["low"]) if pd.notna(r["low"]) else None,
+                            float(r["close"]) if pd.notna(r["close"]) else None,
+                            int(r["volume"]) if pd.notna(r["volume"]) else None,
+                        )
+                        for _, r in df.iterrows()
+                    ],
+                )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("Failed to refresh daily prices for %s: %s", tkr, e)
+        return False
 
 
 async def run_backtest_background(
@@ -27,139 +317,243 @@ async def run_backtest_background(
     app_state: Dict[str, Any]
 ):
     """Run backtest in background using Backtrader."""
+    parameters = parameters or {}
     try:
         logger.info(f"Running background backtest: {strategy_name} (ID: {backtest_id})")
 
         # Get strategy from registry
         registry = app_state["strategy_registry"]
         strategy = registry.get(strategy_name)
+        if strategy is None:
+            raise ValueError(f"Strategy '{strategy_name}' is not registered")
         strategy_class = strategy.create_backtrader_strategy(parameters)
-
-        # Set up Backtrader
-        cerebro = bt.Cerebro()
-        cerebro.addstrategy(strategy_class, **parameters)
+        execution_mode = str(parameters.get("execution_mode", "backtrader")).lower()
 
         # Add data feeds for tickers that have predictions
+        min_bars_required = max(
+            int(parameters.get("short_window", 10)),
+            int(parameters.get("long_window", 30)),
+            2,
+        )
+        lookback_days = max(min_bars_required * 3, 60)
+        feed_start_date = (start_date - timedelta(days=lookback_days)).date().isoformat()
+        added_feeds = 0
+        price_frames: Dict[str, pd.DataFrame] = {}
         conn = sqlite3.connect(app_state["database_path"])
-        cur = conn.cursor()
+        try:
+            cur = conn.cursor()
 
-        # Get all tickers that have predictions in the date range
-        cur.execute("""
-            SELECT DISTINCT ticker
-            FROM trading_model_predictions
-            WHERE dt >= ? AND dt <= ?
-        """, (start_date.date().isoformat(), end_date.date().isoformat()))
-
-        tickers = [row[0] for row in cur.fetchall()]
-
-        for ticker in tickers[:10]:  # Limit to 10 tickers for performance
-            # Get price data for this ticker
+            # Prefer tickers with predictions in-range.
             cur.execute("""
-                SELECT date, open, high, low, close, volume
-                FROM price_daily
-                WHERE ticker = ? AND date >= ? AND date <= ?
-                ORDER BY date ASC
-            """, (ticker, start_date.date().isoformat(), end_date.date().isoformat()))
+                SELECT DISTINCT ticker
+                FROM trading_model_predictions
+                WHERE dt >= ? AND dt <= ?
+            """, (start_date.date().isoformat(), end_date.date().isoformat()))
 
-            price_data = cur.fetchall()
-            if not price_data:
-                continue
+            tickers = [row[0] for row in cur.fetchall()]
+            if not tickers:
+                # Fallback for non-ML strategies: use available price history directly.
+                cur.execute("""
+                    SELECT DISTINCT ticker
+                    FROM price_daily
+                    WHERE date >= ? AND date <= ?
+                    ORDER BY ticker ASC
+                    LIMIT 10
+                """, (start_date.date().isoformat(), end_date.date().isoformat()))
+                tickers = [row[0] for row in cur.fetchall()]
 
-            # Create pandas DataFrame
-            df = pd.DataFrame(price_data, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.sort_values('date')
+            for ticker in tickers[:10]:  # Limit to 10 tickers for performance
+                # Get price data with a lookback window so indicators can warm up.
+                cur.execute(
+                    """
+                    SELECT date, open, high, low, close, volume
+                    FROM price_daily
+                    WHERE ticker = ? AND date >= ? AND date <= ?
+                    ORDER BY date ASC
+                    """,
+                    (ticker, feed_start_date, end_date.date().isoformat()),
+                )
+                price_data = cur.fetchall()
+                if not price_data:
+                    continue
+                if len(price_data) < min_bars_required:
+                    logger.info(
+                        f"Ticker {ticker} has {len(price_data)} bars, attempting auto-refresh "
+                        f"for at least {min_bars_required}"
+                    )
+                    _refresh_daily_prices_for_backtest(
+                        app_state["database_path"],
+                        ticker,
+                        start_date - timedelta(days=lookback_days),
+                        end_date,
+                    )
+                    cur.execute(
+                        """
+                        SELECT date, open, high, low, close, volume
+                        FROM price_daily
+                        WHERE ticker = ? AND date >= ? AND date <= ?
+                        ORDER BY date ASC
+                        """,
+                        (ticker, feed_start_date, end_date.date().isoformat()),
+                    )
+                    price_data = cur.fetchall()
+                    if len(price_data) < min_bars_required:
+                        logger.info(
+                            f"Skipping ticker {ticker}: {len(price_data)} bars available, "
+                            f"{min_bars_required} required"
+                        )
+                        continue
 
-            # Create Backtrader data feed
-            data = bt.feeds.PandasData(dataname=df, datetime=0, open=1, high=2, low=3, close=4, volume=5, name=ticker)
-            cerebro.adddata(data)
+                # Create pandas DataFrame
+                df = pd.DataFrame(price_data, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+                df['date'] = pd.to_datetime(df['date'])
+                df = df.sort_values('date')
 
-        conn.close()
+                price_frames[ticker] = df
+                added_feeds += 1
+        finally:
+            conn.close()
 
-        # Set broker parameters
-        cerebro.broker.setcash(initial_capital)
-        cerebro.broker.setcommission(commission=parameters.get('commission_per_share', 0.005))
+        if added_feeds == 0:
+            raise ValueError(
+                f"No market data available for {strategy_name} in range "
+                f"{start_date.date().isoformat()} to {end_date.date().isoformat()}"
+            )
 
-        # Add analyzers
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-        cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
-
-        # Run backtest
-        logger.info(f"Starting Backtrader execution for {strategy_name}")
-        results = cerebro.run()
-        strat = results[0]
-
-        # Extract results
-        final_value = cerebro.broker.getvalue()
-        total_return = (final_value - initial_capital) / initial_capital
-
-        # Calculate metrics
-        sharpe_ratio = strat.analyzers.sharpe.get_analysis().get('sharperatio', 0)
-        max_drawdown = strat.analyzers.drawdown.get_analysis().get('max', {}).get('drawdown', 0)
-        annualized_return = strat.analyzers.returns.get_analysis().get('rnorm100', 0)
-
-        # Trade analysis
-        trade_analysis = strat.analyzers.trades.get_analysis()
-        total_trades = trade_analysis.get('total', {}).get('total', 0)
-        win_trades = trade_analysis.get('won', {}).get('total', 0)
-        win_rate = win_trades / total_trades if total_trades > 0 else 0
-
-        # Calculate average trade return
-        pnl_comm = [t['pnlcomm'] for t in strat.trades]
-        avg_trade_return = np.mean(pnl_comm) if pnl_comm else 0
-
-        # Calculate volatility (simplified)
-        equity_values = [point['value'] for point in strat.equity_curve]
-        if len(equity_values) > 1:
-            returns = np.diff(equity_values) / equity_values[:-1]
-            volatility = np.std(returns) * np.sqrt(252)  # Annualized
+        if execution_mode == "signal":
+            logger.info(f"Starting signal execution for {strategy_name}")
+            execution = _run_signal_execution_backtest(
+                strategy=strategy,
+                strategy_name=strategy_name,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=initial_capital,
+                parameters=parameters,
+                price_frames=price_frames,
+            )
+            final_value = execution["final_value"]
+            total_return = execution["total_return"]
+            annualized_return = execution["annualized_return"]
+            sharpe_ratio = execution["sharpe_ratio"]
+            max_drawdown = execution["max_drawdown"]
+            win_rate = execution["win_rate"]
+            total_trades = execution["total_trades"]
+            avg_trade_return = execution["avg_trade_return"]
+            volatility = execution["volatility"]
+            equity_curve = execution["equity_curve"]
+            trades = execution["trades"]
+            execution_summary = execution["execution_summary"]
+            signal_records = execution["signal_records"]
+            order_intents = execution["order_intents"]
+            order_fills = execution["order_fills"]
         else:
-            volatility = 0
+            # Set up Backtrader
+            cerebro = bt.Cerebro()
+            cerebro.addstrategy(strategy_class, **parameters)
+            for ticker, df in price_frames.items():
+                data = bt.feeds.PandasData(
+                    dataname=df,
+                    datetime=0,
+                    open=1,
+                    high=2,
+                    low=3,
+                    close=4,
+                    volume=5,
+                    name=ticker,
+                )
+                cerebro.adddata(data)
+            # Set broker parameters
+            cerebro.broker.setcash(initial_capital)
+            cerebro.broker.setcommission(commission=parameters.get('commission_per_share', 0.005))
+            cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
+            cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+            cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
+            cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+            logger.info(f"Starting Backtrader execution for {strategy_name}")
+            results = cerebro.run()
+            if not results:
+                raise RuntimeError("Backtest engine returned no strategy results")
+            strat = results[0]
+            final_value = cerebro.broker.getvalue()
+            total_return = (final_value - initial_capital) / initial_capital
+            sharpe_ratio = strat.analyzers.sharpe.get_analysis().get('sharperatio', 0)
+            max_drawdown = strat.analyzers.drawdown.get_analysis().get('max', {}).get('drawdown', 0)
+            annualized_return = strat.analyzers.returns.get_analysis().get('rnorm100', 0)
+            trade_analysis = strat.analyzers.trades.get_analysis()
+            total_trades = trade_analysis.get('total', {}).get('total', 0)
+            win_trades = trade_analysis.get('won', {}).get('total', 0)
+            win_rate = win_trades / total_trades if total_trades > 0 else 0
+            trades = getattr(strat, "trades", []) or []
+            pnl_comm = [t.get('pnlcomm', 0.0) for t in trades if isinstance(t, dict)]
+            avg_trade_return = np.mean(pnl_comm) if pnl_comm else 0
+            equity_curve = getattr(strat, "equity_curve", []) or []
+            equity_values = [point.get('value') for point in equity_curve if isinstance(point, dict) and point.get('value') is not None]
+            if len(equity_values) > 1:
+                returns = np.diff(equity_values) / equity_values[:-1]
+                volatility = np.std(returns) * np.sqrt(252)
+            else:
+                volatility = 0
+            execution_summary = {
+                "engine": "backtrader",
+                "signals_emitted": 0,
+                "order_intents": 0,
+                "order_fills": 0,
+            }
+            signal_records = []
+            order_intents = []
+            order_fills = []
 
         # Store results in database
         conn = sqlite3.connect(app_state["database_path"])
         cur = conn.cursor()
 
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO backtest_runs (
-                id, name, params, started_at, completed_at, initial_capital,
+                name, params, started_at, completed_at, initial_capital,
                 final_value, total_return, annualized_return, sharpe_ratio,
                 max_drawdown, win_rate, total_trades, avg_trade_return,
                 volatility, equity_curve, metrics
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            backtest_id,
-            strategy_name,
-            json.dumps(parameters),
-            start_date.isoformat(),
-            datetime.utcnow().isoformat(),
-            initial_capital,
-            final_value,
-            total_return,
-            annualized_return,
-            sharpe_ratio,
-            max_drawdown,
-            win_rate,
-            total_trades,
-            avg_trade_return,
-            volatility,
-            json.dumps(strat.equity_curve),
-            json.dumps({
-                "backtest_id": backtest_id,
-                "status": "completed",
-                "sharpe_ratio": sharpe_ratio,
-                "max_drawdown": max_drawdown,
-                "win_rate": win_rate,
-                "total_trades": total_trades,
-                "avg_trade_return": avg_trade_return,
-                "volatility": volatility
-            })
-        ))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                strategy_name,
+                json.dumps(parameters),
+                start_date.isoformat(),
+                datetime.utcnow().isoformat(),
+                initial_capital,
+                final_value,
+                total_return,
+                annualized_return,
+                sharpe_ratio,
+                max_drawdown,
+                win_rate,
+                total_trades,
+                avg_trade_return,
+                volatility,
+                json.dumps(equity_curve),
+                json.dumps(
+                    {
+                        "backtest_id": backtest_id,
+                        "status": "completed",
+                        "sharpe_ratio": sharpe_ratio,
+                        "max_drawdown": max_drawdown,
+                        "win_rate": win_rate,
+                        "total_trades": total_trades,
+                        "avg_trade_return": avg_trade_return,
+                        "volatility": volatility,
+                        "execution_summary": execution_summary,
+                    }
+                ),
+            ),
+        )
 
         conn.commit()
         conn.close()
+        repo = BacktestRepository(app_state["database_path"])
+        repo.persist_signals(backtest_id, signal_records)
+        repo.persist_order_intents(backtest_id, order_intents)
+        repo.persist_order_fills(backtest_id, order_fills)
 
         logger.info(f"Background backtest completed: {strategy_name} (ID: {backtest_id})")
         logger.info(f"Results - Final Value: ${final_value:.2f}, Total Return: {total_return:.2%}")
@@ -190,32 +584,35 @@ async def run_backtest_background(
                     "win_rate": win_rate,
                     "total_trades": total_trades,
                     "avg_trade_return": avg_trade_return,
-                    "volatility": volatility
+                        "volatility": volatility,
+                        "execution_summary": execution_summary,
                 },
-                "equity_curve": strat.equity_curve
+                "equity_curve": equity_curve
             }
         })
 
     except Exception as e:
-        logger.error(f"Background backtest failed: {str(e)}")
+        error_message = f"{type(e).__name__}: {e}"
+        logger.exception(f"Background backtest failed: {error_message}")
 
         # Store failure in database
         try:
             conn = sqlite3.connect(app_state["database_path"])
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO backtest_runs (id, name, params, started_at, completed_at, metrics)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                backtest_id,
-                strategy_name,
-                json.dumps(parameters),
-                start_date.isoformat(),
-                datetime.utcnow().isoformat(),
-                json.dumps({"status": "failed", "error": str(e)})
-            ))
-            conn.commit()
-            conn.close()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO backtest_runs (name, params, started_at, completed_at, metrics)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    strategy_name,
+                    json.dumps(parameters),
+                    start_date.isoformat(),
+                    datetime.utcnow().isoformat(),
+                    json.dumps({"backtest_id": backtest_id, "status": "failed", "error": error_message})
+                ))
+                conn.commit()
+            finally:
+                conn.close()
 
             # Broadcast backtest failure status update
             await broadcast_websocket_message({
@@ -238,7 +635,7 @@ async def run_backtest_background(
                     "metrics": {
                         "backtest_id": backtest_id,
                         "status": "failed",
-                        "error": str(e)
+                        "error": error_message
                     },
                     "equity_curve": []
                 }
