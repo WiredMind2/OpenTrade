@@ -998,18 +998,6 @@ async def get_historical_data(
 
         conn = sqlite3.connect(db_path)
 
-        # Build query - get raw historical data only
-        # Explicitly filter to ensure no future data and only historical tables
-        query = f"""
-            SELECT {date_col} as date, open, high, low, close, volume
-            FROM {table}
-            WHERE ticker = ?
-            AND {date_col} >= ?
-            AND {date_col} <= ?
-            AND {date_col} <= ?
-            ORDER BY {date_col} ASC
-        """
-
         # Format dates according to table type for proper string comparison
         if table == 'price_daily':
             # Daily table uses YYYY-MM-DD format
@@ -1023,12 +1011,57 @@ async def get_historical_data(
             to_date_str = to_date.strftime('%Y-%m-%d %H:%M:%S')
             current_date_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Add current time as additional filter to ensure no future data
-        params = [symbol.upper(), from_date_str, to_date_str, current_date_str]
+        # For countback requests, prioritize bars up to "to" over strict "from" bounds.
+        # TradingView often sends sparse/holiday windows while still expecting previous bars.
+        is_countback_request = bool(countback and countback > 0)
+        raw_fetch_limit: Optional[int] = None
+        if is_countback_request:
+            if table == "price_minute":
+                target_minutes = 1
+                normalized_target = str(target_resolution or "").upper()
+                if normalized_target.isdigit():
+                    target_minutes = max(int(normalized_target), 1)
+                elif normalized_target.endswith("H"):
+                    hour_part = normalized_target[:-1]
+                    target_minutes = max(int(hour_part), 1) * 60 if hour_part.isdigit() else 60
+                raw_fetch_limit = max(countback * target_minutes * 3, countback)
+            else:
+                # Keep additional daily bars so 2W/3M style resolutions can resample accurately.
+                raw_fetch_limit = max(countback * 6, countback)
+
+        if raw_fetch_limit is not None:
+            query = f"""
+                SELECT {date_col} as date, open, high, low, close, volume
+                FROM {table}
+                WHERE ticker = ?
+                AND {date_col} <= ?
+                AND {date_col} <= ?
+                ORDER BY {date_col} DESC
+                LIMIT ?
+            """
+            params = [symbol.upper(), to_date_str, current_date_str, raw_fetch_limit]
+        else:
+            # Build query - get raw historical data only
+            # Explicitly filter to ensure no future data and only historical tables
+            query = f"""
+                SELECT {date_col} as date, open, high, low, close, volume
+                FROM {table}
+                WHERE ticker = ?
+                AND {date_col} >= ?
+                AND {date_col} <= ?
+                AND {date_col} <= ?
+                ORDER BY {date_col} ASC
+            """
+            # Add current time as additional filter to ensure no future data
+            params = [symbol.upper(), from_date_str, to_date_str, current_date_str]
+
         logger.info(f"UDF history: executing query for {symbol.upper()} in table {table} (historical data only)")
 
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
+
+        if not df.empty and raw_fetch_limit is not None:
+            df = df.sort_values("date")
 
         logger.info(f"UDF history: query returned {len(df)} rows for {symbol}")
         if df.empty:
