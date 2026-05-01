@@ -3,6 +3,7 @@ Backtest execution engine for the Trading Backtester API.
 """
 import json
 import sqlite3
+from collections import Counter
 import numpy as np
 import pandas as pd
 import backtrader as bt
@@ -171,6 +172,37 @@ def _run_signal_execution_backtest(
     avg_trade_return = float(np.mean(pnl_comm)) if pnl_comm else 0.0
     days = max((end_date.date() - start_date.date()).days, 1)
     annualized_return = float(((1 + total_return) ** (365 / days)) - 1) if total_return > -1 else -1.0
+    signal_reason_counts = dict(
+        Counter(
+            alloc.reason
+            for alloc in signal_records
+            if getattr(alloc, "reason", None)
+        )
+    )
+    fill_reason_counts = dict(
+        Counter(
+            str((fill.get("metadata") or {}).get("reason"))
+            for fill in order_fills
+            if (fill.get("metadata") or {}).get("reason") is not None
+        )
+    )
+    avg_abs_target_pct = float(
+        np.mean(
+            [abs(float(getattr(alloc, "target_pct", 0.0) or 0.0)) for alloc in signal_records]
+        )
+    ) if signal_records else 0.0
+    intent_notional_abs = float(
+        np.sum([abs(float(getattr(intent, "notional_delta", 0.0) or 0.0)) for intent in order_intents])
+    ) if order_intents else 0.0
+    fill_notional_abs = float(
+        np.sum(
+            [
+                abs(float(fill.get("quantity", 0.0) or 0.0) * float(fill.get("fill_price", 0.0) or 0.0))
+                for fill in order_fills
+            ]
+        )
+    ) if order_fills else 0.0
+    turnover_vs_initial = (fill_notional_abs / float(initial_capital)) if initial_capital else 0.0
     return {
         "final_value": final_value,
         "total_return": total_return,
@@ -191,6 +223,12 @@ def _run_signal_execution_backtest(
             "signals_emitted": len(signal_records),
             "order_intents": len(order_intents),
             "order_fills": len(order_fills),
+            "signal_reason_counts": signal_reason_counts,
+            "fill_reason_counts": fill_reason_counts,
+            "avg_abs_target_pct": avg_abs_target_pct,
+            "intent_notional_abs": intent_notional_abs,
+            "fill_notional_abs": fill_notional_abs,
+            "turnover_vs_initial": turnover_vs_initial,
         },
     }
 
@@ -446,6 +484,17 @@ async def run_backtest_background(
             signal_records = execution["signal_records"]
             order_intents = execution["order_intents"]
             order_fills = execution["order_fills"]
+            if strategy_name == "recursive_forecast":
+                reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
+                no_model_count = int(reason_counts.get("no_model_available", 0) or 0)
+                non_missing_count = int(
+                    sum(v for k, v in reason_counts.items() if k != "no_model_available")
+                ) if isinstance(reason_counts, dict) else 0
+                if no_model_count > 0 and non_missing_count == 0 and len(order_fills) == 0:
+                    raise ValueError(
+                        "No recursive forecast models/predictions available for requested period. "
+                        "Run the ML pipeline to generate model predictions before backtesting."
+                    )
         else:
             # Set up Backtrader
             cerebro = bt.Cerebro()

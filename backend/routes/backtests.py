@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks
 
 from backend.logging_config import get_component_logger
 from backend.schemas import BacktestRequest, BacktestResult
+from backend.services.strategy_framework import StrategyPreflightService
 from .backtest_engine import run_backtest_background
 
 
@@ -30,10 +31,26 @@ async def run_backtest(
 
     try:
         config = get_config()
+        registry = app_state.get("strategy_registry")
+        strategy = registry.get(request.strategy_name) if registry else None
+        if not strategy:
+            raise HTTPException(status_code=404, detail=f"Strategy '{request.strategy_name}' not found")
 
         # Validate date range
         if (request.end_date - request.start_date).days > 365 * 5:  # Max 5 years
             raise HTTPException(status_code=400, detail="Date range too large (max 5 years)")
+
+        ticker = str((request.parameters or {}).get("ticker", "AAPL")).upper()
+        preflight = StrategyPreflightService(app_state.get("database_path") or config.database.path).evaluate(
+            strategy_name=request.strategy_name,
+            strategy=strategy,
+            ticker=ticker,
+            start_date=request.start_date,
+            end_date=request.end_date,
+        )
+        if not preflight.ready:
+            issue_messages = "; ".join(issue.message for issue in preflight.issues)
+            raise HTTPException(status_code=400, detail=f"Preflight failed: {issue_messages}")
 
         # Generate unique backtest ID
         backtest_id = f"bt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{uuid.uuid4().hex[:8]}"

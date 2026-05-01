@@ -44,14 +44,37 @@ class MovingAverageStrategy(BaseStrategy):
             can_train=False
         )
 
+    @staticmethod
+    def _normalize_parameters(parameters: Dict[str, Any]) -> Dict[str, float]:
+        params = parameters or {}
+        short_window = max(2, int(params.get("short_window", 10)))
+        long_window = max(short_window + 1, int(params.get("long_window", 30)))
+        max_position_pct = min(max(float(params.get("max_position_pct", 0.1)), 0.0), 1.0)
+        return {
+            "short_window": short_window,
+            "long_window": long_window,
+            "max_position_pct": max_position_pct,
+        }
+
+    def get_capability_profile(self) -> Dict[str, Any]:
+        return {
+            "requires_predictions": False,
+            "required_prediction_horizons": [],
+            "supports_signal_execution": True,
+            "supports_backtrader_execution": True,
+            "min_history_bars": 120,
+            "supported_objectives": ["balanced", "sharpe", "return", "drawdown"],
+        }
+
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         """Create and return a Backtrader strategy class with MA crossover logic."""
+        normalized = self._normalize_parameters(parameters)
 
         class MovingAverageCrossover(bt.Strategy):
             params = (
-                ("short_window", int(parameters.get("short_window", 10))),
-                ("long_window", int(parameters.get("long_window", 30))),
-                ("max_position_pct", float(parameters.get("max_position_pct", 0.1))),
+                ("short_window", normalized["short_window"]),
+                ("long_window", normalized["long_window"]),
+                ("max_position_pct", normalized["max_position_pct"]),
             )
 
             def __init__(self):
@@ -152,10 +175,10 @@ class MovingAverageStrategy(BaseStrategy):
     ) -> List[TargetAllocation]:
         from backend.main import app_state
 
-        params = parameters or {}
-        short_window = int(params.get("short_window", 10))
-        long_window = int(params.get("long_window", 30))
-        max_position_pct = float(params.get("max_position_pct", 0.1))
+        normalized = self._normalize_parameters(parameters)
+        short_window = int(normalized["short_window"])
+        long_window = int(normalized["long_window"])
+        max_position_pct = float(normalized["max_position_pct"])
         db_path = app_state.get("database_path") or "data/backtest.db"
 
         allocations: List[TargetAllocation] = []
@@ -171,10 +194,10 @@ class MovingAverageStrategy(BaseStrategy):
                     ORDER BY date DESC
                     LIMIT ?
                     """,
-                    (symbol.upper(), as_of.date().isoformat(), max(long_window, short_window)),
+                    (symbol.upper(), as_of.date().isoformat(), long_window + 1),
                 )
                 rows = [float(r[0]) for r in cur.fetchall() if r[0] is not None]
-                if len(rows) < max(short_window, long_window):
+                if len(rows) < (long_window + 1):
                     allocations.append(
                         TargetAllocation(
                             ticker=symbol.upper(),
@@ -187,20 +210,26 @@ class MovingAverageStrategy(BaseStrategy):
                     )
                     continue
                 closes = np.array(rows[::-1], dtype=float)
+
+                prev_short_ma = float(np.mean(closes[-(short_window + 1):-1]))
+                prev_long_ma = float(np.mean(closes[-(long_window + 1):-1]))
                 short_ma = float(np.mean(closes[-short_window:]))
                 long_ma = float(np.mean(closes[-long_window:]))
-                if short_ma > long_ma:
+                bullish_cross = prev_short_ma <= prev_long_ma and short_ma > long_ma
+                bearish_cross = prev_short_ma >= prev_long_ma and short_ma < long_ma
+
+                if bullish_cross:
                     target_pct = max_position_pct
-                    reason = "ma_bullish"
+                    reason = "ma_bullish_cross"
                     confidence = min(1.0, abs(short_ma - long_ma) / max(long_ma, 1e-9))
-                elif short_ma < long_ma:
+                elif bearish_cross:
                     target_pct = 0.0
-                    reason = "ma_bearish"
+                    reason = "ma_bearish_cross"
                     confidence = min(1.0, abs(short_ma - long_ma) / max(long_ma, 1e-9))
                 else:
-                    target_pct = 0.0
-                    reason = "ma_flat"
-                    confidence = 0.1
+                    # Keep holdings unchanged between crossover events so signal-mode behavior
+                    # mirrors the Backtrader crossover strategy.
+                    continue
                 allocations.append(
                     TargetAllocation(
                         ticker=symbol.upper(),
@@ -210,6 +239,8 @@ class MovingAverageStrategy(BaseStrategy):
                         timestamp=as_of,
                         metadata={
                             "strategy": self.name,
+                            "prev_short_ma": prev_short_ma,
+                            "prev_long_ma": prev_long_ma,
                             "short_ma": short_ma,
                             "long_ma": long_ma,
                             "current_price": float(current_prices.get(symbol, 0.0) or 0.0),

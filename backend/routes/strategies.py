@@ -1,15 +1,17 @@
 """
 Strategy listing endpoints for the Trading Backtester API.
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import sqlite3
 import json
 from datetime import datetime
+import itertools
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List
 
 from backend.logging_config import get_component_logger
+from backend.services.strategy_framework import StrategyPreflightService, StrategyOptimizerEngine
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
@@ -28,6 +30,12 @@ class TrainRequest(BaseModel):
     dataset_path: Optional[str] = None
     hyperparameters: Optional[Dict[str, Any]] = None
     config: Optional[Dict[str, Any]] = None  # Generic config for flexibility
+    ticker: Optional[str] = Field(default=None, description="Ticker to optimize for")
+    start_date: Optional[datetime] = Field(default=None, description="Optimization start date")
+    end_date: Optional[datetime] = Field(default=None, description="Optimization end date")
+    initial_capital: float = Field(default=100000.0, gt=0)
+    objective: str = Field(default="balanced", description="sharpe|return|drawdown|balanced")
+    max_evals: int = Field(default=24, ge=1, le=200, description="Maximum parameter sets to evaluate")
 
 
 class ProjectionRequest(BaseModel):
@@ -52,6 +60,12 @@ class SignalRequest(BaseModel):
     as_of: Optional[datetime] = Field(default=None, description="Signal generation timestamp")
     current_prices: Optional[Dict[str, float]] = Field(default={}, description="Optional symbol->price overrides")
     params: Optional[Dict[str, Any]] = Field(default={}, description="Strategy parameters")
+
+
+class StrategyPreflightRequest(BaseModel):
+    ticker: str = Field(..., description="Ticker symbol")
+    start_date: datetime = Field(..., description="Backtest/training start date")
+    end_date: datetime = Field(..., description="Backtest/training end date")
 
 
 def _get_db_connection():
@@ -155,6 +169,180 @@ def validate_parameters(parameters: Dict[str, Any], schema: Dict[str, Any]) -> N
                 )
 
 
+def _load_price_frame_for_ticker(
+    db_path: str,
+    ticker: str,
+    start_date: datetime,
+    end_date: datetime,
+    lookback_days: int,
+):
+    import pandas as pd
+
+    conn = sqlite3.connect(db_path)
+    try:
+        query = """
+            SELECT date, open, high, low, close, volume
+            FROM price_daily
+            WHERE ticker = ? AND date >= date(?, ? || ' days') AND date <= ?
+            ORDER BY date ASC
+        """
+        df = pd.read_sql_query(
+            query,
+            conn,
+            params=[
+                ticker.upper(),
+                start_date.date().isoformat(),
+                f"-{lookback_days}",
+                end_date.date().isoformat(),
+            ],
+        )
+    finally:
+        conn.close()
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"]).sort_values("date")
+    return df
+
+
+def _score_metrics(metrics: Dict[str, float], objective: str) -> float:
+    sharpe = float(metrics.get("sharpe_ratio", 0.0) or 0.0)
+    total_return = float(metrics.get("total_return", 0.0) or 0.0)
+    max_drawdown = float(metrics.get("max_drawdown", 0.0) or 0.0)
+    if objective == "sharpe":
+        return sharpe
+    if objective == "return":
+        return total_return
+    if objective == "drawdown":
+        return -max_drawdown
+    # balanced: sharpe first, then return, then lower drawdown
+    return (sharpe * 10.0) + (total_return * 2.0) - max_drawdown
+
+
+def _rank_key(metrics: Dict[str, float]) -> Tuple[float, float, float]:
+    return (
+        float(metrics.get("sharpe_ratio", 0.0) or 0.0),
+        float(metrics.get("total_return", 0.0) or 0.0),
+        -float(metrics.get("max_drawdown", 0.0) or 0.0),
+    )
+
+
+def _candidate_grid(strategy_name: str) -> List[Dict[str, Any]]:
+    if strategy_name == "moving_average":
+        return [
+            {"short_window": s, "long_window": l, "max_position_pct": p}
+            for s, l, p in itertools.product([5, 10, 15, 20], [30, 50, 80, 120], [0.05, 0.08, 0.1])
+            if s < l
+        ]
+    if strategy_name == "recursive_forecast":
+        return [
+            {"prediction_threshold": t, "forecast_horizon_days": h, "max_position_pct": p}
+            for t, h, p in itertools.product([0.0005, 0.001, 0.002, 0.003], [1, 3, 5, 7], [0.05, 0.08, 0.1])
+        ]
+    return []
+
+
+def _optimize_signal_strategy(
+    strategy: Any,
+    strategy_name: str,
+    db_path: str,
+    ticker: str,
+    start_date: datetime,
+    end_date: datetime,
+    initial_capital: float,
+    objective: str,
+    max_evals: int,
+) -> Dict[str, Any]:
+    from backend.routes.backtest_engine import _run_signal_execution_backtest
+
+    preflight = StrategyPreflightService(db_path).evaluate(
+        strategy_name=strategy_name,
+        strategy=strategy,
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if not preflight.ready:
+        issue_messages = "; ".join(issue.message for issue in preflight.issues)
+        raise HTTPException(status_code=400, detail=f"Preflight failed: {issue_messages}")
+
+    optimizer = StrategyOptimizerEngine(db_path)
+    grid = optimizer.candidate_grid(strategy_name)
+    if not grid:
+        raise HTTPException(status_code=400, detail=f"Optimization not supported for strategy '{strategy_name}'")
+    price_df = optimizer.load_price_frame(ticker=ticker, start_date=start_date, end_date=end_date, lookback_days=365)
+    if price_df.empty:
+        raise HTTPException(status_code=400, detail=f"No price data found for ticker '{ticker}' in requested period")
+
+    price_frames = {ticker.upper(): price_df}
+    evaluations: List[Dict[str, Any]] = []
+    all_missing_model = True
+    for params in grid[:max_evals]:
+        merged_params = {**params, "execution_mode": "signal"}
+        metrics = _run_signal_execution_backtest(
+            strategy=strategy,
+            strategy_name=strategy_name,
+            start_date=start_date,
+            end_date=end_date,
+            initial_capital=initial_capital,
+            parameters=merged_params,
+            price_frames=price_frames,
+        )
+        execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
+        reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
+        no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
+        non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
+        fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
+        if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
+            all_missing_model = False
+        summary_metrics = {
+            "total_return": float(metrics.get("total_return", 0.0) or 0.0),
+            "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
+            "max_drawdown": float(metrics.get("max_drawdown", 0.0) or 0.0),
+            "volatility": float(metrics.get("volatility", 0.0) or 0.0),
+            "total_trades": int(metrics.get("total_trades", 0) or 0),
+        }
+        evaluations.append(
+            {
+                "params": params,
+                "metrics": summary_metrics,
+                "score": optimizer.score(summary_metrics, objective),
+            }
+        )
+
+    if not evaluations:
+        raise HTTPException(status_code=500, detail="No optimization evaluations were produced")
+    if all_missing_model and strategy_name == "recursive_forecast":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No recursive forecast models/predictions available for requested ticker/date range. "
+                "Run the ML prediction pipeline first, then retry strategy training."
+            ),
+        )
+    evaluations.sort(
+        key=lambda e: (
+            float(e["score"]),
+            _rank_key(e["metrics"])[0],
+            _rank_key(e["metrics"])[1],
+            _rank_key(e["metrics"])[2],
+        ),
+        reverse=True,
+    )
+    best = evaluations[0]
+    return {
+        "strategy": strategy_name,
+        "ticker": ticker.upper(),
+        "start_date": start_date.date().isoformat(),
+        "end_date": end_date.date().isoformat(),
+        "objective": objective,
+        "evaluations_run": len(evaluations),
+        "best_params": best["params"],
+        "best_metrics": best["metrics"],
+        "top_candidates": evaluations[:5],
+    }
+
+
 @router.get("/strategies", response_model=List[Dict[str, Any]], tags=["Strategies"])
 async def list_strategies():
     """List all registered strategies with their metadata."""
@@ -202,7 +390,33 @@ async def get_strategy(name: str):
     return metadata
 
 
-@router.post("/strategies/{name}/train", response_model=Dict[str, str], tags=["Strategies"])
+@router.post("/strategies/{name}/preflight", response_model=Dict[str, Any], tags=["Strategies"])
+async def preflight_strategy(name: str, req: StrategyPreflightRequest):
+    """Validate data/model readiness before training or backtesting."""
+    from backend.main import app_state
+
+    registry = app_state.get("strategy_registry")
+    if not registry:
+        raise HTTPException(status_code=500, detail="Strategy registry not available")
+    strategy = registry.get(name)
+    if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+    db_path = app_state.get("database_path")
+    if not db_path:
+        raise HTTPException(status_code=500, detail="Database path not configured")
+    if req.end_date <= req.start_date:
+        raise HTTPException(status_code=400, detail="end_date must be after start_date")
+    result = StrategyPreflightService(db_path).evaluate(
+        strategy_name=name,
+        strategy=strategy,
+        ticker=req.ticker,
+        start_date=req.start_date,
+        end_date=req.end_date,
+    )
+    return result.as_dict()
+
+
+@router.post("/strategies/{name}/train", response_model=Dict[str, Any], tags=["Strategies"])
 async def train_strategy(name: str, request: TrainRequest):
     """Train a strategy's model with the provided configuration."""
     from backend.main import app_state  # Import here to avoid circular imports
@@ -215,6 +429,37 @@ async def train_strategy(name: str, request: TrainRequest):
     strategy = registry.get(name)
     if not strategy:
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+
+    if name in {"moving_average", "recursive_forecast"}:
+        if not request.ticker:
+            raise HTTPException(status_code=400, detail="ticker is required for strategy parameter training")
+        if not request.start_date or not request.end_date:
+            raise HTTPException(status_code=400, detail="start_date and end_date are required for training")
+        if request.end_date <= request.start_date:
+            raise HTTPException(status_code=400, detail="end_date must be after start_date")
+        objective = (request.objective or "balanced").lower()
+        if objective not in {"sharpe", "return", "drawdown", "balanced"}:
+            raise HTTPException(status_code=400, detail="objective must be one of: sharpe, return, drawdown, balanced")
+        db_path = app_state.get("database_path")
+        if not db_path:
+            raise HTTPException(status_code=500, detail="Database path not configured")
+        try:
+            return _optimize_signal_strategy(
+                strategy=strategy,
+                strategy_name=name,
+                db_path=db_path,
+                ticker=request.ticker,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                initial_capital=float(request.initial_capital),
+                objective=objective,
+                max_evals=int(request.max_evals),
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Optimization training failed for strategy '%s': %s", name, e)
+            raise HTTPException(status_code=500, detail=f"Training optimization failed: {str(e)}")
 
     if not strategy.can_train:
         raise HTTPException(status_code=400, detail=f"Strategy '{name}' does not support training")

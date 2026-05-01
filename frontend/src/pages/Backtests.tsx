@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { getBacktests, runBacktest } from '../services/api'
-import { listStrategies } from '../api/strategies'
+import {
+  listStrategies,
+  preflightStrategy,
+  trainStrategy,
+  type StrategyPreflightResponse,
+  type StrategyTrainResponse,
+} from '../api/strategies'
 import websocketService from '../services/websocket'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
@@ -44,8 +50,16 @@ export default function Backtests() {
   const [startDate, setStartDate] = useState('2023-01-01')
   const [endDate, setEndDate] = useState('2023-12-31')
   const [running, setRunning] = useState(false)
+  const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [ticker, setTicker] = useState('AAPL')
+  const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
+  const [maxEvals, setMaxEvals] = useState(24)
+  const [trainedParams, setTrainedParams] = useState<Record<string, any> | null>(null)
+  const [trainResult, setTrainResult] = useState<StrategyTrainResponse | null>(null)
+  const [trainError, setTrainError] = useState<string | null>(null)
+  const [preflight, setPreflight] = useState<StrategyPreflightResponse | null>(null)
 
   const fetchBacktests = async () => {
     setLoading(true)
@@ -154,11 +168,23 @@ export default function Backtests() {
     }
     setRunning(true)
     try {
+      const check = await preflightStrategy(strategy, {
+        ticker: ticker.trim().toUpperCase(),
+        start_date: startDate,
+        end_date: endDate,
+      })
+      setPreflight(check)
+      if (!check.ready) {
+        const topError = check.issues[0]?.message || 'Preflight failed'
+        alert(topError)
+        return
+      }
       const data = await runBacktest({
         strategy_name: strategy,
         start_date: startDate,
         end_date: endDate,
-        initial_capital: 100000
+        initial_capital: 100000,
+        parameters: { ...(trainedParams ?? {}), ticker: ticker.trim().toUpperCase() },
       })
 
       setBacktests(prev => [{ ...data, id: data.metrics?.backtest_id, status: 'running', chart_data: [] }, ...prev])
@@ -166,6 +192,57 @@ export default function Backtests() {
       alert('Failed to start backtest: ' + (e.message || 'Unknown error'))
     } finally {
       setRunning(false)
+    }
+  }
+
+  const runTraining = async () => {
+    if (!hasValidStrategySelection) {
+      alert('Please select an existing strategy from the dropdown')
+      return
+    }
+    if (!ticker.trim()) {
+      alert('Please provide a ticker for training')
+      return
+    }
+    setTraining(true)
+    setTrainError(null)
+    try {
+      const check = await preflightStrategy(strategy, {
+        ticker: ticker.trim().toUpperCase(),
+        start_date: startDate,
+        end_date: endDate,
+      })
+      setPreflight(check)
+      if (!check.ready) {
+        setTrainError(check.issues[0]?.message || 'Preflight failed')
+        return
+      }
+      const response = await trainStrategy(strategy, {
+        ticker: ticker.trim().toUpperCase(),
+        start_date: startDate,
+        end_date: endDate,
+        initial_capital: 100000,
+        objective: trainObjective,
+        max_evals: maxEvals,
+      })
+      if (
+        response &&
+        typeof response === 'object' &&
+        'best_params' in response &&
+        (strategy === 'moving_average' || strategy === 'recursive_forecast')
+      ) {
+        const typed = response as StrategyTrainResponse
+        setTrainResult(typed)
+        setTrainedParams(typed.best_params)
+      } else {
+        setTrainResult(null)
+        setTrainedParams(null)
+        setTrainError('Strategy returned non-optimization training response.')
+      }
+    } catch (e: any) {
+      setTrainError(e.message || 'Failed to train strategy parameters')
+    } finally {
+      setTraining(false)
     }
   }
 
@@ -284,25 +361,111 @@ export default function Backtests() {
                 />
               </div>
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Training Ticker</label>
+                <Input
+                  value={ticker}
+                  onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                  placeholder="AAPL"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Objective</label>
+                <select
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={trainObjective}
+                  onChange={(e) => setTrainObjective(e.target.value as typeof trainObjective)}
+                >
+                  <option value="balanced">Balanced</option>
+                  <option value="sharpe">Sharpe</option>
+                  <option value="return">Return</option>
+                  <option value="drawdown">Drawdown</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Max Evaluations</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={maxEvals}
+                  onChange={(e) => setMaxEvals(Number(e.target.value || 24))}
+                />
+              </div>
+            </div>
 
-            <Button 
-              onClick={startBacktest} 
-              disabled={running || !hasValidStrategySelection}
-              className="w-full md:w-auto"
-              size="lg"
-            >
-              {running ? (
-                <>
-                  <Activity className="mr-2 h-4 w-4 animate-spin" />
-                  Running Backtest...
-                </>
-              ) : (
-                <>
-                  <Target className="mr-2 h-4 w-4" />
-                  Start Backtest
-                </>
-              )}
-            </Button>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                onClick={runTraining}
+                disabled={training || !hasValidStrategySelection}
+                variant="secondary"
+                className="w-full md:w-auto"
+                size="lg"
+              >
+                {training ? (
+                  <>
+                    <Activity className="mr-2 h-4 w-4 animate-spin" />
+                    Training...
+                  </>
+                ) : (
+                  <>
+                    <Target className="mr-2 h-4 w-4" />
+                    Train Strategy
+                  </>
+                )}
+              </Button>
+              <Button
+                onClick={startBacktest}
+                disabled={running || !hasValidStrategySelection}
+                className="w-full md:w-auto"
+                size="lg"
+              >
+                {running ? (
+                  <>
+                    <Activity className="mr-2 h-4 w-4 animate-spin" />
+                    Running Backtest...
+                  </>
+                ) : (
+                  <>
+                    <Target className="mr-2 h-4 w-4" />
+                    Start Backtest
+                  </>
+                )}
+              </Button>
+            </div>
+            {trainError && <p className="text-sm text-destructive">{trainError}</p>}
+            {preflight && !preflight.ready && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm space-y-1">
+                <p className="font-medium text-destructive">Preflight blocked execution</p>
+                {preflight.issues.map((issue, idx) => (
+                  <p key={`${issue.code}-${idx}`}>- {issue.message}</p>
+                ))}
+                {preflight.suggestions.length > 0 && (
+                  <p className="text-muted-foreground">Suggestion: {preflight.suggestions[0]}</p>
+                )}
+              </div>
+            )}
+            {preflight && preflight.ready && preflight.warnings.length > 0 && (
+              <div className="rounded-lg border border-amber-400/40 bg-amber-100/20 p-3 text-sm space-y-1">
+                <p className="font-medium">Preflight warnings</p>
+                {preflight.warnings.map((warning, idx) => (
+                  <p key={`${warning.code}-${idx}`}>- {warning.message}</p>
+                ))}
+              </div>
+            )}
+            {trainResult && (
+              <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1">
+                <p className="font-medium">Training result ({trainResult.strategy})</p>
+                <p>
+                  Best params: <code>{JSON.stringify(trainResult.best_params)}</code>
+                </p>
+                <p>
+                  Metrics: Sharpe {trainResult.best_metrics.sharpe_ratio.toFixed(3)} | Return {(trainResult.best_metrics.total_return * 100).toFixed(2)}% | Max DD {(trainResult.best_metrics.max_drawdown * 100).toFixed(2)}% | Trades {trainResult.best_metrics.total_trades}
+                </p>
+                <p>Evaluations: {trainResult.evaluations_run}</p>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

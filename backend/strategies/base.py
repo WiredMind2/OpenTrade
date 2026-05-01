@@ -23,6 +23,17 @@ class BaseStrategy(ABC):
         self.parameters_schema = parameters_schema
         self.can_train = can_train
 
+    def get_capability_profile(self) -> Dict[str, Any]:
+        """Strategy execution contract used by generic preflight/optimizer flows."""
+        return {
+            "requires_predictions": False,
+            "required_prediction_horizons": [],
+            "supports_signal_execution": True,
+            "supports_backtrader_execution": True,
+            "min_history_bars": 30,
+            "supported_objectives": ["balanced", "sharpe", "return", "drawdown"],
+        }
+
     @abstractmethod
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         """Create and return a Backtrader strategy class with the given parameters."""
