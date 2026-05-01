@@ -20,36 +20,30 @@ module.exports = {
       colors: {
         // TradingView color palette
         tv: {
-          // Background colors
-          'bg-primary': '#0D1421',
-          'bg-secondary': '#1E222D',
-          'bg-tertiary': '#2A2E39',
-          'bg-elevated': '#131722',
-          'bg-hover': '#2962FF14',
-          
-          // Border colors
-          'border-primary': '#2A2E39',
-          'border-secondary': '#363A45',
-          'border-hover': '#434651',
-          
-          // Text colors
-          'text-primary': '#D1D4DC',
-          'text-secondary': '#787B86',
-          'text-tertiary': '#50535E',
-          'text-disabled': '#363A45',
-          
-          // Brand colors
-          'blue': '#2962FF',
-          'blue-hover': '#1E53E5',
-          'blue-pressed': '#1948CC',
-          
-          // Semantic colors
-          'green': '#089981',
+          // Theme-aware colors (adapt to light/dark via CSS variables)
+          'bg-primary':      'hsl(var(--tv-bg-primary) / <alpha-value>)',
+          'bg-secondary':    'hsl(var(--tv-bg-secondary) / <alpha-value>)',
+          'bg-tertiary':     'hsl(var(--tv-bg-tertiary) / <alpha-value>)',
+          'bg-elevated':     'hsl(var(--tv-bg-elevated) / <alpha-value>)',
+          'bg-hover':        'hsl(var(--tv-bg-hover) / <alpha-value>)',
+          'border-primary':  'hsl(var(--tv-border-primary) / <alpha-value>)',
+          'border-secondary':'hsl(var(--tv-border-secondary) / <alpha-value>)',
+          'border-hover':    'hsl(var(--tv-border-hover) / <alpha-value>)',
+          'text-primary':    'hsl(var(--tv-text-primary) / <alpha-value>)',
+          'text-secondary':  'hsl(var(--tv-text-secondary) / <alpha-value>)',
+          'text-tertiary':   'hsl(var(--tv-text-tertiary) / <alpha-value>)',
+          'text-disabled':   'hsl(var(--tv-text-disabled) / <alpha-value>)',
+
+          // Brand/semantic colors — same in both themes
+          'blue':        '#2962FF',
+          'blue-hover':  '#1E53E5',
+          'blue-pressed':'#1948CC',
+          'green':       '#089981',
           'green-hover': '#06876E',
-          'red': '#F23645',
-          'red-hover': '#D9303E',
-          'orange': '#FF9800',
-          'yellow': '#FFC107',
+          'red':         '#F23645',
+          'red-hover':   '#D9303E',
+          'orange':      '#FF9800',
+          'yellow':      '#FFC107',
         },
         
         // Shadcn-compatible color system

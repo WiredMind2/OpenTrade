@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useTheme } from "./ThemeProvider";
 import type {
   IChartingLibraryWidget,
   ChartingLibraryWidgetOptions,
@@ -101,6 +102,9 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      predictionProjections = [],
      onSymbolChange,
    }, ref) => {
+       const { theme } = useTheme();
+       const isDark = theme === 'dark';
+
        const containerRef = useRef<HTMLDivElement>(null);
        const widgetRef = useRef<IChartingLibraryWidget | null>(null);
        const containerIdRef = useRef<string>(
@@ -275,8 +279,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             ],
             enabled_features: [
               "study_templates" as any,
-              "save_chart_properties_to_local_storage" as any,
-              "use_localstorage_for_settings" as any,
               "left_toolbar" as any,
             ],
             charts_storage_url: "https://saveload.tradingview.com",
@@ -286,33 +288,27 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             fullscreen: false,
             autosize: true,
             studies_overrides: {},
-            theme: "dark",
+            theme: isDark ? "dark" : "light",
             timezone: "Etc/UTC",
-            toolbar_bg: "#1E222D",
+            toolbar_bg: isDark ? "#1E222D" : "#F5F5F5",
             loading_screen: {
-              backgroundColor: "#0D1421",
+              backgroundColor: isDark ? "#0D1421" : "#FFFFFF",
               foregroundColor: "#2962FF",
             },
             overrides: {
-              "paneProperties.background": "#0D1421",
+              "paneProperties.background": isDark ? "#0D1421" : "#FFFFFF",
               "paneProperties.backgroundType": "solid",
-              "paneProperties.vertGridProperties.color": "#2A2E39",
-              "paneProperties.horzGridProperties.color": "#2A2E39",
-              "mainSeriesProperties.style": 2, // Candlestick
-              "mainSeriesProperties.candleStyle.upColor":
-                bullishColor || "#089981",
-              "mainSeriesProperties.candleStyle.downColor":
-                bearishColor || "#F23645",
-              "mainSeriesProperties.candleStyle.borderUpColor":
-                bullishColor || "#089981",
-              "mainSeriesProperties.candleStyle.borderDownColor":
-                bearishColor || "#F23645",
-              "mainSeriesProperties.candleStyle.wickUpColor":
-                bullishColor || "#089981",
-              "mainSeriesProperties.candleStyle.wickDownColor":
-                bearishColor || "#F23645",
-              "scalesProperties.textColor": "#787B86",
-              "scalesProperties.lineColor": "#2A2E39",
+              "paneProperties.vertGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
+              "paneProperties.horzGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
+              "mainSeriesProperties.style": 2,
+              "mainSeriesProperties.candleStyle.upColor": bullishColor || "#089981",
+              "mainSeriesProperties.candleStyle.downColor": bearishColor || "#F23645",
+              "mainSeriesProperties.candleStyle.borderUpColor": bullishColor || "#089981",
+              "mainSeriesProperties.candleStyle.borderDownColor": bearishColor || "#F23645",
+              "mainSeriesProperties.candleStyle.wickUpColor": bullishColor || "#089981",
+              "mainSeriesProperties.candleStyle.wickDownColor": bearishColor || "#F23645",
+              "scalesProperties.textColor": isDark ? "#787B86" : "#555555",
+              "scalesProperties.lineColor": isDark ? "#2A2E39" : "#E0E3EB",
             },
           };
 // Create the chart widget
@@ -321,6 +317,21 @@ widgetRef.current = new TradingView.widget(widgetOptions);
           // Attach projection manager when chart is ready
           widgetRef.current.onChartReady(() => {
             console.log("[OHLCChart] Chart ready, attaching projection manager");
+
+            // Force theme overrides after localStorage restore
+            try {
+              const chart = widgetRef.current?.chart() as any
+              if (chart) {
+                chart.applyOverrides({
+                  'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+                  'paneProperties.backgroundType': 'solid',
+                  'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+                  'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+                  'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
+                  'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+                })
+              }
+            } catch { /* ignore */ }
 
             // Listen for symbol changes in TradingView
             if (onSymbolChange) {
@@ -488,11 +499,33 @@ widgetRef.current = new TradingView.widget(widgetOptions);
       height,
       bullishColor,
       bearishColor,
+      isDark,
       projectionSettings.strategyName,
       projectionSettings.params,
       projectionSettings.horizon,
       projectionSettings.mode,
     ]);
+
+    // Apply theme to existing widget without full reinit
+    useEffect(() => {
+      if (!widgetRef.current) return;
+      try {
+        (widgetRef.current as any).changeTheme(isDark ? 'dark' : 'light').then(() => {
+          const chart = widgetRef.current?.chart() as any
+          if (!chart) return
+          chart.applyOverrides({
+            'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+            'paneProperties.backgroundType': 'solid',
+            'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+            'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+            'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
+            'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+          })
+        })
+      } catch {
+        // changeTheme not available on this widget version — full reinit handles it
+      }
+    }, [isDark])
 
     // Update prediction settings when props change
     useEffect(() => {

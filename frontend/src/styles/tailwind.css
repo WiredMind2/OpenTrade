@@ -4,7 +4,6 @@
 
 @layer base {
   :root {
-    /* Light theme (optional) */
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
@@ -25,39 +24,55 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 221.2 83.2% 53.3%;
     --radius: 0.25rem;
+
+    --tv-bg-primary: 0 0% 100%;
+    --tv-bg-secondary: 220 14% 96%;
+    --tv-bg-tertiary: 220 13% 91%;
+    --tv-bg-elevated: 0 0% 99%;
+    --tv-bg-hover: 221 83% 95%;
+    --tv-border-primary: 214 32% 88%;
+    --tv-border-secondary: 214 32% 82%;
+    --tv-border-hover: 214 32% 70%;
+    --tv-text-primary: 222 47% 11%;
+    --tv-text-secondary: 215 14% 40%;
+    --tv-text-tertiary: 215 14% 58%;
+    --tv-text-disabled: 215 14% 74%;
   }
 
   .dark {
-    /* TradingView-inspired dark theme */
-    --background: 217 33% 7%;        /* #0D1421 */
-    --foreground: 225 11% 85%;       /* #D1D4DC */
-    
-    --card: 220 20% 18%;             /* #1E222D */
-    --card-foreground: 225 11% 85%;  /* #D1D4DC */
-    
-    --popover: 217 33% 7%;           /* #0D1421 */
+    --background: 217 33% 7%;
+    --foreground: 225 11% 85%;
+    --card: 220 20% 18%;
+    --card-foreground: 225 11% 85%;
+    --popover: 217 33% 7%;
     --popover-foreground: 225 11% 85%;
-    
-    --primary: 221 100% 57%;         /* #2962FF */
+    --primary: 221 100% 57%;
     --primary-foreground: 0 0% 100%;
-    
-    --secondary: 220 17% 20%;        /* #2A2E39 */
+    --secondary: 220 17% 20%;
     --secondary-foreground: 225 11% 85%;
-    
-    --muted: 220 17% 20%;            /* #2A2E39 */
-    --muted-foreground: 225 8% 51%;  /* #787B86 */
-    
-    --accent: 220 17% 20%;           /* #2A2E39 */
+    --muted: 220 17% 20%;
+    --muted-foreground: 225 8% 51%;
+    --accent: 220 17% 20%;
     --accent-foreground: 225 11% 85%;
-    
-    --destructive: 354 85% 57%;      /* #F23645 */
+    --destructive: 354 85% 57%;
     --destructive-foreground: 0 0% 100%;
-    
-    --border: 220 17% 20%;           /* #2A2E39 */
+    --border: 220 17% 20%;
     --input: 220 17% 20%;
-    --ring: 221 100% 57%;            /* #2962FF */
-    
+    --ring: 221 100% 57%;
     --radius: 0.25rem;
+
+    --tv-bg-primary: 217 33% 7%;
+    --tv-bg-secondary: 220 20% 18%;
+    --tv-bg-tertiary: 220 17% 20%;
+    --tv-bg-elevated: 219 30% 10%;
+    --tv-bg-hover: 221 83% 20%;
+    --tv-border-primary: 220 17% 20%;
+    --tv-border-secondary: 220 15% 26%;
+    --tv-border-hover: 220 13% 32%;
+    --tv-text-primary: 225 11% 85%;
+    --tv-text-secondary: 225 8% 51%;
+    --tv-text-tertiary: 220 12% 34%;
+    --tv-text-disabled: 220 15% 26%;
   }
 }
 
@@ -93,12 +108,12 @@ html, body, #root {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2A2E39;
+  background: hsl(var(--tv-border-secondary));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #363A45;
+  background: hsl(var(--tv-border-hover));
 }
 
 ::-webkit-scrollbar-corner {
@@ -108,7 +123,7 @@ html, body, #root {
 /* Firefox scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2A2E39 transparent;
+  scrollbar-color: hsl(var(--tv-border-secondary)) transparent;
 }
 
 /* Smooth transitions - more subtle than before */
@@ -120,10 +135,9 @@ html, body, #root {
   }
 }
 
-/* Selection color */
 ::selection {
-  background-color: rgba(41, 98, 255, 0.3);
-  color: #D1D4DC;
+  background-color: hsl(var(--primary) / 0.25);
+  color: hsl(var(--foreground));
 }
 
 /* Remove default button styles */
@@ -134,35 +148,35 @@ button {
 /* Utility classes for TradingView styling */
 @layer utilities {
   .text-tv-primary {
-    color: #D1D4DC;
+    color: hsl(var(--tv-text-primary));
   }
-  
+
   .text-tv-secondary {
-    color: #787B86;
+    color: hsl(var(--tv-text-secondary));
   }
-  
+
   .text-tv-tertiary {
-    color: #50535E;
+    color: hsl(var(--tv-text-tertiary));
   }
-  
+
   .bg-tv-primary {
-    background-color: #0D1421;
+    background-color: hsl(var(--tv-bg-primary));
   }
-  
+
   .bg-tv-secondary {
-    background-color: #1E222D;
+    background-color: hsl(var(--tv-bg-secondary));
   }
-  
+
   .bg-tv-tertiary {
-    background-color: #2A2E39;
+    background-color: hsl(var(--tv-bg-tertiary));
   }
-  
+
   .border-tv-primary {
-    border-color: #2A2E39;
+    border-color: hsl(var(--tv-border-primary));
   }
-  
+
   .border-tv-secondary {
-    border-color: #363A45;
+    border-color: hsl(var(--tv-border-secondary));
   }
   
   /* Compact spacing for TradingView feel */
@@ -193,10 +207,10 @@ button {
   animation: shimmer 2s linear infinite;
   background: linear-gradient(
     to right,
-    #1E222D 0%,
-    #2A2E39 20%,
-    #1E222D 40%,
-    #1E222D 100%
+    hsl(var(--tv-bg-secondary)) 0%,
+    hsl(var(--tv-bg-tertiary)) 20%,
+    hsl(var(--tv-bg-secondary)) 40%,
+    hsl(var(--tv-bg-secondary)) 100%
   );
   background-size: 1000px 100%;
 }
