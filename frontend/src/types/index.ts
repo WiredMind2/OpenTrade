@@ -56,6 +56,7 @@ export interface BacktestResult {
   timestamp: string;
   metrics: Record<string, any>;
   equity_curve: Array<Record<string, any>>;
+  chart_data?: Array<Record<string, any>>;
 }
 
 export interface ModelInfo {

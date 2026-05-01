@@ -590,7 +590,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
         if (!widgetRef.current) return null;
 
         try {
-          const chart = widgetRef.current.chart();
+          const chart = widgetRef.current.chart() as any;
           if (!chart) return null;
 
           // Get the last bar from the chart
@@ -616,7 +616,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
         if (!widgetRef.current) return null;
 
         try {
-          const chart = widgetRef.current.chart();
+          const chart = widgetRef.current.chart() as any;
           if (!chart) return null;
 
           // Get the last bar from the chart
