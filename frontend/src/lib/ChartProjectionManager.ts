@@ -27,7 +27,7 @@ export function attachProjectionManager(
   attachedWidget = widget;
 
   widget.onChartReady(() => {
-    const chart = widget.chart();
+    const chart = widget.chart() as any;
     if (!chart) return;
 
     const handleClick = (point: { x: number; y: number }) => {

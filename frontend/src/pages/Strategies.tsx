@@ -15,6 +15,7 @@ function Strategies() {
       try {
         setLoading(true)
         const data = await listStrategies()
+        console.log("STRATEGIES FROM API:", data)
         setStrategies(data)
         setError(null)
       } catch (err) {

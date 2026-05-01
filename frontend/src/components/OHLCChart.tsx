@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useTheme } from "./ThemeProvider";
 import type {
   IChartingLibraryWidget,
   ChartingLibraryWidgetOptions,
@@ -7,6 +8,7 @@ import TradingViewUDFDatafeed from "../services/tradingViewUDF";
 import { attachProjectionManager, detachProjectionManager } from "../lib/ChartProjectionManager";
 import { projectStrategy } from "../services/strategyApi";
 import type { ProjectionPoint, PredictionProjection } from "../types";
+import type { NewsArticle } from "@/api/news";
 
 /**
  * Candle data point
@@ -49,6 +51,12 @@ interface OHLCChartProps {
    showPredictionProjections?: boolean;
    /** Prediction projection data */
    predictionProjections?: PredictionProjection[];
+   /** Callback when symbol changes in TradingView */
+   onSymbolChange?: (symbol: string) => void;
+   /** News articles to display as markers on chart */
+   newsArticles?: NewsArticle[];
+   /** Callback when a news marker is clicked */
+   onNewsClick?: (article: NewsArticle) => void;
 }
 
 /**
@@ -92,7 +100,11 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      mode = "price",
      showPredictionProjections = false,
      predictionProjections = [],
+     onSymbolChange,
    }, ref) => {
+       const { theme } = useTheme();
+       const isDark = theme === 'dark';
+
        const containerRef = useRef<HTMLDivElement>(null);
        const widgetRef = useRef<IChartingLibraryWidget | null>(null);
        const containerIdRef = useRef<string>(
@@ -126,8 +138,16 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
        const renderPredictionProjections = () => {
          if (!widgetRef.current) return;
 
-         const chart = widgetRef.current.chart();
-         if (!chart) return;
+          
+
+        let chart;
+        try {
+          chart = widgetRef.current.chart();
+        } catch (error) {
+          console.warn("[OHLCChart] Chart not ready or already removed");
+          return;
+        }
+        if (!chart) return;
 
          // Clear existing prediction entities
          predictionEntitiesRef.current.forEach(entityId => {
@@ -259,8 +279,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             ],
             enabled_features: [
               "study_templates" as any,
-              "save_chart_properties_to_local_storage" as any,
-              "use_localstorage_for_settings" as any,
               "left_toolbar" as any,
             ],
             charts_storage_url: "https://saveload.tradingview.com",
@@ -270,33 +288,27 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             fullscreen: false,
             autosize: true,
             studies_overrides: {},
-            theme: "dark",
+            theme: isDark ? "dark" : "light",
             timezone: "Etc/UTC",
-            toolbar_bg: "#1E222D",
+            toolbar_bg: isDark ? "#1E222D" : "#F5F5F5",
             loading_screen: {
-              backgroundColor: "#0D1421",
+              backgroundColor: isDark ? "#0D1421" : "#FFFFFF",
               foregroundColor: "#2962FF",
             },
             overrides: {
-              "paneProperties.background": "#0D1421",
+              "paneProperties.background": isDark ? "#0D1421" : "#FFFFFF",
               "paneProperties.backgroundType": "solid",
-              "paneProperties.vertGridProperties.color": "#2A2E39",
-              "paneProperties.horzGridProperties.color": "#2A2E39",
-              "mainSeriesProperties.style": 2, // Candlestick
-              "mainSeriesProperties.candleStyle.upColor":
-                bullishColor || "#089981",
-              "mainSeriesProperties.candleStyle.downColor":
-                bearishColor || "#F23645",
-              "mainSeriesProperties.candleStyle.borderUpColor":
-                bullishColor || "#089981",
-              "mainSeriesProperties.candleStyle.borderDownColor":
-                bearishColor || "#F23645",
-              "mainSeriesProperties.candleStyle.wickUpColor":
-                bullishColor || "#089981",
-              "mainSeriesProperties.candleStyle.wickDownColor":
-                bearishColor || "#F23645",
-              "scalesProperties.textColor": "#787B86",
-              "scalesProperties.lineColor": "#2A2E39",
+              "paneProperties.vertGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
+              "paneProperties.horzGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
+              "mainSeriesProperties.style": 2,
+              "mainSeriesProperties.candleStyle.upColor": bullishColor || "#089981",
+              "mainSeriesProperties.candleStyle.downColor": bearishColor || "#F23645",
+              "mainSeriesProperties.candleStyle.borderUpColor": bullishColor || "#089981",
+              "mainSeriesProperties.candleStyle.borderDownColor": bearishColor || "#F23645",
+              "mainSeriesProperties.candleStyle.wickUpColor": bullishColor || "#089981",
+              "mainSeriesProperties.candleStyle.wickDownColor": bearishColor || "#F23645",
+              "scalesProperties.textColor": isDark ? "#787B86" : "#555555",
+              "scalesProperties.lineColor": isDark ? "#2A2E39" : "#E0E3EB",
             },
           };
 // Create the chart widget
@@ -305,6 +317,32 @@ widgetRef.current = new TradingView.widget(widgetOptions);
           // Attach projection manager when chart is ready
           widgetRef.current.onChartReady(() => {
             console.log("[OHLCChart] Chart ready, attaching projection manager");
+
+            // Force theme overrides after localStorage restore
+            try {
+              const chart = widgetRef.current?.chart() as any
+              if (chart) {
+                chart.applyOverrides({
+                  'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+                  'paneProperties.backgroundType': 'solid',
+                  'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+                  'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+                  'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
+                  'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+                })
+              }
+            } catch { /* ignore */ }
+
+            // Listen for symbol changes in TradingView
+            if (onSymbolChange) {
+              widgetRef.current!.activeChart().onSymbolChanged().subscribe(null, (() => {
+                const currentSymbol = widgetRef.current!.activeChart().symbol();
+                console.log("[OHLCChart] Symbol changed to:", currentSymbol);
+                // Extract just the ticker symbol (e.g., "AAPL" from "NASDAQ:AAPL")
+                const ticker = currentSymbol.split(':').pop() || currentSymbol;
+                onSymbolChange(ticker);
+              }) as any);
+            }
 
             const projectionOptions = {
               onProjectionRequest: async (startPoint: { time: number; price: number }) => {
@@ -461,11 +499,33 @@ widgetRef.current = new TradingView.widget(widgetOptions);
       height,
       bullishColor,
       bearishColor,
+      isDark,
       projectionSettings.strategyName,
       projectionSettings.params,
       projectionSettings.horizon,
       projectionSettings.mode,
     ]);
+
+    // Apply theme to existing widget without full reinit
+    useEffect(() => {
+      if (!widgetRef.current) return;
+      try {
+        (widgetRef.current as any).changeTheme(isDark ? 'dark' : 'light').then(() => {
+          const chart = widgetRef.current?.chart() as any
+          if (!chart) return
+          chart.applyOverrides({
+            'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+            'paneProperties.backgroundType': 'solid',
+            'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+            'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
+            'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
+            'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+          })
+        })
+      } catch {
+        // changeTheme not available on this widget version — full reinit handles it
+      }
+    }, [isDark])
 
     // Update prediction settings when props change
     useEffect(() => {
@@ -477,7 +537,12 @@ widgetRef.current = new TradingView.widget(widgetOptions);
 
     // Re-render prediction projections when settings change
     useEffect(() => {
-      renderPredictionProjections();
+     if (!widgetRef.current) return;
+
+  const timeout = setTimeout(() => {
+    renderPredictionProjections();
+    }, 300);
+    return () => clearTimeout(timeout);
     }, [predictionSettings, symbol]);
 
     // Expose public API via ref
@@ -525,7 +590,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
         if (!widgetRef.current) return null;
 
         try {
-          const chart = widgetRef.current.chart();
+          const chart = widgetRef.current.chart() as any;
           if (!chart) return null;
 
           // Get the last bar from the chart
@@ -551,7 +616,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
         if (!widgetRef.current) return null;
 
         try {
-          const chart = widgetRef.current.chart();
+          const chart = widgetRef.current.chart() as any;
           if (!chart) return null;
 
           // Get the last bar from the chart

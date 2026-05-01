@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
 import { resolveProjectionAnchor } from '../utils/projectionAnchor'
+import { NewsSidebar } from '../components/NewsSidebar'
 
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
@@ -30,11 +31,14 @@ export default function Predictions() {
   const [submitting, setSubmitting] = useState(false)
   const [selectedTicker, setSelectedTicker] = useState('AAPL')
   const [activeTab, setActiveTab] = useState('chart')
-  const [availableTickers, setAvailableTickers] = useState<string[]>([])
+  const COMMON_TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'JPM', 'SPY']
+
+  const [availableTickers, setAvailableTickers] = useState<string[]>(COMMON_TICKERS)
   const [tickerSearch, setTickerSearch] = useState('')
   const [searchingTickers, setSearchingTickers] = useState(false)
-  const [tickerSuggestions, setTickerSuggestions] = useState<string[]>([])
-  const [showTickerSuggestions, setShowTickerSuggestions] = useState(false)
+  const [showTickerSuggestions, setShowTickerSuggestions] = useState(true)
+  const [highlightedIndex, setHighlightedIndex] = useState(-1)
+  const suggestionsRef = useRef<HTMLDivElement>(null)
 
   // Projection controls state
   const [projectionStrategy, setProjectionStrategy] = useState('')
@@ -64,14 +68,22 @@ export default function Predictions() {
 
   const fetchTickers = async () => {
     try {
-      const data = await getTickers()
-      setAvailableTickers(data)
+      const data: string[] = await getTickers()
+      if (data?.length) mergeTickers(data)
     } catch (e: any) {
       console.error('Failed to fetch tickers:', e)
-      // Fallback to hardcoded list if API fails
-      setAvailableTickers(['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'AMD'])
     }
   }
+
+  const filterTickers = (val: string, tickers: string[]) => {
+    if (!val) return tickers
+    const upper = val.toUpperCase()
+    const startsWith = tickers.filter(t => t.startsWith(upper))
+    const contains = tickers.filter(t => !t.startsWith(upper) && t.includes(upper))
+    return [...startsWith, ...contains]
+  }
+
+  const shownTickers = filterTickers(tickerSearch, availableTickers)
 
   const mergeTickers = (symbols: string[]) => {
     setAvailableTickers((prev) => {
@@ -90,24 +102,11 @@ export default function Predictions() {
     if (!query) return
     setSearchingTickers(true)
     try {
-      const results = await searchUdfSymbols(query, '', 20)
+      const results = await searchUdfSymbols(query, '', 30)
       const foundTickers = results
         .map((item) => (item.ticker || item.symbol || '').toUpperCase())
         .filter(Boolean)
-      if (foundTickers.length > 0) {
-        mergeTickers(foundTickers)
-        setTickerSuggestions(foundTickers)
-        setShowTickerSuggestions(true)
-        setTicker(foundTickers[0])
-        setSelectedTicker(foundTickers[0])
-      } else {
-        // Keep manual-symbol workflows possible even if provider returns no suggestions.
-        mergeTickers([query])
-        setTickerSuggestions([query])
-        setShowTickerSuggestions(true)
-        setTicker(query)
-        setSelectedTicker(query)
-      }
+      mergeTickers(foundTickers.length > 0 ? foundTickers : [query])
     } catch (e) {
       console.error('Ticker search failed:', e)
     } finally {
@@ -151,6 +150,7 @@ export default function Predictions() {
       setPreds(prev => [...results, ...prev])
       setSelectedTicker(normalizedTicker)
       setTicker(normalizedTicker)
+      setActiveTab('predictions')
     } catch (e: any) {
       alert('Failed to make prediction: ' + (e.message || 'Unknown error'))
     } finally {
@@ -267,69 +267,93 @@ export default function Predictions() {
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative w-full sm:flex-1">
-              <div className="flex gap-2">
-                <Input
-                  value={tickerSearch}
-                  onChange={(e) => {
-                    const val = e.target.value.toUpperCase()
-                    setTickerSearch(val)
-                    // Show local matches immediately
-                    const local = val
-                      ? availableTickers.filter(t => t.includes(val))
-                      : availableTickers
-                    setTickerSuggestions(local)
-                    setShowTickerSuggestions(true)
-                    // Then auto-search UDF after 400ms idle
+              <Input
+                value={tickerSearch}
+                onChange={(e) => {
+                  const val = e.target.value.toUpperCase()
+                  setTickerSearch(val)
+                  setHighlightedIndex(-1)
+                  setShowTickerSuggestions(true)
+                  if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+                  if (val.length >= 1) {
+                    searchDebounceRef.current = setTimeout(() => {
+                      void searchAndAddTicker(val)
+                    }, 400)
+                  }
+                }}
+                onFocus={() => {
+                  setShowTickerSuggestions(true)
+                  setHighlightedIndex(-1)
+                }}
+                onKeyDown={(e) => {
+                  if (!showTickerSuggestions) return
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setHighlightedIndex(i => {
+                      const next = Math.min(i + 1, shownTickers.length - 1)
+                      suggestionsRef.current?.children[next]?.scrollIntoView({ block: 'nearest' })
+                      return next
+                    })
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setHighlightedIndex(i => {
+                      const next = Math.max(i - 1, 0)
+                      suggestionsRef.current?.children[next]?.scrollIntoView({ block: 'nearest' })
+                      return next
+                    })
+                  } else if (e.key === 'Enter') {
+                    e.preventDefault()
                     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
-                    if (val.length >= 1) {
-                      searchDebounceRef.current = setTimeout(() => {
-                        void searchAndAddTicker(val)
-                      }, 400)
+                    if (highlightedIndex >= 0 && shownTickers[highlightedIndex]) {
+                      handleTickerSelect(shownTickers[highlightedIndex])
+                    } else if (tickerSearch.trim()) {
+                      void searchAndAddTicker()
                     }
-                  }}
-                  onFocus={() => {
-                    const local = tickerSearch
-                      ? availableTickers.filter(t => t.includes(tickerSearch))
-                      : availableTickers
-                    setTickerSuggestions(local)
-                    setShowTickerSuggestions(true)
-                  }}
-                  onBlur={() => {
-                    window.setTimeout(() => setShowTickerSuggestions(false), 120)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
-                      if (tickerSearch.trim()) void searchAndAddTicker()
-                    }
-                  }}
-                  placeholder="Ticker (e.g. AAPL)"
-                  className="font-mono"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void searchAndAddTicker()}
-                  disabled={searchingTickers || !tickerSearch.trim()}
-                >
-                  {searchingTickers ? 'Searching...' : 'Search'}
-                </Button>
-              </div>
-              {showTickerSuggestions && tickerSuggestions.length > 0 && (
-                <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-md">
-                  <div className="max-h-56 overflow-y-auto py-1">
-                    {tickerSuggestions.map((symbol) => (
+                  } else if (e.key === 'Escape') {
+                    setShowTickerSuggestions(false)
+                  }
+                }}
+                placeholder="Rechercher un ticker (ex: AAPL, GOOGL…)"
+                className="font-mono"
+              />
+              {showTickerSuggestions && (
+                <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-lg">
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b text-xs text-muted-foreground">
+                    <span>
+                      {shownTickers.length === 0
+                        ? 'Aucun résultat'
+                        : `${shownTickers.length} résultat${shownTickers.length > 1 ? 's' : ''}`}
+                    </span>
+                    {searchingTickers && <span className="text-primary animate-pulse">Recherche…</span>}
+                  </div>
+                  <div ref={suggestionsRef} className="max-h-72 overflow-y-auto py-1">
+                    {shownTickers.map((symbol, idx) => (
                       <button
                         key={symbol}
                         type="button"
-                        className="w-full px-3 py-2 text-left text-sm font-mono hover:bg-accent"
+                        className={`w-full px-3 py-2 text-left text-sm font-mono transition-colors ${
+                          idx === highlightedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'
+                        }`}
+                        onMouseEnter={() => setHighlightedIndex(idx)}
                         onMouseDown={(e) => {
                           e.preventDefault()
                           handleTickerSelect(symbol)
                         }}
                       >
-                        {symbol}
+                        {tickerSearch
+                          ? (() => {
+                              const upper = tickerSearch.toUpperCase()
+                              const start = symbol.indexOf(upper)
+                              if (start === -1) return symbol
+                              return (
+                                <>
+                                  {symbol.slice(0, start)}
+                                  <span className="font-bold text-primary">{symbol.slice(start, start + upper.length)}</span>
+                                  {symbol.slice(start + upper.length)}
+                                </>
+                              )
+                            })()
+                          : symbol}
                       </button>
                     ))}
                   </div>
@@ -401,16 +425,32 @@ export default function Predictions() {
             </Card>
 
             {/* Chart */}
-            <OHLCChart
-              ref={chartRef}
-              symbol={selectedTicker}
-              height="600px"
-              strategyName={projectionStrategy}
-              params={projectionParams}
-              horizon={projectionHorizon}
-              showPredictionProjections={showPredictionProjections}
-              predictionProjections={predictionProjections}
-            />
+            <div className="flex flex-col lg:flex-row gap-4">
+              <div className="flex-1 min-w-0">
+                <OHLCChart 
+                  
+                  ref={chartRef}
+                  symbol={selectedTicker}
+                  height="600px"
+                  strategyName={projectionStrategy}
+                  params={projectionParams}
+                  horizon={projectionHorizon}
+                  showPredictionProjections={showPredictionProjections}
+                  predictionProjections={predictionProjections}
+                  onSymbolChange={(symbol) => {
+                    const normalized = symbol.trim().toUpperCase()
+                    if (normalized && normalized !== selectedTicker) {
+                      setSelectedTicker(normalized)
+                      setTickerSearch(normalized)
+                      setTicker(normalized)
+                    }
+                  }}
+                />
+              </div>
+              <div className="w-full lg:w-80 xl:w-96 flex-shrink-0">
+                <NewsSidebar ticker={selectedTicker} />
+              </div>
+            </div>
           </div>
         </TabsContent>
 

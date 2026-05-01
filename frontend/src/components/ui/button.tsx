@@ -13,10 +13,10 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive text-destructive-foreground hover:bg-tv-red-hover shadow-tv-sm",
         outline:
-          "border border-tv-border-secondary bg-transparent hover:bg-tv-bg-hover hover:border-tv-border-hover",
+          "border border-border bg-transparent hover:bg-tv-bg-hover hover:border-tv-border-hover",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-tv-bg-tertiary",
-        ghost: "hover:bg-tv-bg-hover hover:text-foreground",
+          "bg-secondary text-secondary-foreground hover:bg-muted",
+        ghost: "hover:bg-accent hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline hover:text-tv-blue-hover",
         success: "bg-success text-success-foreground hover:bg-tv-green-hover shadow-tv-sm",
       },

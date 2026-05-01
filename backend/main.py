@@ -41,6 +41,7 @@ from backend.routes.scripts import router as scripts_router
 from backend.routes.udf import router as udf_router
 from backend.routes.strategies import router as strategies_router
 from backend.routes.strategy_analytics import router as strategy_analytics_router
+from backend.routes.news import router as news_router
 from backend.ml.storage import ensure_ml_schema
 
 
@@ -164,6 +165,7 @@ app.include_router(portfolio_router)
 app.include_router(data_router)
 app.include_router(scripts_router)
 app.include_router(udf_router, prefix="/udf")
+app.include_router(news_router)
 
 # Add WebSocket endpoint
 app.add_api_websocket_route("/ws", websocket_endpoint)

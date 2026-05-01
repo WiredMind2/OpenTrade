@@ -58,7 +58,7 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
   onReady(callback: (configuration: DatafeedConfiguration) => void): void {
     instance.get('/udf/config')
       .then(response => {
-        const config: DatafeedConfiguration = {
+        const config: DatafeedConfiguration & Record<string, any> = {
           exchanges: response.data.exchanges || [],
           symbols_types: response.data.symbols_types || [],
           supported_resolutions: response.data.supported_resolutions || [],
@@ -85,7 +85,7 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
           supports_time: true,
           supports_search: true,
           supports_group_request: true
-        })
+        } as DatafeedConfiguration)
       })
   }
 
