@@ -7,7 +7,7 @@ import type {
 import TradingViewUDFDatafeed from "../services/tradingViewUDF";
 import { attachProjectionManager, detachProjectionManager } from "../lib/ChartProjectionManager";
 import { projectStrategy } from "../api/strategies";
-import type { ProjectionPoint } from "../types";
+import type { ProjectionPoint, PredictionProjection } from "../types";
 import type { NewsArticle } from "@/api/news";
 
 /**
@@ -47,6 +47,10 @@ interface OHLCChartProps {
    horizon?: number;
    /** Projection mode */
    mode?: string;
+   /** Show server-generated prediction projection overlays */
+   showPredictionProjections?: boolean;
+   /** Prediction projection polylines (e.g. from batch forecast API) */
+   predictionProjections?: PredictionProjection[];
    /** Callback when symbol changes in TradingView */
    onSymbolChange?: (symbol: string) => void;
    /** News articles to display as markers on chart */
@@ -94,6 +98,8 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      params = {},
      horizon = 30,
      mode = "price",
+     showPredictionProjections = false,
+     predictionProjections = [],
      onSymbolChange,
    }, ref) => {
        const { theme } = useTheme();
@@ -105,6 +111,7 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
          `tradingview_${Math.random().toString(36).substr(2, 9)}`
        );
        const projectionEntitiesRef = useRef<any[]>([]);
+       const predictionEntitiesRef = useRef<any[]>([]);
       const normalizeTimeToSeconds = (value: unknown): number | null => {
         const ts = Number(value)
         if (!Number.isFinite(ts)) return null
@@ -119,8 +126,115 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
          mode,
        });
 
+       const [predictionSettings, setPredictionSettings] = useState({
+         showPredictionProjections,
+         predictionProjections,
+       });
+
+       const renderPredictionProjections = () => {
+         if (!widgetRef.current) return;
+
+        let chart;
+        try {
+          chart = widgetRef.current.chart();
+        } catch (error) {
+          console.warn("[OHLCChart] Chart not ready or already removed");
+          return;
+        }
+        if (!chart) return;
+
+         predictionEntitiesRef.current.forEach(entityId => {
+           try {
+             chart.removeEntity(entityId);
+           } catch (e) {
+             console.warn("[OHLCChart] Failed to remove existing prediction entity:", e);
+           }
+         });
+         predictionEntitiesRef.current = [];
+
+         if (!predictionSettings.showPredictionProjections) return;
+
+         const symbolBase = (symbol || '').split(':').pop()?.toUpperCase() ?? ''
+         const relevantProjections = predictionSettings.predictionProjections.filter(
+           p => (p.ticker?.toUpperCase() ?? '') === symbolBase
+         );
+
+         relevantProjections.forEach(projection => {
+          const drawProjectionLine = (
+            valueKey: 'price' | 'upperBound' | 'lowerBound',
+            style: { linestyle: number; linewidth: number; linecolor: string; transparency: number }
+          ) => {
+            for (let i = 1; i < projection.points.length; i++) {
+              const start = projection.points[i - 1];
+              const end = projection.points[i];
+              const startValue = start[valueKey];
+              const endValue = end[valueKey];
+              if (typeof startValue !== 'number' || typeof endValue !== 'number') continue;
+
+              const segmentId = chart.createMultipointShape([
+                { time: start.time, price: startValue },
+                { time: end.time, price: endValue },
+              ], {
+                shape: 'trend_line',
+                lock: true,
+                disableSelection: true,
+                disableSave: true,
+                overrides: style,
+              });
+
+              if (segmentId) {
+                predictionEntitiesRef.current.push(segmentId);
+              }
+            }
+          };
+
+          drawProjectionLine('price', {
+            linestyle: 0,
+            linewidth: 2,
+            linecolor: projection.color,
+            transparency: 0
+          });
+          drawProjectionLine('upperBound', {
+            linestyle: 2,
+            linewidth: 1,
+            linecolor: projection.color,
+            transparency: 35
+          });
+          drawProjectionLine('lowerBound', {
+            linestyle: 2,
+            linewidth: 1,
+            linecolor: projection.color,
+            transparency: 35
+          });
+
+           if (projection.points.length > 0) {
+             const startPoint = projection.points[0];
+             const startMarkerId = chart.createShape({
+               time: startPoint.time,
+               price: startPoint.price
+             }, {
+               shape: 'arrow_right',
+               lock: true,
+               disableSelection: true,
+               disableSave: true,
+               overrides: {
+                 color: projection.color,
+                 transparency: 0,
+                 size: 1
+               }
+             });
+
+             if (startMarkerId) {
+               predictionEntitiesRef.current.push(startMarkerId);
+             }
+           }
+         });
+       };
+
      useEffect(() => {
       if (!containerRef.current) return;
+
+      let isMounted = true;
 
       const initializeChart = async () => {
         try {
@@ -133,6 +247,8 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
           const TradingView = await import(
             "../../public/charting_library/charting_library.esm.js"
           );
+
+          if (!isMounted) return;
 
           if (widgetRef.current) {
             widgetRef.current.remove();
@@ -160,8 +276,7 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
               "study_templates" as any,
               "left_toolbar" as any,
             ],
-            charts_storage_url: "https://saveload.tradingview.com",
-            charts_storage_api_version: "1.1",
+            custom_css_url: 'tv-theme.css',
             client_id: "tradingview.com",
             user_id: "public_user_id",
             fullscreen: false,
@@ -169,16 +284,16 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             studies_overrides: {},
             theme: isDark ? "dark" : "light",
             timezone: "Etc/UTC",
-            toolbar_bg: isDark ? "#1E222D" : "#F5F5F5",
+            toolbar_bg: isDark ? "#171717" : "#F5F5F5",
             loading_screen: {
-              backgroundColor: isDark ? "#0D1421" : "#FFFFFF",
-              foregroundColor: "#2962FF",
+              backgroundColor: isDark ? "#171717" : "#FFFFFF",
+              foregroundColor: isDark ? "#a3a3a3" : "#555555",
             },
             overrides: {
-              "paneProperties.background": isDark ? "#0D1421" : "#FFFFFF",
+              "paneProperties.background": isDark ? "#171717" : "#FFFFFF",
               "paneProperties.backgroundType": "solid",
-              "paneProperties.vertGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
-              "paneProperties.horzGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
+              "paneProperties.vertGridProperties.color": isDark ? "#2a2a2a" : "#E0E3EB",
+              "paneProperties.horzGridProperties.color": isDark ? "#2a2a2a" : "#E0E3EB",
               "mainSeriesProperties.style": 2,
               "mainSeriesProperties.candleStyle.upColor": bullishColor || "#089981",
               "mainSeriesProperties.candleStyle.downColor": bearishColor || "#F23645",
@@ -202,12 +317,12 @@ widgetRef.current = new TradingView.widget(widgetOptions);
               const chart = widgetRef.current?.chart() as any
               if (chart) {
                 chart.applyOverrides({
-                  'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+                  'paneProperties.background': isDark ? '#171717' : '#FFFFFF',
                   'paneProperties.backgroundType': 'solid',
-                  'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-                  'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-                  'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
-                  'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+                  'paneProperties.vertGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+                  'paneProperties.horzGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+                  'scalesProperties.textColor': isDark ? '#a3a3a3' : '#555555',
+                  'scalesProperties.lineColor': isDark ? '#2a2a2a' : '#E0E3EB',
                 })
               }
             } catch { /* ignore */ }
@@ -352,6 +467,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
             };
 
             attachProjectionManager(widgetRef.current, projectionOptions);
+            renderPredictionProjections();
           });
 
         } catch (error) {
@@ -362,6 +478,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
       initializeChart();
 
       return () => {
+        isMounted = false;
         if (widgetRef.current) {
           detachProjectionManager();
           widgetRef.current.remove();
@@ -390,18 +507,33 @@ widgetRef.current = new TradingView.widget(widgetOptions);
           const chart = widgetRef.current?.chart() as any
           if (!chart) return
           chart.applyOverrides({
-            'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+            'paneProperties.background': isDark ? '#171717' : '#FFFFFF',
             'paneProperties.backgroundType': 'solid',
-            'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-            'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-            'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
-            'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+            'paneProperties.vertGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+            'paneProperties.horzGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+            'scalesProperties.textColor': isDark ? '#a3a3a3' : '#555555',
+            'scalesProperties.lineColor': isDark ? '#2a2a2a' : '#E0E3EB',
           })
         })
       } catch {
         // changeTheme not available on this widget version — full reinit handles it
       }
     }, [isDark])
+
+    useEffect(() => {
+      setPredictionSettings({
+        showPredictionProjections,
+        predictionProjections,
+      });
+    }, [showPredictionProjections, predictionProjections]);
+
+    useEffect(() => {
+      if (!widgetRef.current) return;
+      const timeout = setTimeout(() => {
+        renderPredictionProjections();
+      }, 300);
+      return () => clearTimeout(timeout);
+    }, [predictionSettings, symbol]);
 
     // Expose public API via ref
     useImperativeHandle(ref, () => ({
@@ -414,7 +546,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
         });
       },
       clearProjections: () => {
-        // Clear interactive projections
         if (projectionEntitiesRef.current.length > 0 && widgetRef.current) {
           const chart = widgetRef.current.chart();
           if (chart) {
@@ -426,6 +557,19 @@ widgetRef.current = new TradingView.widget(widgetOptions);
               }
             });
             projectionEntitiesRef.current = [];
+          }
+        }
+        if (predictionEntitiesRef.current.length > 0 && widgetRef.current) {
+          const chart = widgetRef.current.chart();
+          if (chart) {
+            predictionEntitiesRef.current.forEach(entityId => {
+              try {
+                chart.removeEntity(entityId);
+              } catch (e) {
+                console.warn("[OHLCChart] Failed to remove prediction entity:", e);
+              }
+            });
+            predictionEntitiesRef.current = [];
           }
         }
       },

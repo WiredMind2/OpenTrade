@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   listSavedModels,
   signalsSavedModelsBatch,
@@ -155,7 +155,7 @@ export default function Predictions() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <BarChart3 className="h-5 w-5 text-primary" />
-              Saved models for <span className="font-mono">{sym || '—'}</span>
+              Saved models for <span className="font-mono">{sym || 'ΓÇö'}</span>
             </CardTitle>
             <CardDescription>
               Exclude models from the candidate pool or pin favourites. &quot;Top N&quot; picks which ranked models receive
@@ -207,7 +207,7 @@ export default function Predictions() {
             {modelsLoading && (
               <p className="text-xs text-muted-foreground flex items-center gap-2">
                 <Activity className="h-3 w-3 animate-spin" />
-                Loading saved models…
+                Loading saved modelsΓÇª
               </p>
             )}
             {!modelsLoading && sym && savedModels.length === 0 && (
@@ -262,7 +262,7 @@ export default function Predictions() {
             {signalLoading && (
               <p className="text-xs text-muted-foreground flex items-center gap-2">
                 <Activity className="h-3 w-3 animate-spin" />
-                Computing signals…
+                Computing signalsΓÇª
               </p>
             )}
             {signalError && <p className="text-sm text-destructive">{signalError}</p>}
@@ -272,7 +272,7 @@ export default function Predictions() {
                 <div className="flex flex-wrap items-baseline gap-2">
                   <p className="text-sm font-medium">Today&apos;s stance (anchor bar)</p>
                   <span className="text-xs text-muted-foreground">
-                    As of {topSignals[0]?.as_of} · last close {(topSignals[0]?.last_price ?? 0).toFixed(4)}
+                    As of {topSignals[0]?.as_of} ┬╖ last close {(topSignals[0]?.last_price ?? 0).toFixed(4)}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">

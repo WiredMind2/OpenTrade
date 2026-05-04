@@ -4,7 +4,7 @@ import { Badge } from '../components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Separator } from '../components/ui/separator'
 import { Skeleton } from '../components/ui/skeleton'
-import { ShieldAlert, PieChart, Brain, FlaskConical, TrendingUp, AlertCircle } from 'lucide-react'
+import { ShieldAlert, PieChart, Brain, FlaskConical, TrendingUp, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { getBacktests } from '../services/api'
 import type { BacktestResult } from '../types'
 
@@ -110,11 +110,12 @@ interface FocusArea {
 function deriveFocusAreas(profile: UserProfile): FocusArea[] {
   const areas: FocusArea[] = []
 
-  if (profile.avgDrawdown < -0.15) {
+  // Threshold aligned with the displayed rule: "if drawdown exceeds 10%, reduce positions"
+  if (profile.avgDrawdown < -0.10) {
     areas.push({
       categoryId: 'risk',
-      reason: `Your average max drawdown is ${fmtPct(profile.avgDrawdown)} — well above the recommended threshold of −15%.`,
-      severity: 'high',
+      reason: `Your average max drawdown is ${fmtPct(profile.avgDrawdown)} — above the recommended threshold of −10%.`,
+      severity: profile.avgDrawdown < -0.20 ? 'high' : 'medium',
     })
   }
 
@@ -142,11 +143,13 @@ function deriveFocusAreas(profile: UserProfile): FocusArea[] {
     })
   }
 
-  if (profile.avgDrawdown < -0.20 || (profile.avgWinRate < 0.4 && profile.avgReturn < 0.05)) {
+  // Discipline is flagged only when drawdown is severe AND returns are negative — a clear sign
+  // of systematic issues rather than a low-frequency or conservative strategy.
+  if (profile.avgDrawdown < -0.20 && profile.avgReturn < 0) {
     areas.push({
       categoryId: 'discipline',
-      reason: 'Consistently underperforming backtests often indicate execution or behavioural issues.',
-      severity: 'medium',
+      reason: `Severe drawdown (${fmtPct(profile.avgDrawdown)}) combined with negative returns suggests a systematic execution problem.`,
+      severity: 'high',
     })
   }
 
@@ -341,7 +344,7 @@ export default function Recommendations() {
       ) : null}
 
       {/* Personalised focus areas */}
-      {!loading && focusAreas.length > 0 && (
+      {!loading && profile && focusAreas.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-semibold text-foreground">Recommended focus areas</h2>
           <div className="grid gap-4 md:grid-cols-2">
@@ -349,6 +352,19 @@ export default function Recommendations() {
               const cat = categories.find((c) => c.id === area.categoryId)!
               return <FocusCard key={area.categoryId} area={area} category={cat} />
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Healthy profile feedback */}
+      {!loading && profile && focusAreas.length === 0 && (
+        <div className="flex items-start gap-3 rounded-lg border border-success/40 bg-success/5 p-4">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+          <div>
+            <p className="text-sm font-semibold text-foreground">Your profile looks healthy</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              No critical areas detected across your {profile.count} backtest{profile.count > 1 ? 's' : ''}. Keep following the guidelines below to maintain consistency.
+            </p>
           </div>
         </div>
       )}
