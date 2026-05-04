@@ -8,7 +8,8 @@ import {
   Activity,
   Settings,
   LineChart,
-  BookOpen
+  BookOpen,
+  Newspaper
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
@@ -19,6 +20,7 @@ interface SidebarProps {
 }
 
 const navigation = [
+  { name: 'Market Brief', href: '/brief', icon: Newspaper },
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
   { name: 'Performance', href: '/strategy-performance', icon: LineChart },
