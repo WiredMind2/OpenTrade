@@ -208,7 +208,7 @@ export default function BacktestEquityCompareChart({
   const data = attachDecisionMarkers(rawData, m?.decision_markers)
   const yDomain = combinedYDomain(data)
   const strategyStroke = isPositive ? 'hsl(142, 76%, 36%)' : 'hsl(0, 84.2%, 60.2%)'
-  const tickerStroke = 'hsl(217, 91%, 60%)'
+  const tickerStroke = 'hsl(var(--primary))'
   const hasOverlay = data.some((p) => typeof p.tickerValue === 'number' && Number.isFinite(p.tickerValue))
   const hasBuyMarkers = data.some((p) => typeof p.buyMarker === 'number' && Number.isFinite(p.buyMarker))
   const hasSellMarkers = data.some((p) => typeof p.sellMarker === 'number' && Number.isFinite(p.sellMarker))

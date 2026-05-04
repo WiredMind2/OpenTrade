@@ -281,8 +281,7 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
               "study_templates" as any,
               "left_toolbar" as any,
             ],
-            charts_storage_url: "https://saveload.tradingview.com",
-            charts_storage_api_version: "1.1",
+            custom_css_url: 'tv-theme.css',
             client_id: "tradingview.com",
             user_id: "public_user_id",
             fullscreen: false,
@@ -290,16 +289,16 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             studies_overrides: {},
             theme: isDark ? "dark" : "light",
             timezone: "Etc/UTC",
-            toolbar_bg: isDark ? "#1E222D" : "#F5F5F5",
+            toolbar_bg: isDark ? "#171717" : "#F5F5F5",
             loading_screen: {
-              backgroundColor: isDark ? "#0D1421" : "#FFFFFF",
-              foregroundColor: "#2962FF",
+              backgroundColor: isDark ? "#171717" : "#FFFFFF",
+              foregroundColor: isDark ? "#a3a3a3" : "#555555",
             },
             overrides: {
-              "paneProperties.background": isDark ? "#0D1421" : "#FFFFFF",
+              "paneProperties.background": isDark ? "#171717" : "#FFFFFF",
               "paneProperties.backgroundType": "solid",
-              "paneProperties.vertGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
-              "paneProperties.horzGridProperties.color": isDark ? "#2A2E39" : "#E0E3EB",
+              "paneProperties.vertGridProperties.color": isDark ? "#2a2a2a" : "#E0E3EB",
+              "paneProperties.horzGridProperties.color": isDark ? "#2a2a2a" : "#E0E3EB",
               "mainSeriesProperties.style": 2,
               "mainSeriesProperties.candleStyle.upColor": bullishColor || "#089981",
               "mainSeriesProperties.candleStyle.downColor": bearishColor || "#F23645",
@@ -323,12 +322,12 @@ widgetRef.current = new TradingView.widget(widgetOptions);
               const chart = widgetRef.current?.chart() as any
               if (chart) {
                 chart.applyOverrides({
-                  'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+                  'paneProperties.background': isDark ? '#171717' : '#FFFFFF',
                   'paneProperties.backgroundType': 'solid',
-                  'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-                  'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-                  'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
-                  'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+                  'paneProperties.vertGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+                  'paneProperties.horzGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+                  'scalesProperties.textColor': isDark ? '#a3a3a3' : '#555555',
+                  'scalesProperties.lineColor': isDark ? '#2a2a2a' : '#E0E3EB',
                 })
               }
             } catch { /* ignore */ }
@@ -514,12 +513,12 @@ widgetRef.current = new TradingView.widget(widgetOptions);
           const chart = widgetRef.current?.chart() as any
           if (!chart) return
           chart.applyOverrides({
-            'paneProperties.background': isDark ? '#0D1421' : '#FFFFFF',
+            'paneProperties.background': isDark ? '#171717' : '#FFFFFF',
             'paneProperties.backgroundType': 'solid',
-            'paneProperties.vertGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-            'paneProperties.horzGridProperties.color': isDark ? '#2A2E39' : '#E0E3EB',
-            'scalesProperties.textColor': isDark ? '#787B86' : '#555555',
-            'scalesProperties.lineColor': isDark ? '#2A2E39' : '#E0E3EB',
+            'paneProperties.vertGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+            'paneProperties.horzGridProperties.color': isDark ? '#2a2a2a' : '#E0E3EB',
+            'scalesProperties.textColor': isDark ? '#a3a3a3' : '#555555',
+            'scalesProperties.lineColor': isDark ? '#2a2a2a' : '#E0E3EB',
           })
         })
       } catch {
