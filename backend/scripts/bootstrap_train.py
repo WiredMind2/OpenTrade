@@ -87,11 +87,6 @@ def _per_ticker_features(group: pd.DataFrame) -> pd.DataFrame:
     # Seasonality
     g["day_of_week"] = pd.to_datetime(g["date"]).dt.dayofweek.astype(float)
 
-    # Sentiment placeholders
-    g["avg_sentiment"]        = 0.0
-    g["sentiment_volatility"] = 0.0
-    g["article_count"]        = 0.0
-
     for h, days in (("1d", 1), ("3d", 3), ("7d", 7)):
         g[f"label_{h}"] = close.shift(-days) / close - 1.0
 

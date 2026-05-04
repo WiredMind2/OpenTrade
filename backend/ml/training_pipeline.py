@@ -60,7 +60,7 @@ def train_horizon_model(
         {
             "lgbm": model,
             "feature_names": list(DEFAULT_FEATURE_NAMES),
-            "feature_schema_version": "ml_features_v2",
+            "feature_schema_version": "ml_features_v3",
             "horizon": horizon,
             "trained_at": datetime.utcnow().isoformat(),
         },
@@ -72,7 +72,7 @@ def train_horizon_model(
                 "model_name": version,
                 "model_version": version,
                 "horizon": horizon,
-                "feature_schema_version": "ml_features_v2",
+                "feature_schema_version": "ml_features_v3",
                 "metrics": {"rmse": rmse, "mae": mae},
                 "trained_at": datetime.utcnow().isoformat(),
             },

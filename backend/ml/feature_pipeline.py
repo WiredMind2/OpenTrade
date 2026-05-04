@@ -13,10 +13,6 @@ import sqlite3
 
 
 DEFAULT_FEATURE_NAMES: List[str] = [
-    # Sentiment (currently zeros, kept for future ingestion)
-    "avg_sentiment",
-    "sentiment_volatility",
-    "article_count",
     # Returns
     "return_1d",
     "avg_return_5d",
@@ -132,42 +128,16 @@ def _atr_pct(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: in
 class FeaturePipeline:
     """Builds deterministic numeric feature vectors for a ticker."""
 
-    schema_version = "ml_features_v2"
+    schema_version = "ml_features_v3"
 
     def __init__(self, feature_names: Sequence[str] | None = None):
         self.feature_names = list(feature_names or DEFAULT_FEATURE_NAMES)
 
     def build_vector(self, conn: sqlite3.Connection, payload: FeatureInput) -> np.ndarray:
-        articles = self._load_articles(conn, payload.ticker, payload.as_of)
         price_data = self._load_prices(conn, payload.ticker, payload.as_of)
-        feature_map = self._compute_feature_map(articles, price_data, payload.as_of)
+        feature_map = self._compute_feature_map(price_data, payload.as_of)
         self._validate_features(feature_map)
         return np.array([feature_map[name] for name in self.feature_names], dtype=float).reshape(1, -1)
-
-    def _load_articles(
-        self,
-        conn: sqlite3.Connection,
-        ticker: str,
-        as_of: datetime,
-    ) -> List[Tuple[str, str, str, float]]:
-        cur = conn.cursor()
-        since = (as_of - timedelta(days=7)).date().isoformat()
-        columns = {row[1] for row in cur.execute("PRAGMA table_info(articles)").fetchall()}
-        timestamp_col = "canonical_timestamp" if "canonical_timestamp" in columns else "published_at"
-        try:
-            cur.execute(
-                """
-                SELECT a.title, a.content, a.{ts}, a.sentiment_score
-                FROM articles a
-                JOIN article_ticker at ON at.article_id = a.id
-                WHERE at.ticker = ? AND a.{ts} >= ?
-                ORDER BY a.{ts} DESC LIMIT 50
-                """.format(ts=timestamp_col),
-                (ticker.upper(), since),
-            )
-            return cur.fetchall()
-        except sqlite3.OperationalError:
-            return []
 
     def _load_prices(
         self,
@@ -209,18 +179,9 @@ class FeaturePipeline:
 
     def _compute_feature_map(
         self,
-        articles: List[Tuple[str, str, str, float]],
         price_data: List[Tuple[float, float, float, float, float]],
         as_of: datetime,
     ) -> dict:
-        # ── Sentiment ──────────────────────────────────────────────────────
-        sentiments = np.array(
-            [float(r[3]) for r in articles if r[3] is not None], dtype=float
-        )
-        avg_sentiment = float(sentiments.mean()) if sentiments.size else 0.0
-        sentiment_volatility = float(sentiments.std()) if sentiments.size > 1 else 0.0
-        article_count = float(len(articles))
-
         # ── Price arrays (oldest → newest) ─────────────────────────────────
         rows = list(reversed(price_data))
         opens   = np.array([float(r[0]) for r in rows if r[0] is not None], dtype=float)
@@ -267,9 +228,6 @@ class FeaturePipeline:
         day_of_week = float(as_of.weekday())  # 0=Mon … 4=Fri
 
         return {
-            "avg_sentiment":        avg_sentiment,
-            "sentiment_volatility": sentiment_volatility,
-            "article_count":        article_count,
             "return_1d":            return_1d,
             "avg_return_5d":        avg_return_5d,
             "avg_return_20d":       avg_return_20d,
