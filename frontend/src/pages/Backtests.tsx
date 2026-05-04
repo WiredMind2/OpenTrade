@@ -30,6 +30,7 @@ import TickerSearch from '../components/TickerSearch'
 import BacktestEquityCompareChart from '../components/BacktestEquityCompareChart'
 import { buildBacktestEquitySeries } from '../utils/backtestChart'
 import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
+import { runMonteCarloSimulation, MonteCarloResult } from '../api/strategies'
 
 type BacktestListItem = BacktestResult & {
   id?: string | number
@@ -75,6 +76,11 @@ export default function Backtests() {
   const [trainError, setTrainError] = useState<string | null>(null)
   const [preflight, setPreflight] = useState<StrategyPreflightResponse | null>(null)
   const [serverWaitPhase, setServerWaitPhase] = useState<ServerWaitPhase>('idle')
+  const [monteCarloRunning, setMonteCarloRunning] = useState(false)
+  const [monteCarloResult, setMonteCarloResult] = useState<MonteCarloResult | null>(null)
+  const [monteCarloError, setMonteCarloError] = useState<string | null>(null)
+  const [numSimulations, setNumSimulations] = useState(1000)
+  const [timeHorizonDays, setTimeHorizonDays] = useState(252)
 
   const fetchBacktests = async () => {
     setLoading(true)
@@ -197,6 +203,43 @@ export default function Backtests() {
       setTraining(false)
       setServerWaitPhase('idle')
       fetchBacktests()
+    }
+  }
+
+  const runMonteCarlo = async () => {
+    if (!hasValidStrategySelection) {
+      alert('Please select a strategy first')
+      return
+    }
+    if (!ticker.trim()) {
+      alert('Please provide a ticker for Monte Carlo simulation')
+      return
+    }
+    if (!trainedParams) {
+      alert('Please train strategy parameters before running Monte Carlo simulation')
+      return
+    }
+
+    setMonteCarloRunning(true)
+    setMonteCarloError(null)
+    setMonteCarloResult(null)
+
+    try {
+      const result = await runMonteCarloSimulation({
+        strategy_name: strategy,
+        ticker: ticker,
+        start_date: startDate,
+        end_date: endDate,
+        initial_capital: 100000,
+        strategy_params: trainedParams,
+        num_simulations: numSimulations,
+        time_horizon_days: timeHorizonDays,
+      })
+      setMonteCarloResult(result)
+    } catch (e: any) {
+      setMonteCarloError(e.message || 'Failed to run Monte Carlo simulation')
+    } finally {
+      setMonteCarloRunning(false)
     }
   }
 
@@ -404,6 +447,139 @@ export default function Backtests() {
                   Metrics: Sharpe {trainResult.best_metrics.sharpe_ratio.toFixed(3)} | Return {(trainResult.best_metrics.total_return * 100).toFixed(2)}% | Max DD {(trainResult.best_metrics.max_drawdown * 100).toFixed(2)}% | Trades {trainResult.best_metrics.total_trades}
                 </p>
                 <p>Evaluations: {trainResult.evaluations_run}</p>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Monte Carlo Risk Assessment */}
+      <Card className="border-muted shadow-md">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Activity className="h-5 w-5 text-primary" />
+            Monte Carlo Risk Assessment
+          </CardTitle>
+          <CardDescription>
+            Run Monte Carlo simulations to assess risk and potential outcomes for the trained strategy parameters.
+            This requires strategy training to be completed first.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Number of Simulations</label>
+                <Input
+                  type="number"
+                  min={100}
+                  max={5000}
+                  value={numSimulations}
+                  onChange={(e) => setNumSimulations(Math.max(100, Math.min(5000, Number(e.target.value || 1000))))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Higher values provide more accurate results but take longer.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Time Horizon (Days)</label>
+                <Input
+                  type="number"
+                  min={30}
+                  max={1000}
+                  value={timeHorizonDays}
+                  onChange={(e) => setTimeHorizonDays(Math.max(30, Math.min(1000, Number(e.target.value || 252))))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Trading days to simulate (252 ≈ 1 year).
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <Button
+                onClick={runMonteCarlo}
+                disabled={monteCarloRunning || !hasValidStrategySelection || !trainedParams}
+                variant="outline"
+                className="w-full md:w-auto"
+                size="lg"
+              >
+                {monteCarloRunning ? (
+                  <>
+                    <Activity className="mr-2 h-4 w-4 animate-spin" />
+                    Running Simulations...
+                  </>
+                ) : (
+                  <>
+                    <Activity className="mr-2 h-4 w-4" />
+                    Run Monte Carlo Analysis
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {monteCarloError && <p className="text-sm text-destructive">{monteCarloError}</p>}
+
+            {monteCarloResult && (
+              <div className="rounded-lg border bg-muted/40 p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">Monte Carlo Results</h4>
+                  <Badge variant="secondary">{monteCarloResult.num_simulations} simulations</Badge>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium">Return Statistics</h5>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <p className="text-muted-foreground">Mean Return</p>
+                        <p className="font-semibold">{(monteCarloResult.aggregated_results.mean_total_return * 100).toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Volatility</p>
+                        <p className="font-semibold">{(monteCarloResult.aggregated_results.std_total_return * 100).toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">95% CI Lower</p>
+                        <p className="font-semibold">{(monteCarloResult.aggregated_results.confidence_lower_return * 100).toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">95% CI Upper</p>
+                        <p className="font-semibold">{(monteCarloResult.aggregated_results.confidence_upper_return * 100).toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Best Case</p>
+                        <p className="font-semibold text-success">{(monteCarloResult.aggregated_results.best_case_return * 100).toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Worst Case</p>
+                        <p className="font-semibold text-destructive">{(monteCarloResult.aggregated_results.worst_case_return * 100).toFixed(2)}%</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium">Risk Metrics</h5>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <p className="text-muted-foreground">VaR (95%)</p>
+                        <p className="font-semibold">{(monteCarloResult.risk_metrics.value_at_risk_95 * 100).toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Expected Shortfall</p>
+                        <p className="font-semibold">{(monteCarloResult.risk_metrics.expected_shortfall_95 * 100).toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Prob. Positive</p>
+                        <p className="font-semibold">{(monteCarloResult.aggregated_results.probability_positive_return * 100).toFixed(1)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Strategy</p>
+                        <p className="font-semibold">{monteCarloResult.strategy_name}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>

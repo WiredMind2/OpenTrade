@@ -181,3 +181,77 @@ export async function generateStrategySignals(
   })
   return response.data
 }
+
+export interface MonteCarloRequest {
+  strategy_name: string
+  ticker: string
+  start_date: string
+  end_date: string
+  initial_capital?: number
+  strategy_params?: Record<string, any>
+  num_simulations?: number
+  time_horizon_days?: number
+}
+
+export interface MonteCarloResult {
+  simulation_id: string
+  strategy_name: string
+  ticker: string
+  num_simulations: number
+  time_horizon_days: number
+  aggregated_results: {
+    mean_final_value: number
+    std_final_value: number
+    mean_total_return: number
+    std_total_return: number
+    confidence_lower_return: number
+    confidence_upper_return: number
+    worst_case_return: number
+    best_case_return: number
+    probability_positive_return: number
+  }
+  risk_metrics: {
+    value_at_risk_95: number
+    expected_shortfall_95: number
+    volatility: number
+    probability_positive_return: number
+  }
+  created_at: string
+}
+
+export async function runMonteCarloSimulation(request: MonteCarloRequest): Promise<MonteCarloResult> {
+  // Mock implementation for testing - replace with actual API call when backend is running
+  console.log('Monte Carlo request:', request)
+
+  // Simulate API delay
+  await new Promise(resolve => setTimeout(resolve, 2000))
+
+  // Generate mock Monte Carlo results
+  const mockResults = {
+    simulation_id: `mc_mock_${Date.now()}`,
+    strategy_name: request.strategy_name,
+    ticker: request.ticker,
+    num_simulations: request.num_simulations || 1000,
+    time_horizon_days: request.time_horizon_days || 252,
+    aggregated_results: {
+      mean_final_value: (request.initial_capital || 100000) * 1.08,
+      std_final_value: (request.initial_capital || 100000) * 0.15,
+      mean_total_return: 0.08,
+      std_total_return: 0.15,
+      confidence_lower_return: -0.05,
+      confidence_upper_return: 0.21,
+      worst_case_return: -0.12,
+      best_case_return: 0.35,
+      probability_positive_return: 0.68
+    },
+    risk_metrics: {
+      value_at_risk_95: -0.08,
+      expected_shortfall_95: -0.12,
+      volatility: 0.15,
+      probability_positive_return: 0.68
+    },
+    created_at: new Date().toISOString()
+  }
+
+  return mockResults
+}
