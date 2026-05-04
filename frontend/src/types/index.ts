@@ -335,36 +335,6 @@ export interface StrategyAnalyticsFilters {
   max_date?: string | null;
 }
 
-export interface StrategyMetricPoint {
-  strategy: string;
-  run_count: number;
-  total_return: number;
-  cagr: number;
-  sharpe: number;
-  sortino: number;
-  calmar: number;
-  information_ratio: number;
-  alpha: number;
-  beta: number;
-  volatility: number;
-  max_drawdown: number;
-  win_rate: number;
-  profit_factor: number;
-  avg_win: number;
-  avg_loss: number;
-  expectancy: number;
-  total_trades: number;
-}
-
-export interface StrategyComparisonSummary {
-  benchmark_ticker: string;
-  granularity: 'daily' | 'weekly' | 'monthly';
-  rolling_window: number;
-  start_date?: string | null;
-  end_date?: string | null;
-  metrics: StrategyMetricPoint[];
-}
-
 export interface StrategyTimeseriesPoint {
   date: string;
   normalized_equity: number;
@@ -373,15 +343,6 @@ export interface StrategyTimeseriesPoint {
   rolling_sortino?: number | null;
   rolling_volatility?: number | null;
   period_return?: number | null;
-}
-
-export interface StrategyTimeseriesResponse {
-  strategy: string;
-  benchmark_ticker: string;
-  granularity: 'daily' | 'weekly' | 'monthly';
-  points: StrategyTimeseriesPoint[];
-  benchmark_points: StrategyTimeseriesPoint[];
-  monthly_returns: Record<string, Record<string, number>>;
 }
 
 export interface DistributionBucket {

@@ -234,6 +234,8 @@ async def list_backtests(
                 "total_trades": total_trades,
                 "status": metrics.get("status", "completed"),
                 "error": metrics.get("error"),
+                "metrics": metrics,
+                "equity_curve": equity_curve,
                 "execution_engine": execution_summary.get("engine"),
                 "signals_emitted": execution_summary.get("signals_emitted", 0),
                 "order_intents": execution_summary.get("order_intents", 0),

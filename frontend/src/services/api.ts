@@ -3,9 +3,7 @@ import type {
   StrategyAnalyticsFilters,
   StrategyVariantSummary,
   StrategyVariantTimeseriesResponse,
-  StrategyComparisonSummary,
   StrategyDistributionResponse,
-  StrategyTimeseriesResponse,
 } from '../types'
 
 // Jest (CommonJS) cannot parse `import.meta`. Keep baseURL flexible without relying on it.
@@ -234,46 +232,8 @@ export const getMAPredictionStatus = async (executionId: string) => {
 }
 
 // Strategy analytics API functions
-export interface StrategyAnalyticsQuery {
-  strategies?: string[]
-  benchmark_ticker?: string
-  preset?: string
-  granularity?: 'daily' | 'weekly' | 'monthly'
-  rolling_window?: number
-}
-
 export const getStrategyAnalyticsFilters = async (): Promise<StrategyAnalyticsFilters> => {
   const response = await instance.get('/api/strategy-analytics/filters')
-  return response.data
-}
-
-export const getStrategyAnalyticsSummary = async (
-  query: StrategyAnalyticsQuery
-): Promise<StrategyComparisonSummary> => {
-  const response = await instance.get('/api/strategy-analytics/summary', {
-    params: {
-      ...query,
-      strategies: query.strategies ?? [],
-    },
-    paramsSerializer: {
-      indexes: null,
-    },
-  })
-  return response.data
-}
-
-export const getStrategyTimeseries = async (
-  strategy: string,
-  query: Omit<StrategyAnalyticsQuery, 'strategies'>
-): Promise<StrategyTimeseriesResponse> => {
-  const response = await instance.get(`/api/strategy-analytics/timeseries/${strategy}`, { params: query })
-  return response.data
-}
-
-export const getStrategyDistributions = async (
-  strategy: string
-): Promise<StrategyDistributionResponse> => {
-  const response = await instance.get(`/api/strategy-analytics/distributions/${strategy}`)
   return response.data
 }
 

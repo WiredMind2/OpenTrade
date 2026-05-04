@@ -215,48 +215,21 @@ def test_strategy_analytics_filters(tmp_path):
     assert "MAX" in body["available_presets"]
 
 
-def test_strategy_analytics_summary_and_timeseries(tmp_path):
+def test_strategy_variant_distribution(tmp_path):
     db_path = tmp_path / "analytics.db"
     conn = sqlite3.connect(db_path)
     _seed_analytics_db(conn)
     conn.close()
 
+    ph = compute_params_hash({"short_window": 5, "long_window": 30, "max_position_pct": 0.1})
     client = TestClient(app)
     with patch("backend.main.app_state", {"database_path": str(db_path)}):
         res = client.get(
-            "/api/strategy-analytics/summary",
-            params={"strategies": ["moving_average"], "benchmark_ticker": "SPY", "preset": "MAX", "granularity": "daily"},
+            "/api/strategy-analytics/variants/distributions/moving_average",
+            params={"params_hash": ph},
         )
-        assert res.status_code == 200
-        body = res.json()
-        assert body["benchmark_ticker"] == "SPY"
-        assert len(body["metrics"]) == 1
-        assert body["metrics"][0]["strategy"] == "moving_average"
-        assert body["metrics"][0]["total_trades"] == 2
-
-        ts = client.get(
-            "/api/strategy-analytics/timeseries/moving_average",
-            params={"benchmark_ticker": "SPY", "preset": "MAX", "granularity": "daily", "rolling_window": 5},
-        )
-        assert ts.status_code == 200
-        ts_body = ts.json()
-        assert ts_body["strategy"] == "moving_average"
-        assert len(ts_body["points"]) >= 2
-        assert len(ts_body["benchmark_points"]) >= 2
-
-
-def test_strategy_analytics_distributions(tmp_path):
-    db_path = tmp_path / "analytics.db"
-    conn = sqlite3.connect(db_path)
-    _seed_analytics_db(conn)
-    conn.close()
-
-    client = TestClient(app)
-    with patch("backend.main.app_state", {"database_path": str(db_path)}):
-        res = client.get("/api/strategy-analytics/distributions/moving_average")
     assert res.status_code == 200
     body = res.json()
-    assert body["strategy"] == "moving_average"
+    assert body["strategy"].startswith("moving_average:")
     assert isinstance(body["returns_histogram"], list)
-    assert isinstance(body["trade_pnl_histogram"], list)
-    assert isinstance(body["holding_period_histogram"], list)
+    assert len(body["returns_histogram"]) >= 1

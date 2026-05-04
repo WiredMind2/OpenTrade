@@ -302,15 +302,6 @@ class ModelPredictResponse(BaseModel):
     meta: Dict[str, Any]
 
 
-class StrategyAnalyticsQuery(BaseModel):
-    """Filter options for strategy analytics queries."""
-    strategies: List[str] = Field(default_factory=list)
-    benchmark_ticker: str = Field(default="SPY")
-    preset: str = Field(default="MAX")
-    granularity: str = Field(default="daily")
-    rolling_window: int = Field(default=30)
-
-
 class StrategyForecastRequest(BaseModel):
     symbol: str
     as_of: Optional[datetime] = None
@@ -346,38 +337,6 @@ class StrategyFilterMetadataResponse(BaseModel):
     max_date: Optional[str] = None
 
 
-class StrategyMetricPoint(BaseModel):
-    """Summary metrics for a single strategy."""
-    strategy: str
-    run_count: int
-    total_return: float
-    cagr: float
-    sharpe: float
-    sortino: float
-    calmar: float
-    information_ratio: float
-    alpha: float
-    beta: float
-    volatility: float
-    max_drawdown: float
-    win_rate: float
-    profit_factor: float
-    avg_win: float
-    avg_loss: float
-    expectancy: float
-    total_trades: int
-
-
-class StrategyComparisonSummaryResponse(BaseModel):
-    """Response payload for strategy-level KPI comparison."""
-    benchmark_ticker: str
-    granularity: str
-    rolling_window: int
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    metrics: List[StrategyMetricPoint]
-
-
 class StrategyTimeseriesPoint(BaseModel):
     """Timeseries point for per-strategy chart rendering."""
     date: str
@@ -387,16 +346,6 @@ class StrategyTimeseriesPoint(BaseModel):
     rolling_sortino: Optional[float] = None
     rolling_volatility: Optional[float] = None
     period_return: Optional[float] = None
-
-
-class StrategyTimeseriesResponse(BaseModel):
-    """Strategy and benchmark chart-ready timeseries."""
-    strategy: str
-    benchmark_ticker: str
-    granularity: str
-    points: List[StrategyTimeseriesPoint]
-    benchmark_points: List[StrategyTimeseriesPoint]
-    monthly_returns: Dict[str, Dict[str, float]]
 
 
 class DistributionBucket(BaseModel):

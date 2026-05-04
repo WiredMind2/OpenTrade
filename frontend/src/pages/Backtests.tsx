@@ -40,6 +40,47 @@ type BacktestListItem = BacktestResult & {
   order_fills?: number
 }
 
+function toChartNumber(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
+  return null
+}
+
+/** Prefer chart_data; fall back to equity_curve so completed runs still plot after WS/JSON quirks. */
+function buildBacktestEquityChartData(b: BacktestListItem): Array<{ day: number; value: number }> {
+  const fromChart = Array.isArray(b.chart_data) ? b.chart_data : []
+  const fromChartPoints = fromChart
+    .map((p: Record<string, unknown>, idx: number) => {
+      const value = toChartNumber(p?.value)
+      if (value == null) return null
+      const dayRaw = p?.day
+      const day = typeof dayRaw === 'number' && Number.isFinite(dayRaw) ? dayRaw : idx
+      return { day, value }
+    })
+    .filter((p): p is { day: number; value: number } => p != null)
+
+  if (fromChartPoints.length > 0) return fromChartPoints
+
+  const eq = Array.isArray(b.equity_curve) ? b.equity_curve : []
+  return eq
+    .map((p: Record<string, unknown>, idx: number) => {
+      const value = toChartNumber(p?.value)
+      if (value == null) return null
+      return { day: idx, value }
+    })
+    .filter((p): p is { day: number; value: number } => p != null)
+}
+
+function equityChartYDomain(chartData: Array<{ value: number }>): [number, number] | undefined {
+  if (chartData.length === 0) return undefined
+  const values = chartData.map(d => d.value)
+  const minV = Math.min(...values)
+  const maxV = Math.max(...values)
+  const span = maxV - minV
+  const pad = span > 0 ? span * 0.05 : Math.max(Math.abs(minV) * 0.01, 1)
+  return [minV - pad, maxV + pad]
+}
+
 export default function Backtests() {
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
@@ -82,13 +123,7 @@ export default function Backtests() {
   useEffect(() => {
     const handleBacktestStatus = (message: any) => {
       const backtestResult = message.data as BacktestListItem
-      const equityCurve = Array.isArray(backtestResult.equity_curve) ? backtestResult.equity_curve : []
-      const chartData = equityCurve
-        .map((point: any, idx: number) => ({
-          day: idx,
-          value: point?.value,
-        }))
-        .filter((point) => typeof point.value === 'number')
+      const chartData = buildBacktestEquityChartData(backtestResult)
       const normalizedResult: BacktestListItem = {
         ...backtestResult,
         chart_data: chartData,
@@ -98,11 +133,16 @@ export default function Backtests() {
 
       // Update the backtests list with the new status
       setBacktests(prev => {
-        // Find existing backtest by strategy_name and timestamp, or add new one
-        const existingIndex = prev.findIndex(b =>
-          b.strategy_name === normalizedResult.strategy_name &&
-          b.timestamp === normalizedResult.timestamp
-        )
+        const backtestId = normalizedResult.metrics?.backtest_id
+        const existingIndex = prev.findIndex(b => {
+          const existingId = b.metrics?.backtest_id ?? b.id
+          return (
+            backtestId != null &&
+            backtestId !== '' &&
+            existingId != null &&
+            String(existingId) === String(backtestId)
+          )
+        })
 
         if (existingIndex >= 0) {
           // Update existing backtest
@@ -454,7 +494,8 @@ export default function Backtests() {
               const isPositive = returnPercent > 0
               const status = b.status ?? b.metrics?.status ?? 'completed'
               const isFailed = status === 'failed'
-              const chartData = Array.isArray(b.chart_data) ? b.chart_data : []
+              const chartData = buildBacktestEquityChartData(b)
+              const yDomain = equityChartYDomain(chartData)
               
               return (
                 <Card 
@@ -517,6 +558,7 @@ export default function Backtests() {
                           <YAxis 
                             className="text-xs"
                             tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                            domain={yDomain}
                             tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
                           />
                           <RechartsTooltip 

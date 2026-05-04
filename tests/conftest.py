@@ -222,11 +222,16 @@ CREATE TABLE IF NOT EXISTS trading_model_predictions (
 );
 
 CREATE TABLE IF NOT EXISTS backtest_runs (
-  id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT,
-  params TEXT,
-  started_at TEXT,
+  started_at TEXT DEFAULT (datetime('now')),
   completed_at TEXT,
+  params JSON,
+  params_hash TEXT,
+  variant_label TEXT,
+  optimizer_mode TEXT,
+  experiment_id TEXT,
+  client_backtest_id TEXT,
   initial_capital REAL,
   final_value REAL,
   total_return REAL,
@@ -238,7 +243,7 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
   avg_trade_return REAL,
   volatility REAL,
   equity_curve TEXT,
-  metrics TEXT
+  metrics JSON
 );
 
 CREATE TABLE IF NOT EXISTS trades (

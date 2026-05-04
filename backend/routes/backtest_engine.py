@@ -721,7 +721,7 @@ async def run_backtest_background(
             "data": {
                 "strategy_name": strategy_name,
                 "start_date": start_date,
-                "end_date": datetime.utcnow(),
+                "end_date": end_date,
                 "initial_capital": initial_capital,
                 "final_value": final_value,
                 "total_return": total_return,
@@ -797,7 +797,7 @@ async def run_backtest_background(
                 "data": {
                     "strategy_name": strategy_name,
                     "start_date": start_date,
-                    "end_date": datetime.utcnow(),
+                    "end_date": end_date,
                     "initial_capital": initial_capital,
                     "final_value": initial_capital,  # No change on failure
                     "total_return": 0.0,

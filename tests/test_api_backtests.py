@@ -11,6 +11,72 @@ import tempfile
 import os
 import asyncio
 
+from backend.utils.backtest_variants import compute_params_hash
+
+
+def _insert_test_backtest_run(
+    conn,
+    client_backtest_id: str,
+    name: str = "test_strategy",
+    *,
+    params=None,
+    metrics=None,
+    equity_curve: str = "[]",
+    started_at=None,
+    completed_at=None,
+    **cols,
+):
+    """Insert a row compatible with production ``backtest_runs`` schema."""
+    params = params or {}
+    started_at = started_at or datetime.utcnow().isoformat()
+    completed_at = completed_at or datetime.utcnow().isoformat()
+    full_metrics = {"backtest_id": client_backtest_id, "status": "completed"}
+    if metrics:
+        full_metrics.update(metrics)
+    defaults = {
+        "initial_capital": 100000.0,
+        "final_value": 105000.0,
+        "total_return": 0.05,
+        "annualized_return": 0.1,
+        "sharpe_ratio": 1.2,
+        "max_drawdown": 0.08,
+        "win_rate": 0.65,
+        "total_trades": 50,
+        "avg_trade_return": 0.01,
+        "volatility": 0.15,
+    }
+    defaults.update(cols)
+    conn.execute(
+        """
+        INSERT INTO backtest_runs (
+            name, params, params_hash, client_backtest_id, started_at, completed_at,
+            initial_capital, final_value, total_return, annualized_return, sharpe_ratio,
+            max_drawdown, win_rate, total_trades, avg_trade_return, volatility,
+            equity_curve, metrics
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            name,
+            json.dumps(params),
+            compute_params_hash(params),
+            client_backtest_id,
+            started_at,
+            completed_at,
+            defaults["initial_capital"],
+            defaults["final_value"],
+            defaults["total_return"],
+            defaults["annualized_return"],
+            defaults["sharpe_ratio"],
+            defaults["max_drawdown"],
+            defaults["win_rate"],
+            defaults["total_trades"],
+            defaults["avg_trade_return"],
+            defaults["volatility"],
+            equity_curve,
+            json.dumps(full_metrics),
+        ),
+    )
+
 
 @pytest.mark.unit
 class TestAPIBacktestEndpoints:
@@ -56,12 +122,26 @@ class TestAPIBacktestEndpoints:
             )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS backtest_runs (
-                id TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS tickers (
+                ticker TEXT PRIMARY KEY,
                 name TEXT,
-                params TEXT,
-                started_at TEXT,
+                exchange TEXT,
+                sector TEXT,
+                added_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                started_at TEXT DEFAULT (datetime('now')),
                 completed_at TEXT,
+                params JSON,
+                params_hash TEXT,
+                variant_label TEXT,
+                optimizer_mode TEXT,
+                experiment_id TEXT,
+                client_backtest_id TEXT,
                 initial_capital REAL,
                 final_value REAL,
                 total_return REAL,
@@ -73,7 +153,7 @@ class TestAPIBacktestEndpoints:
                 avg_trade_return REAL,
                 volatility REAL,
                 equity_curve TEXT,
-                metrics TEXT
+                metrics JSON
             )
         """)
         conn.execute("""
@@ -131,22 +211,46 @@ class TestAPIBacktestEndpoints:
             'lightgbm_7d': {'lgbm': Mock(), 'embedder': 'all-MiniLM-L6-v2'}
         }
 
+    def _seed_moving_average_preflight_data(self):
+        from datetime import timedelta
+
+        conn = sqlite3.connect(self.temp_db.name)
+        conn.execute(
+            "INSERT OR IGNORE INTO tickers (ticker, name, exchange, sector) VALUES (?,?,?,?)",
+            ("AAPL", "Apple Inc.", "NASDAQ", "Technology"),
+        )
+        conn.execute("DELETE FROM price_daily WHERE ticker = ?", ("AAPL",))
+        base = datetime(2024, 1, 1).date()
+        for i in range(130):
+            d = (base + timedelta(days=i)).isoformat()
+            conn.execute(
+                """
+                INSERT INTO price_daily
+                (ticker, date, open, high, low, close, adjusted_close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("AAPL", d, 150.0 + i, 152.0 + i, 148.0 + i, 151.0 + i, 151.0 + i, 1_000_000),
+            )
+        conn.commit()
+        conn.close()
+
     def teardown_method(self):
         """Clean up temporary database."""
         if os.path.exists(self.temp_db.name):
             os.unlink(self.temp_db.name)
 
-    @patch('routes.backtests.run_backtest_background')
+    @patch("backend.routes.backtests.run_backtest_background")
     def test_backtest_endpoint_success(self, mock_run_backtest):
         """Test successful backtest creation."""
-        mock_run_backtest.return_value = "test_backtest_id"
+        mock_run_backtest.return_value = None
+        self._seed_moving_average_preflight_data()
 
         payload = {
-            "strategy_name": "test_strategy",
+            "strategy_name": "moving_average",
             "start_date": "2024-01-01T00:00:00",
             "end_date": "2024-12-31T00:00:00",
             "initial_capital": 100000.0,
-            "parameters": {}
+            "parameters": {"ticker": "AAPL"},
         }
         response = self.client.post("/backtest", json=payload)
         assert response.status_code == 200
@@ -168,7 +272,7 @@ class TestAPIBacktestEndpoints:
         response = self.client.post("/backtest", json=payload)
         assert response.status_code == 422  # Validation error
 
-    @patch('routes.backtests.run_backtest_background')
+    @patch("backend.routes.backtests.run_backtest_background")
     def test_backtest_endpoint_large_date_range(self, mock_run_backtest):
         """Test backtest endpoint with too large date range."""
         payload = {
@@ -189,14 +293,8 @@ class TestAPIBacktestEndpoints:
 
     def test_list_backtests_endpoint(self):
         """Test listing backtests endpoint."""
-        # Insert test backtest data
         conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO backtest_runs
-            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility, equity_curve, metrics)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("test_id", "test_strategy", "{}", datetime.utcnow().isoformat(), datetime.utcnow().isoformat(),
-              100000.0, 105000.0, 0.05, 0.1, 1.2, 0.08, 0.65, 50, 0.01, 0.15, "[]", "{}"))
+        _insert_test_backtest_run(conn, "test_id", "test_strategy")
         conn.commit()
         conn.close()
 
@@ -209,15 +307,9 @@ class TestAPIBacktestEndpoints:
 
     def test_list_backtests_pagination(self):
         """Test backtests listing with pagination."""
-        # Insert multiple backtest records
         conn = sqlite3.connect(self.temp_db.name)
         for i in range(5):
-            conn.execute("""
-                INSERT INTO backtest_runs
-                (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, metrics)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (f"test_id_{i}", f"test_strategy_{i}", "{}", datetime.utcnow().isoformat(), datetime.utcnow().isoformat(),
-                  100000.0, 105000.0, 0.05, 1.2, 0.08, 0.65, 50, "{}"))
+            _insert_test_backtest_run(conn, f"test_id_{i}", f"test_strategy_{i}")
         conn.commit()
         conn.close()
 
@@ -229,14 +321,8 @@ class TestAPIBacktestEndpoints:
 
     def test_get_backtest_result_success(self):
         """Test getting backtest result successfully."""
-        # Insert test backtest data
         conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO backtest_runs
-            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility, equity_curve, metrics)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("test_id", "test_strategy", "{}", datetime.utcnow().isoformat(), datetime.utcnow().isoformat(),
-              100000.0, 105000.0, 0.05, 0.1, 1.2, 0.08, 0.65, 50, 0.01, 0.15, "[]", "{}"))
+        _insert_test_backtest_run(conn, "test_id", "test_strategy")
         conn.commit()
         conn.close()
 
@@ -292,31 +378,14 @@ class TestAPIBacktestEndpoints:
 
     def test_list_backtests_filtering(self):
         """Test backtests listing with filtering parameters."""
-        # Insert multiple backtest records with different dates
         conn = sqlite3.connect(self.temp_db.name)
-        records = []
         for i in range(5):
-            records.append((
+            _insert_test_backtest_run(
+                conn,
                 f"test_id_{i}",
                 f"test_strategy_{i}",
-                "{}",
-                (datetime.utcnow() - timedelta(days=i)).isoformat(),
-                datetime.utcnow().isoformat(),
-                100000.0,
-                105000.0,
-                0.05,
-                1.2,
-                0.08,
-                0.65,
-                50,
-                "{}"
-            ))
-
-        conn.executemany("""
-            INSERT INTO backtest_runs
-            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, sharpe_ratio, max_drawdown, win_rate, total_trades, metrics)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, records)
+                started_at=(datetime.utcnow() - timedelta(days=i)).isoformat(),
+            )
         conn.commit()
         conn.close()
 
@@ -337,47 +406,44 @@ class TestAPIBacktestEndpoints:
         # Should handle gracefully
         assert response.status_code in [404, 500]
 
-    def test_backtest_status_broadcasting(self):
+    @patch("backend.routes.backtests.run_backtest_background")
+    def test_backtest_status_broadcasting(self, mock_run_backtest):
         """Test that backtest status updates are broadcast via WebSocket."""
-        # This would require mocking the WebSocket broadcasting
-        # For now, just ensure the endpoint accepts valid requests
+        mock_run_backtest.return_value = None
+        self._seed_moving_average_preflight_data()
         payload = {
-            "strategy_name": "test_strategy",
+            "strategy_name": "moving_average",
             "start_date": "2024-01-01T00:00:00",
-            "end_date": "2024-01-31T00:00:00",
+            "end_date": "2024-12-31T00:00:00",
             "initial_capital": 100000.0,
-            "parameters": {"test_param": "value"}
+            "parameters": {"ticker": "AAPL", "test_param": "value"},
         }
         response = self.client.post("/backtest", json=payload)
         assert response.status_code == 200
 
     def test_backtest_result_data_integrity(self):
         """Test that backtest result data maintains integrity."""
-        # Insert test data with specific values
         conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO backtest_runs
-            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility, equity_curve, metrics)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
+        _insert_test_backtest_run(
+            conn,
             "integrity_test",
             "integrity_strategy",
-            '{"param1": "value1"}',
-            "2024-01-01T00:00:00",
-            "2024-01-31T00:00:00",
-            100000.0,
-            125000.0,
-            0.25,
-            0.3,
-            1.5,
-            0.1,
-            0.75,
-            100,
-            0.02,
-            0.2,
-            '[{"date": "2024-01-01", "value": 100000.0}, {"date": "2024-01-31", "value": 125000.0}]',
-            '{"status": "completed", "additional_metric": 42}'
-        ))
+            params={"param1": "value1"},
+            started_at="2024-01-01T00:00:00",
+            completed_at="2024-01-31T00:00:00",
+            initial_capital=100000.0,
+            final_value=125000.0,
+            total_return=0.25,
+            annualized_return=0.3,
+            sharpe_ratio=1.5,
+            max_drawdown=0.1,
+            win_rate=0.75,
+            total_trades=100,
+            avg_trade_return=0.02,
+            volatility=0.2,
+            equity_curve='[{"date": "2024-01-01", "value": 100000.0}, {"date": "2024-01-31", "value": 125000.0}]',
+            metrics={"additional_metric": 42},
+        )
         conn.commit()
         conn.close()
 
@@ -396,16 +462,18 @@ class TestAPIBacktestEndpoints:
         assert len(data["equity_curve"]) == 2
         assert data["metrics"]["additional_metric"] == 42
 
-    def test_concurrent_backtest_requests(self):
+    @patch("backend.routes.backtests.run_backtest_background")
+    def test_concurrent_backtest_requests(self, mock_run_backtest):
         """Test handling of concurrent backtest requests."""
-        # This tests the system's ability to handle multiple requests
+        mock_run_backtest.return_value = None
+        self._seed_moving_average_preflight_data()
         payloads = [
             {
-                "strategy_name": f"concurrent_strategy_{i}",
+                "strategy_name": "moving_average",
                 "start_date": "2024-01-01T00:00:00",
-                "end_date": "2024-01-31T00:00:00",
+                "end_date": "2024-12-31T00:00:00",
                 "initial_capital": 100000.0,
-                "parameters": {"index": i}
+                "parameters": {"ticker": "AAPL", "index": i},
             }
             for i in range(3)
         ]
@@ -416,36 +484,38 @@ class TestAPIBacktestEndpoints:
             responses.append(response)
             assert response.status_code == 200
 
-        # Verify all requests were accepted
         assert all(r.status_code == 200 for r in responses)
 
-    def test_backtest_parameter_serialization(self):
+    @patch("backend.routes.backtests.run_backtest_background")
+    def test_backtest_parameter_serialization(self, mock_run_backtest):
         """Test that complex parameters are properly serialized."""
+        mock_run_backtest.return_value = None
+        self._seed_moving_average_preflight_data()
         complex_params = {
+            "ticker": "AAPL",
             "nested": {
                 "value": 42,
                 "list": [1, 2, 3],
-                "boolean": True
+                "boolean": True,
             },
             "array": ["a", "b", "c"],
             "number": 3.14,
-            "null_value": None
+            "null_value": None,
         }
 
         payload = {
-            "strategy_name": "complex_params_strategy",
+            "strategy_name": "moving_average",
             "start_date": "2024-01-01T00:00:00",
-            "end_date": "2024-01-31T00:00:00",
+            "end_date": "2024-12-31T00:00:00",
             "initial_capital": 100000.0,
-            "parameters": complex_params
+            "parameters": complex_params,
         }
 
         response = self.client.post("/backtest", json=payload)
         assert response.status_code == 200
 
-        # Verify the response contains the parameters
         data = response.json()
-        assert "parameters" in data or "metrics" in data  # Parameters might be stored in metrics
+        assert "parameters" in data or "metrics" in data
 
     def test_backtest_date_edge_cases(self):
         """Test backtest endpoint with edge case dates."""
@@ -470,31 +540,22 @@ class TestAPIBacktestEndpoints:
 
     def test_backtest_result_caching(self):
         """Test that backtest results can be cached/retrieved efficiently."""
-        # Insert test data
         conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO backtest_runs
-            (id, name, params, started_at, completed_at, initial_capital, final_value, total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility, equity_curve, metrics)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
+        _insert_test_backtest_run(
+            conn,
             "cache_test",
             "cache_strategy",
-            "{}",
-            datetime.utcnow().isoformat(),
-            datetime.utcnow().isoformat(),
-            100000.0,
-            110000.0,
-            0.1,
-            0.12,
-            1.0,
-            0.05,
-            0.7,
-            25,
-            0.004,
-            0.15,
-            "[]",
-            "{}"
-        ))
+            initial_capital=100000.0,
+            final_value=110000.0,
+            total_return=0.1,
+            annualized_return=0.12,
+            sharpe_ratio=1.0,
+            max_drawdown=0.05,
+            win_rate=0.7,
+            total_trades=25,
+            avg_trade_return=0.004,
+            volatility=0.15,
+        )
         conn.commit()
         conn.close()
 

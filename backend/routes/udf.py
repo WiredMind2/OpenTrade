@@ -41,6 +41,10 @@ from backend.cache import udf_history_cache
 logger = get_component_logger(__file__)
 router = APIRouter()
 
+# Yahoo Finance rejects 1m requests spanning more than ~8 calendar days ("Only 8 days worth
+# of 1m granularity data are allowed to be fetched per request."). Chunk smaller than that.
+YAHOO_1M_MAX_CHUNK_DAYS = 7
+
 
 def invalidate_symbol_cache(symbol: str) -> None:
     """Invalidate cache entries for a specific symbol.
@@ -117,7 +121,28 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
 
         # Fetch data from Yahoo Finance
         stock = yf.Ticker(symbol)
-        df = stock.history(start=from_date, end=to_date, interval=interval)
+        if table == 'price_daily':
+            df = stock.history(start=from_date, end=to_date, interval=interval)
+        else:
+            # Minute: Yahoo caps 1m range per request — walk the window in chunks.
+            parts: List[pd.DataFrame] = []
+            chunk_start = from_date
+            while chunk_start < to_date:
+                chunk_end = min(chunk_start + timedelta(days=YAHOO_1M_MAX_CHUNK_DAYS), to_date)
+                part = stock.history(start=chunk_start, end=chunk_end, interval=interval)
+                if not part.empty:
+                    parts.append(part)
+                if chunk_end >= to_date:
+                    break
+                chunk_start = chunk_end
+
+            if not parts:
+                df = pd.DataFrame()
+            else:
+                df = pd.concat(parts)
+                if isinstance(df.index, pd.DatetimeIndex) and df.index.has_duplicates:
+                    df = df[~df.index.duplicated(keep="last")]
+                df = df.sort_index()
 
         if df.empty:
             logger.warning(f"No data found for {symbol} from Yahoo Finance")
