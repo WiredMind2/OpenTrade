@@ -278,7 +278,7 @@ export default function Backtests() {
                 <TickerSearch
                   value={ticker}
                   onChange={(t) => setTicker(rememberTicker(t))}
-                  placeholder="AAPL"
+                  placeholder="Search a ticker"
                 />
               </div>
               <div className="space-y-2">

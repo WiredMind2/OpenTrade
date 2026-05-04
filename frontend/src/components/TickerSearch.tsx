@@ -9,7 +9,7 @@ interface TickerSearchProps {
   className?: string
 }
 
-export default function TickerSearch({ value, onChange, placeholder = 'AAPL', className }: TickerSearchProps) {
+export default function TickerSearch({ value, onChange, placeholder = 'Search a ticker', className }: TickerSearchProps) {
   const [inputValue, setInputValue] = useState(value)
   const [results, setResults] = useState<UdfSearchSymbol[]>([])
   const [open, setOpen] = useState(false)
