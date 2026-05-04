@@ -79,8 +79,8 @@ export default function Predictions() {
   const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
   const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
 
-  const [backtestStartDate, setBacktestStartDate] = useState('2025-01-01')
-  const [backtestEndDate, setBacktestEndDate] = useState('2025-12-31')
+  const [backtestStartDate, setBacktestStartDate] = useState(() => `${new Date().getFullYear() - 1}-01-01`)
+  const [backtestEndDate, setBacktestEndDate] = useState(() => `${new Date().getFullYear() - 1}-12-31`)
   const [backtestRunning, setBacktestRunning] = useState(false)
   const [backtestPollPhase, setBacktestPollPhase] = useState<string | undefined>(undefined)
   const [backtestError, setBacktestError] = useState<string | null>(null)
@@ -242,6 +242,7 @@ export default function Predictions() {
 
   useEffect(() => {
     if (!showPredictionProjections) return
+    setPredictionProjections([])
     void generatePredictionProjections(selectedTicker)
   }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy, projectionParams])
 

@@ -60,8 +60,8 @@ export default function Backtests() {
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
   const [strategyParams, setStrategyParams] = useState<Record<string, any>>({})
-  const [startDate, setStartDate] = useState('2025-01-01')
-  const [endDate, setEndDate] = useState('2025-12-31')
+  const [startDate, setStartDate] = useState(() => `${new Date().getFullYear() - 1}-01-01`)
+  const [endDate, setEndDate] = useState(() => `${new Date().getFullYear() - 1}-12-31`)
   const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -244,6 +244,10 @@ export default function Backtests() {
                   onStrategyChange={(selectedStrategy, params) => {
                     setStrategy(selectedStrategy)
                     setStrategyParams(params)
+                    setTrainResult(null)
+                    setTrainedParams(null)
+                    setTrainError(null)
+                    setPreflight(null)
                   }}
                 />
               </div>
@@ -363,7 +367,10 @@ export default function Backtests() {
                   <span>{serverWaitPhaseLabel(serverWaitPhase)}</span>
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                  <div className="h-full w-2/5 rounded-full bg-primary server-wait-bar" />
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-700"
+                    style={{ width: serverWaitPhase === 'preflight' ? '25%' : '70%' }}
+                  />
                 </div>
               </div>
             )}

@@ -32,6 +32,7 @@ export default function TickerSearch({ value, onChange, placeholder = 'Search a 
     if (query.length < 1) {
       setResults([])
       setOpen(false)
+      setActiveIndex(-1)
       return
     }
     setLoading(true)

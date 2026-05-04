@@ -174,7 +174,7 @@ export default function MarketBrief() {
   const [news, setNews] = useState<NewsArticle[]>([])
   const [marketMoves, setMarketMoves] = useState<MarketMove[]>([])
   const [searchedMove, setSearchedMove] = useState<MarketMove | null>(null)
-  const [preferredTicker, setPreferredTicker] = useState(() => getRememberedTicker())
+  const [preferredTicker, setPreferredTicker] = useState(() => getStoredTicker())
   const [searchTicker, setSearchTicker] = useState(() => getStoredTicker())
   const [searchingTicker, setSearchingTicker] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -320,6 +320,7 @@ export default function MarketBrief() {
         setSearchError(`Loaded ${symbol} direction, but no related headlines could be fetched.`)
       }
     } catch (e: any) {
+      setSearchedMove(null)
       setSearchError(e.message || `Failed to load ${symbol}.`)
     } finally {
       setSearchingTicker(false)

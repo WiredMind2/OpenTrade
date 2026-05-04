@@ -136,8 +136,8 @@ export default function Scripts() {
   const [pipelineSteps, setPipelineSteps] = useState('')
 
   const [batchTicker, setBatchTicker] = useState('AAPL')
-  const [batchStartDate, setBatchStartDate] = useState('2025-01-01')
-  const [batchEndDate, setBatchEndDate] = useState('2025-12-31')
+  const [batchStartDate, setBatchStartDate] = useState(() => `${new Date().getFullYear() - 1}-01-01`)
+  const [batchEndDate, setBatchEndDate] = useState(() => `${new Date().getFullYear() - 1}-12-31`)
   const [batchInitialCapital, setBatchInitialCapital] = useState(100000)
   const [batchObjective, setBatchObjective] = useState('balanced')
   const [batchMaxEvals, setBatchMaxEvals] = useState(8)
