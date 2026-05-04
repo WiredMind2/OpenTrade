@@ -196,6 +196,7 @@ export default function Backtests() {
     } finally {
       setTraining(false)
       setServerWaitPhase('idle')
+      fetchBacktests()
     }
   }
 
@@ -458,9 +459,14 @@ export default function Backtests() {
                           <BarChart3 className="h-5 w-5 text-primary" />
                           {b.strategy_name}
                         </CardTitle>
-                        <CardDescription className="flex items-center gap-2 mt-2">
-                          <Calendar className="h-3 w-3" />
-                          {b.start_date} → {b.end_date}
+                        <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                          {b.ticker && (
+                            <span className="font-semibold text-foreground">{b.ticker}</span>
+                          )}
+                          <span className="flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {b.start_date} → {b.end_date}
+                          </span>
                         </CardDescription>
                       </div>
                       
