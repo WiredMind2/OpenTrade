@@ -48,7 +48,7 @@ export function Sidebar({ className }: SidebarProps) {
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-tv-text-primary">
-                TradeBot
+                OpenTrade
               </span>
             </div>
           )}
@@ -150,7 +150,7 @@ export function MobileSidebar() {
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-tv-text-primary">
-                TradeBot
+                OpenTrade
               </span>
             </div>
             <Button variant="ghost" size="icon" onClick={() => setOpen(false)} className="h-7 w-7">
