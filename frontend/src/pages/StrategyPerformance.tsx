@@ -20,6 +20,7 @@ import { Activity, BarChart3, Gauge, Layers3, Target, TrendingUp } from 'lucide-
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { Input } from '../components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
@@ -39,6 +40,7 @@ import type {
   StrategyVariantSummary,
   StrategyVariantTimeseriesResponse,
 } from '../types'
+import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 const COLOR_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4']
 
@@ -96,6 +98,7 @@ function monthlyReturnsFromPoints(points: StrategyTimeseriesPoint[]): Record<str
 export default function StrategyPerformance() {
   const [filters, setFilters] = useState<StrategyAnalyticsFilters | null>(null)
   const [strategy, setStrategy] = useState('')
+  const [ticker, setTicker] = useState(() => getStoredTicker())
   const [variantSummary, setVariantSummary] = useState<StrategyVariantSummary | null>(null)
   const [variantTs, setVariantTs] = useState<StrategyVariantTimeseriesResponse | null>(null)
   const [dist, setDist] = useState<StrategyDistributionResponse | null>(null)
@@ -169,6 +172,7 @@ export default function StrategyPerformance() {
         strategy: strategyToLoad,
         objective,
         top_n: topN,
+        ticker,
       })
       setVariantSummary(summary)
       const hashes = summary.variants.map((v) => v.params_hash).join(',')
@@ -186,6 +190,7 @@ export default function StrategyPerformance() {
         granularity: selectedGranularity,
         rolling_window: selectedRolling,
         objective,
+        ticker,
       })
       setVariantTs(ts)
       setActiveParamsHash((prev) => {
@@ -204,7 +209,16 @@ export default function StrategyPerformance() {
     } finally {
       setLoading(false)
     }
-  }, [objective, topN, selectedTicker, effectiveBenchmark, selectedPreset, selectedGranularity, selectedRolling])
+  }, [
+    objective,
+    topN,
+    selectedTicker,
+    effectiveBenchmark,
+    selectedPreset,
+    selectedGranularity,
+    selectedRolling,
+    ticker,
+  ])
 
   useEffect(() => {
     let mounted = true
@@ -227,14 +241,24 @@ export default function StrategyPerformance() {
   useEffect(() => {
     if (!filters) return
     void loadDashboard()
-  }, [filters, objective, topN, selectedTicker, selectedPreset, selectedGranularity, selectedRolling, loadDashboard])
+  }, [
+    filters,
+    objective,
+    topN,
+    selectedTicker,
+    selectedPreset,
+    selectedGranularity,
+    selectedRolling,
+    loadDashboard,
+    ticker,
+  ])
 
   useEffect(() => {
     if (analyticsTab !== 'distributions' || !strategy || !activeParamsHash) return
     let cancelled = false
     ;(async () => {
       try {
-        const d = await getStrategyVariantDistribution(strategy, activeParamsHash, objective)
+        const d = await getStrategyVariantDistribution(strategy, activeParamsHash, objective, ticker)
         if (!cancelled) setDist(d)
       } catch {
         if (!cancelled) setDist(null)
@@ -243,7 +267,7 @@ export default function StrategyPerformance() {
     return () => {
       cancelled = true
     }
-  }, [analyticsTab, strategy, activeParamsHash, objective])
+  }, [analyticsTab, strategy, activeParamsHash, objective, ticker])
 
   const activeVariant: StrategyVariantRow | undefined = useMemo(
     () => variantSummary?.variants.find((v) => v.params_hash === activeParamsHash),
@@ -343,8 +367,8 @@ export default function StrategyPerformance() {
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Strategy Performance</h2>
         <p className="text-muted-foreground">
-          Compare best-known strategies per ticker across all strategy families, then drill into parameter variants for
-          the selected strategy.
+          Each leaderboard row is a model: a strategy script plus one fixed parameter set. Compare models per ticker
+          across strategy families, then open variants to inspect other saved settings for the same strategy.
         </p>
       </div>
 
@@ -355,13 +379,22 @@ export default function StrategyPerformance() {
             Variant comparison controls
           </CardTitle>
           <CardDescription>
-            Pick ticker scope, ranking objective, how many top strategies to list per ticker, plus preset, granularity,
-            and rolling window for charts. Benchmark defaults to SPY when available. Strategy comes from the leaderboard
-            row you select (or the current top row).
+            Pick ticker scope, ranking objective, how many top models to list per ticker, plus chart preset, granularity,
+            and rolling window. Benchmark defaults to SPY when available. The active strategy family comes from the
+            leaderboard row you select (or the current top row).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Ticker (variant filter)</label>
+              <Input
+                value={ticker}
+                onChange={(event) => setTicker(rememberTicker(event.target.value))}
+                className="font-mono uppercase"
+                placeholder="AMZN"
+              />
+            </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">Ticker scope</label>
               <Select value={selectedTicker} onValueChange={setSelectedTicker}>
@@ -473,8 +506,8 @@ export default function StrategyPerformance() {
             <CardContent className="flex flex-wrap gap-2">
               {(variantSummary?.variants ?? []).length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No parameter variants found yet. Run optimization (Train) or backtests with different parameters so
-                  rows get a params_hash.
+                  No parameter variants found for {ticker || 'this ticker'} yet. Train that ticker on the Backtests
+                  page, or run historical backtests with different parameters so rows get a params_hash.
                 </p>
               ) : (
                 (variantSummary?.variants ?? []).map((v) => (
@@ -526,10 +559,10 @@ export default function StrategyPerformance() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Ticker strategy leaderboard</CardTitle>
+              <CardTitle>Ticker model leaderboard</CardTitle>
               <CardDescription>
-                Best strategies per ticker using objective {objective}. Click any row to drill into that strategy
-                variant.
+                Best models per ticker using objective {objective}. Click any row to drill into that strategy family and
+                parameter variant.
               </CardDescription>
             </CardHeader>
             <CardContent>

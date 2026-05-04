@@ -28,6 +28,7 @@ import { Separator } from '../components/ui/separator'
 import StrategySelector from '../components/StrategySelector'
 import BacktestEquityCompareChart from '../components/BacktestEquityCompareChart'
 import { buildBacktestEquitySeries } from '../utils/backtestChart'
+import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 type BacktestListItem = BacktestResult & {
   id?: string | number
@@ -63,7 +64,7 @@ export default function Backtests() {
   const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [ticker, setTicker] = useState('AAPL')
+  const [ticker, setTicker] = useState(() => getStoredTicker())
   const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [maxEvals, setMaxEvals] = useState(8)
   const [optimizerMode, setOptimizerMode] = useState<'grid' | 'random'>('grid')
@@ -151,8 +152,9 @@ export default function Backtests() {
     setTrainError(null)
     setServerWaitPhase('preflight')
     try {
+      const normalizedTicker = rememberTicker(ticker)
       const check = await preflightStrategy(strategy, {
-        ticker: ticker.trim().toUpperCase(),
+        ticker: normalizedTicker,
         start_date: startDate,
         end_date: endDate,
       })
@@ -164,7 +166,7 @@ export default function Backtests() {
       setServerWaitPhase('training')
       const seedNum = randomSeed.trim() === '' ? undefined : Number(randomSeed)
       const response = await trainStrategy(strategy, {
-        ticker: ticker.trim().toUpperCase(),
+        ticker: normalizedTicker,
         start_date: startDate,
         end_date: endDate,
         initial_capital: 100000,
@@ -273,7 +275,7 @@ export default function Backtests() {
                 <label className="text-sm font-medium">Training Ticker</label>
                 <Input
                   value={ticker}
-                  onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                  onChange={(e) => setTicker(rememberTicker(e.target.value))}
                   placeholder="AAPL"
                 />
               </div>

@@ -19,6 +19,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
+import { getRememberedTicker, getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 type BriefBacktest = BacktestResult & {
   id?: string | number
@@ -173,7 +174,8 @@ export default function MarketBrief() {
   const [news, setNews] = useState<NewsArticle[]>([])
   const [marketMoves, setMarketMoves] = useState<MarketMove[]>([])
   const [searchedMove, setSearchedMove] = useState<MarketMove | null>(null)
-  const [searchTicker, setSearchTicker] = useState('')
+  const [preferredTicker, setPreferredTicker] = useState(() => getRememberedTicker())
+  const [searchTicker, setSearchTicker] = useState(() => getStoredTicker())
   const [searchingTicker, setSearchingTicker] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -192,10 +194,12 @@ export default function MarketBrief() {
       const safeBacktests = Array.isArray(backtestData) ? backtestData : []
       setBacktests(safeBacktests)
 
+      const rememberedTicker = getRememberedTicker()
       const lastBacktestTicker = backtestTicker(safeBacktests.find((item: BriefBacktest) => item.ticker || item.params?.ticker))
-      const newsTicker = lastBacktestTicker || latestPredictionTicker(safePredictions) || MARKET_RISK_BASKET[0]
+      const newsTicker = rememberedTicker || lastBacktestTicker || latestPredictionTicker(safePredictions) || MARKET_RISK_BASKET[0]
       const symbols = Array.from(
         new Set([
+          ...(rememberedTicker ? [rememberedTicker] : []),
           ...(lastBacktestTicker ? [lastBacktestTicker] : []),
           ...MARKET_RISK_BASKET,
           ...safePredictions.slice(0, 10).map((item: PredictionResponse) => item.ticker?.toUpperCase()).filter(Boolean),
@@ -211,6 +215,8 @@ export default function MarketBrief() {
       )
       const newsData = await getNews(newsTicker)
       setNews(Array.isArray(newsData) ? newsData.slice(0, 8) : [])
+      setPreferredTicker(rememberedTicker)
+      setSearchTicker(newsTicker)
       setSearchedMove(null)
       setSearchError(null)
     } catch (e: any) {
@@ -250,7 +256,7 @@ export default function MarketBrief() {
     () => latestPredictionTicker(predictions),
     [predictions]
   )
-  const targetTicker = searchedMove?.ticker || lastRelevantTicker || lastTrainedTicker
+  const targetTicker = searchedMove?.ticker || preferredTicker || lastRelevantTicker || lastTrainedTicker
   const bestBacktest = useMemo(
     () => completedBacktests.slice().sort((a, b) => Number(b.total_return || 0) - Number(a.total_return || 0))[0],
     [completedBacktests]
@@ -260,10 +266,11 @@ export default function MarketBrief() {
   const leadMove = useMemo(
     () =>
       searchedMove ||
+      marketMoves.find((move) => preferredTicker && move.ticker === preferredTicker) ||
       marketMoves.find((move) => lastRelevantTicker && move.ticker === lastRelevantTicker) ||
       marketMoves.find((move) => lastTrainedTicker && move.ticker === lastTrainedTicker) ||
       marketMoves.slice().sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))[0],
-    [lastRelevantTicker, lastTrainedTicker, marketMoves, searchedMove]
+    [lastRelevantTicker, lastTrainedTicker, marketMoves, preferredTicker, searchedMove]
   )
   const sortedMarketMoves = useMemo(
     () => marketMoves.slice().sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)),
@@ -278,6 +285,8 @@ export default function MarketBrief() {
   }, [leadMove, sortedMarketMoves])
   const leadMoveSource = searchedMove
     ? 'searched ticker'
+    : preferredTicker && leadMove?.ticker === preferredTicker
+    ? 'selected ticker'
     : lastRelevantTicker && leadMove?.ticker === lastRelevantTicker
     ? 'last backtest'
     : lastTrainedTicker && leadMove?.ticker === lastTrainedTicker
@@ -290,6 +299,8 @@ export default function MarketBrief() {
     event?.preventDefault()
     const symbol = searchTicker.trim().toUpperCase()
     if (!symbol) return
+    rememberTicker(symbol)
+    setPreferredTicker(symbol)
     setSearchingTicker(true)
     setSearchError(null)
     try {

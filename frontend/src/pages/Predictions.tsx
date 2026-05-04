@@ -27,6 +27,7 @@ import { resolveProjectionAnchor } from '../utils/projectionAnchor'
 import { NewsSidebar } from '../components/NewsSidebar'
 import BacktestEquityCompareChart from '../components/BacktestEquityCompareChart'
 import { buildBacktestEquitySeries } from '../utils/backtestChart'
+import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 type PredictionBacktestRow = BacktestResult & {
   id?: string | number
@@ -66,7 +67,7 @@ function backtestPhaseLabel(phase: string | undefined): string {
 }
 
 export default function Predictions() {
-  const [selectedTicker, setSelectedTicker] = useState('AAPL')
+  const [selectedTicker, setSelectedTicker] = useState(() => getStoredTicker())
 
   // Projection controls state
   const [projectionStrategy, setProjectionStrategy] = useState('')
@@ -117,6 +118,7 @@ export default function Predictions() {
       alert('Select a chart ticker first.')
       return
     }
+    rememberTicker(sym)
     setBacktestRunning(true)
     setBacktestError(null)
     setBacktestPollPhase('queued')
@@ -270,7 +272,7 @@ export default function Predictions() {
                         onClick={() => handlePredictionProjectionsToggle(!showPredictionProjections)}
                       >
                         <Eye className="mr-2 h-4 w-4" />
-                        Prediction Projections
+                        Strategy Projections
                       </Button>
                   </div>
 
@@ -437,7 +439,7 @@ export default function Predictions() {
                   showPredictionProjections={showPredictionProjections}
                   predictionProjections={predictionProjections}
                   onSymbolChange={(symbol) => {
-                    const normalized = symbol.trim().toUpperCase()
+                    const normalized = rememberTicker(symbol)
                     if (normalized && normalized !== selectedTicker) {
                       setSelectedTicker(normalized)
                     }

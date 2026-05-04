@@ -318,6 +318,7 @@ export const getStrategyVariantSummary = async (query: {
   strategy: string
   objective?: string
   top_n?: number
+  ticker?: string
 }): Promise<StrategyVariantSummary> => {
   const response = await instance.get('/api/strategy-analytics/variants/summary', { params: query })
   return response.data
@@ -331,6 +332,7 @@ export const getStrategyVariantTimeseries = async (query: {
   granularity?: 'daily' | 'weekly' | 'monthly'
   rolling_window?: number
   objective?: string
+  ticker?: string
 }): Promise<StrategyVariantTimeseriesResponse> => {
   const response = await instance.get('/api/strategy-analytics/variants/timeseries', { params: query })
   return response.data
@@ -339,10 +341,11 @@ export const getStrategyVariantTimeseries = async (query: {
 export const getStrategyVariantDistribution = async (
   strategy: string,
   params_hash: string,
-  objective?: string
+  objective?: string,
+  ticker?: string
 ): Promise<StrategyDistributionResponse> => {
   const response = await instance.get(`/api/strategy-analytics/variants/distributions/${strategy}`, {
-    params: { params_hash, objective: objective ?? 'balanced' },
+    params: { params_hash, objective: objective ?? 'balanced', ticker },
   })
   return response.data
 }
