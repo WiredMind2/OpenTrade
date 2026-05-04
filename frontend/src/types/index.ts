@@ -42,6 +42,8 @@ export interface BacktestRequest {
   end_date: string;
   initial_capital: number;
   parameters?: Record<string, any>;
+  monte_carlo_mode?: boolean;
+  monte_carlo_config?: MonteCarloConfig;
 }
 
 export interface BacktestResult {
@@ -218,6 +220,11 @@ export interface BacktestStatusMessage extends WebSocketMessage {
   data: BacktestResult;
 }
 
+export interface MonteCarloBacktestStatusMessage extends WebSocketMessage {
+  type: "monte_carlo_backtest_status";
+  data: MonteCarloResult & { status: string; backtest_id: string };
+}
+
 export interface ChartUpdateMessage extends WebSocketMessage {
   type: "chart_update";
   data: {
@@ -359,18 +366,41 @@ export interface StrategyDistributionResponse {
   pnl_by_symbol: DistributionBucket[];
 }
 
+<<<<<<< Updated upstream
 export interface StrategyVariantRow {
   params_hash: string;
   variant_label?: string | null;
   strategy: string;
   representative_run_id: number;
   run_count: number;
+=======
+// Monte Carlo Simulation Types
+export interface MonteCarloConfig {
+  num_simulations: number;
+  time_horizon: number;
+  confidence_level: number;
+}
+
+export interface MonteCarloBacktestRequest {
+  strategy_name: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  parameters?: Record<string, any>;
+  monte_carlo: MonteCarloConfig;
+}
+
+export interface SimulationResult {
+  simulation_id: number;
+  final_value: number;
+>>>>>>> Stashed changes
   total_return: number;
   annualized_return: number;
   sharpe_ratio: number;
   max_drawdown: number;
   win_rate: number;
   total_trades: number;
+<<<<<<< Updated upstream
   volatility: number;
   params: Record<string, any>;
   last_completed_at?: string | null;
@@ -396,4 +426,28 @@ export interface StrategyVariantTimeseriesResponse {
   granularity: 'daily' | 'weekly' | 'monthly';
   benchmark_points: StrategyTimeseriesPoint[];
   variant_series: VariantSeriesPayload[];
+=======
+  avg_trade_return: number;
+  volatility: number;
+  equity_curve: Array<Record<string, any>>;
+}
+
+export interface MonteCarloResult {
+  strategy_name: string;
+  num_simulations: number;
+  time_horizon: number;
+  confidence_level: number;
+  completed_at: string;
+  mean_final_value: number;
+  std_final_value: number;
+  mean_total_return: number;
+  std_total_return: number;
+  confidence_lower_return: number;
+  confidence_upper_return: number;
+  worst_case_return: number;
+  best_case_return: number;
+  probability_positive_return: number;
+  simulations: SimulationResult[];
+  distribution_summary: Record<string, any>;
+>>>>>>> Stashed changes
 }

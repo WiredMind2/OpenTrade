@@ -173,8 +173,9 @@ app.add_api_websocket_route("/ws", websocket_endpoint)
 
 
 async def init_database():
-    """Initialize database connection."""
+    """Initialize database connection and create tables."""
     import sqlite3
+    from pathlib import Path
 
     try:
         db_path = app_state["database_path"]
@@ -194,6 +195,13 @@ async def init_database():
             schema_path = (Path(__file__).resolve().parent.parent / "db" / "schema.sql")
             if not schema_path.exists():
                 raise TradingBacktesterError(f"Schema file not found at: {schema_path}")
+
+            # Run migrations
+            migration_path = (Path(__file__).resolve().parent.parent / "db" / "create_monte_carlo_tables.sql")
+            if migration_path.exists():
+                with open(migration_path, 'r') as f:
+                    sql = f.read()
+                conn.executescript(sql)
 
             schema_sql = schema_path.read_text(encoding="utf-8")
             try:

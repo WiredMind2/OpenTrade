@@ -205,8 +205,26 @@ export const runBacktest = async (data: {
   end_date: string
   initial_capital: number
   parameters?: Record<string, any>
+  monte_carlo_mode?: boolean
+  monte_carlo_config?: any
 }) => {
   const response = await instance.post('/backtest', data)
+  return response.data
+}
+
+export const runMonteCarloBacktest = async (data: {
+  strategy_name: string
+  start_date: string
+  end_date: string
+  initial_capital: number
+  parameters?: Record<string, any>
+  monte_carlo: {
+    num_simulations: number
+    time_horizon: number
+    confidence_level: number
+  }
+}) => {
+  const response = await instance.post('/monte-carlo-backtest', data)
   return response.data
 }
 

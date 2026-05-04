@@ -15,26 +15,27 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src')
     }
   },
-  server: {
-    port: 5173,
-    open: true,
-    proxy: {
-      '/udf': httpProxy,
-      '/predictions': httpProxy,
-      '/predict': httpProxy,
-      '/scripts': httpProxy,
-      '/portfolio': httpProxy,
-      '/data': httpProxy,
-      '/health': httpProxy,
-      '/trading': httpProxy,
-      '/backtest': httpProxy,
-      '/jobs': httpProxy,
-      '/api': httpProxy,
-      '/ws': {
-        target: wsTarget,
-        ws: true,
-        changeOrigin: true
+    server: {
+      port: 5173,
+      open: true,
+      proxy: {
+        '/udf': httpProxy,
+        '/predictions': httpProxy,
+        '/predict': httpProxy,
+        '/scripts': httpProxy,
+        '/portfolio': httpProxy,
+        '/data': httpProxy,
+        '/health': httpProxy,
+        '/trading': httpProxy,
+        '/backtest': httpProxy,
+        '/monte-carlo-backtest': httpProxy,
+        '/jobs': httpProxy,
+        '/api': httpProxy,
+        '/ws': {
+          target: wsTarget,
+          ws: true,
+          changeOrigin: true
+        }
       }
     }
-  }
 })
