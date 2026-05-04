@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
   started_at TEXT DEFAULT (datetime('now')),
   completed_at TEXT,
   params JSON,
+  params_hash TEXT,
+  variant_label TEXT,
+  optimizer_mode TEXT,
+  experiment_id TEXT,
+  client_backtest_id TEXT,
   initial_capital REAL,
   final_value REAL,
   total_return REAL,
@@ -160,12 +165,14 @@ CREATE INDEX IF NOT EXISTS idx_trades_backtest ON trades(backtest_run_id);
 CREATE TABLE IF NOT EXISTS strategy_signals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   backtest_id TEXT NOT NULL,
+  backtest_run_id INTEGER,
   signal_time TEXT NOT NULL,
   ticker TEXT NOT NULL,
   target_pct REAL NOT NULL,
   reason TEXT,
   confidence REAL,
-  metadata JSON
+  metadata JSON,
+  FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_strategy_signals_backtest ON strategy_signals(backtest_id);
 CREATE INDEX IF NOT EXISTS idx_strategy_signals_ticker_time ON strategy_signals(ticker, signal_time);
@@ -173,18 +180,21 @@ CREATE INDEX IF NOT EXISTS idx_strategy_signals_ticker_time ON strategy_signals(
 CREATE TABLE IF NOT EXISTS order_intents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   backtest_id TEXT NOT NULL,
+  backtest_run_id INTEGER,
   intent_time TEXT NOT NULL,
   ticker TEXT NOT NULL,
   side TEXT NOT NULL,
   notional_delta REAL NOT NULL,
   reason TEXT,
-  metadata JSON
+  metadata JSON,
+  FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_order_intents_backtest ON order_intents(backtest_id);
 
 CREATE TABLE IF NOT EXISTS order_fills (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   backtest_id TEXT NOT NULL,
+  backtest_run_id INTEGER,
   fill_time TEXT NOT NULL,
   ticker TEXT NOT NULL,
   side TEXT NOT NULL,
@@ -192,7 +202,8 @@ CREATE TABLE IF NOT EXISTS order_fills (
   fill_price REAL NOT NULL,
   fees REAL DEFAULT 0,
   slippage REAL DEFAULT 0,
-  metadata JSON
+  metadata JSON,
+  FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_order_fills_backtest ON order_fills(backtest_id);
 

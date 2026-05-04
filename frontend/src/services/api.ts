@@ -1,6 +1,8 @@
 import axios from 'axios'
 import type {
   StrategyAnalyticsFilters,
+  StrategyVariantSummary,
+  StrategyVariantTimeseriesResponse,
   StrategyComparisonSummary,
   StrategyDistributionResponse,
   StrategyTimeseriesResponse,
@@ -272,6 +274,39 @@ export const getStrategyDistributions = async (
   strategy: string
 ): Promise<StrategyDistributionResponse> => {
   const response = await instance.get(`/api/strategy-analytics/distributions/${strategy}`)
+  return response.data
+}
+
+export const getStrategyVariantSummary = async (query: {
+  strategy: string
+  objective?: string
+  top_n?: number
+}): Promise<StrategyVariantSummary> => {
+  const response = await instance.get('/api/strategy-analytics/variants/summary', { params: query })
+  return response.data
+}
+
+export const getStrategyVariantTimeseries = async (query: {
+  strategy: string
+  params_hashes: string
+  benchmark_ticker?: string
+  preset?: string
+  granularity?: 'daily' | 'weekly' | 'monthly'
+  rolling_window?: number
+  objective?: string
+}): Promise<StrategyVariantTimeseriesResponse> => {
+  const response = await instance.get('/api/strategy-analytics/variants/timeseries', { params: query })
+  return response.data
+}
+
+export const getStrategyVariantDistribution = async (
+  strategy: string,
+  params_hash: string,
+  objective?: string
+): Promise<StrategyDistributionResponse> => {
+  const response = await instance.get(`/api/strategy-analytics/variants/distributions/${strategy}`, {
+    params: { params_hash, objective: objective ?? 'balanced' },
+  })
   return response.data
 }
 

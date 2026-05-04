@@ -13,6 +13,7 @@ export interface NewsArticle {
 }
 
 export const getNews = async (ticker: string): Promise<NewsArticle[]> => {
-  const response = await instance.get(`/api/news?ticker=${ticker}`)
+  const q = ticker.trim() ? `?ticker=${encodeURIComponent(ticker.trim())}` : ''
+  const response = await instance.get(`/api/news${q}`)
   return response.data
 }

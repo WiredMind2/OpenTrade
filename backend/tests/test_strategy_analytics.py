@@ -1,8 +1,10 @@
+import json
 import sqlite3
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 
 from backend.main import app
+from backend.utils.backtest_variants import compute_params_hash
 
 
 def _seed_analytics_db(conn: sqlite3.Connection) -> None:
@@ -14,6 +16,11 @@ def _seed_analytics_db(conn: sqlite3.Connection) -> None:
           started_at TEXT,
           completed_at TEXT,
           params JSON,
+          params_hash TEXT,
+          variant_label TEXT,
+          optimizer_mode TEXT,
+          experiment_id TEXT,
+          client_backtest_id TEXT,
           initial_capital REAL,
           final_value REAL,
           total_return REAL,
@@ -75,17 +82,34 @@ def _seed_analytics_db(conn: sqlite3.Connection) -> None:
         ],
     )
 
+    params_a = {"short_window": 5, "long_window": 30, "max_position_pct": 0.1}
+    hash_a = compute_params_hash(params_a)
     conn.execute(
         """
-        INSERT INTO backtest_runs (name, initial_capital, equity_curve, metrics, completed_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO backtest_runs (
+            name, params, params_hash, initial_capital, final_value, equity_curve, metrics, completed_at,
+            total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
+            avg_trade_return, volatility
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "moving_average",
+            json.dumps(params_a),
+            hash_a,
             100000.0,
+            100500.0,
             '[{"date":"2024-01-01","value":100000},{"date":"2024-01-02","value":101000},{"date":"2024-01-03","value":100500}]',
             '{"status":"completed"}',
             "2024-01-03",
+            0.005,
+            0.01,
+            0.5,
+            0.02,
+            0.5,
+            2,
+            35.0,
+            0.15,
         ),
     )
     run_id = conn.execute("SELECT id FROM backtest_runs WHERE name = 'moving_average'").fetchone()[0]
@@ -108,6 +132,71 @@ def _seed_analytics_db(conn: sqlite3.Connection) -> None:
         ],
     )
     conn.commit()
+
+
+def test_strategy_variant_summary_and_timeseries(tmp_path):
+    db_path = tmp_path / "variants.db"
+    conn = sqlite3.connect(db_path)
+    _seed_analytics_db(conn)
+    params_b = {"short_window": 10, "long_window": 50, "max_position_pct": 0.08}
+    hash_b = compute_params_hash(params_b)
+    conn.execute(
+        """
+        INSERT INTO backtest_runs (
+            name, params, params_hash, initial_capital, final_value, equity_curve, metrics, completed_at,
+            total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
+            avg_trade_return, volatility
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "moving_average",
+            json.dumps(params_b),
+            hash_b,
+            100000.0,
+            110000.0,
+            '[{"date":"2024-01-01","value":100000},{"date":"2024-01-02","value":105000},{"date":"2024-01-03","value":110000}]',
+            '{"status":"completed"}',
+            "2024-01-03",
+            0.10,
+            0.12,
+            1.2,
+            0.05,
+            0.6,
+            3,
+            40.0,
+            0.12,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    client = TestClient(app)
+    with patch("backend.main.app_state", {"database_path": str(db_path)}):
+        res = client.get(
+            "/api/strategy-analytics/variants/summary",
+            params={"strategy": "moving_average", "objective": "return", "top_n": 5},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["strategy"] == "moving_average"
+        assert len(body["variants"]) == 2
+        # Higher return variant first
+        assert body["variants"][0]["total_return"] >= body["variants"][1]["total_return"]
+        hashes = ",".join(v["params_hash"] for v in body["variants"])
+        ts = client.get(
+            "/api/strategy-analytics/variants/timeseries",
+            params={
+                "strategy": "moving_average",
+                "params_hashes": hashes,
+                "preset": "MAX",
+                "granularity": "daily",
+                "objective": "return",
+            },
+        )
+        assert ts.status_code == 200
+        tsb = ts.json()
+        assert len(tsb["variant_series"]) == 2
 
 
 def test_strategy_analytics_filters(tmp_path):

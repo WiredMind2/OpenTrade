@@ -53,6 +53,8 @@ export default function Backtests() {
   const [ticker, setTicker] = useState('AAPL')
   const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [maxEvals, setMaxEvals] = useState(24)
+  const [optimizerMode, setOptimizerMode] = useState<'grid' | 'random'>('grid')
+  const [randomSeed, setRandomSeed] = useState<string>('')
   const [trainedParams, setTrainedParams] = useState<Record<string, any> | null>(null)
   const [trainResult, setTrainResult] = useState<StrategyTrainResponse | null>(null)
   const [trainError, setTrainError] = useState<string | null>(null)
@@ -175,6 +177,7 @@ export default function Backtests() {
         setTrainError(check.issues[0]?.message || 'Preflight failed')
         return
       }
+      const seedNum = randomSeed.trim() === '' ? undefined : Number(randomSeed)
       const response = await trainStrategy(strategy, {
         ticker: ticker.trim().toUpperCase(),
         start_date: startDate,
@@ -182,6 +185,8 @@ export default function Backtests() {
         initial_capital: 100000,
         objective: trainObjective,
         max_evals: maxEvals,
+        optimizer_mode: optimizerMode,
+        ...(Number.isFinite(seedNum as number) ? { random_seed: seedNum } : {}),
       })
       if (
         response &&
@@ -305,6 +310,27 @@ export default function Backtests() {
                   max={200}
                   value={maxEvals}
                   onChange={(e) => setMaxEvals(Number(e.target.value || 24))}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Optimizer mode</label>
+                <select
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={optimizerMode}
+                  onChange={(e) => setOptimizerMode(e.target.value as 'grid' | 'random')}
+                >
+                  <option value="grid">Grid (deterministic)</option>
+                  <option value="random">Random (shuffled grid)</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Random seed (optional)</label>
+                <Input
+                  type="number"
+                  value={randomSeed}
+                  onChange={(e) => setRandomSeed(e.target.value)}
+                  placeholder="e.g. 42"
+                  disabled={optimizerMode !== 'random'}
                 />
               </div>
             </div>

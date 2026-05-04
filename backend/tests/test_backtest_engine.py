@@ -16,6 +16,11 @@ def _init_backtest_tables(conn: sqlite3.Connection) -> None:
           started_at TEXT,
           completed_at TEXT,
           params JSON,
+          params_hash TEXT,
+          variant_label TEXT,
+          optimizer_mode TEXT,
+          experiment_id TEXT,
+          client_backtest_id TEXT,
           initial_capital REAL,
           final_value REAL,
           total_return REAL,
@@ -28,6 +33,45 @@ def _init_backtest_tables(conn: sqlite3.Connection) -> None:
           volatility REAL,
           equity_curve TEXT,
           metrics JSON
+        );
+
+        CREATE TABLE strategy_signals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          backtest_id TEXT NOT NULL,
+          backtest_run_id INTEGER,
+          signal_time TEXT NOT NULL,
+          ticker TEXT NOT NULL,
+          target_pct REAL NOT NULL,
+          reason TEXT,
+          confidence REAL,
+          metadata JSON,
+          FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE
+        );
+        CREATE TABLE order_intents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          backtest_id TEXT NOT NULL,
+          backtest_run_id INTEGER,
+          intent_time TEXT NOT NULL,
+          ticker TEXT NOT NULL,
+          side TEXT NOT NULL,
+          notional_delta REAL NOT NULL,
+          reason TEXT,
+          metadata JSON,
+          FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE
+        );
+        CREATE TABLE order_fills (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          backtest_id TEXT NOT NULL,
+          backtest_run_id INTEGER,
+          fill_time TEXT NOT NULL,
+          ticker TEXT NOT NULL,
+          side TEXT NOT NULL,
+          quantity INTEGER NOT NULL,
+          fill_price REAL NOT NULL,
+          fees REAL DEFAULT 0,
+          slippage REAL DEFAULT 0,
+          metadata JSON,
+          FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE
         );
 
         CREATE TABLE trading_model_predictions (

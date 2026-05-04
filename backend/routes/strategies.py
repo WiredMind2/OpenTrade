@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Optional, Tuple
 import sqlite3
 import json
 from datetime import datetime
-import itertools
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List
@@ -36,6 +35,8 @@ class TrainRequest(BaseModel):
     initial_capital: float = Field(default=100000.0, gt=0)
     objective: str = Field(default="balanced", description="sharpe|return|drawdown|balanced")
     max_evals: int = Field(default=24, ge=1, le=200, description="Maximum parameter sets to evaluate")
+    optimizer_mode: str = Field(default="grid", description="grid|random")
+    random_seed: Optional[int] = Field(default=None, description="Seed for random optimizer mode")
 
 
 class ProjectionRequest(BaseModel):
@@ -227,21 +228,6 @@ def _rank_key(metrics: Dict[str, float]) -> Tuple[float, float, float]:
     )
 
 
-def _candidate_grid(strategy_name: str) -> List[Dict[str, Any]]:
-    if strategy_name == "moving_average":
-        return [
-            {"short_window": s, "long_window": l, "max_position_pct": p}
-            for s, l, p in itertools.product([5, 10, 15, 20], [30, 50, 80, 120], [0.05, 0.08, 0.1])
-            if s < l
-        ]
-    if strategy_name == "recursive_forecast":
-        return [
-            {"prediction_threshold": t, "forecast_horizon_days": h, "max_position_pct": p}
-            for t, h, p in itertools.product([0.0005, 0.001, 0.002, 0.003], [1, 3, 5, 7], [0.05, 0.08, 0.1])
-        ]
-    return []
-
-
 def _optimize_signal_strategy(
     strategy: Any,
     strategy_name: str,
@@ -252,8 +238,15 @@ def _optimize_signal_strategy(
     initial_capital: float,
     objective: str,
     max_evals: int,
+    optimizer_mode: str = "grid",
+    random_seed: Optional[int] = None,
 ) -> Dict[str, Any]:
-    from backend.routes.backtest_engine import _run_signal_execution_backtest
+    import uuid
+
+    from backend.routes.backtest_engine import (
+        _run_signal_execution_backtest,
+        persist_optimizer_evaluation_run,
+    )
 
     preflight = StrategyPreflightService(db_path).evaluate(
         strategy_name=strategy_name,
@@ -266,9 +259,15 @@ def _optimize_signal_strategy(
         issue_messages = "; ".join(issue.message for issue in preflight.issues)
         raise HTTPException(status_code=400, detail=f"Preflight failed: {issue_messages}")
 
+    mode = (optimizer_mode or "grid").strip().lower()
+    if mode not in {"grid", "random"}:
+        raise HTTPException(status_code=400, detail="optimizer_mode must be 'grid' or 'random'")
+
     optimizer = StrategyOptimizerEngine(db_path)
-    grid = optimizer.candidate_grid(strategy_name)
-    if not grid:
+    candidates = optimizer.build_candidates(
+        strategy_name, mode, int(max_evals), random_seed=random_seed
+    )
+    if not candidates:
         raise HTTPException(status_code=400, detail=f"Optimization not supported for strategy '{strategy_name}'")
     price_df = optimizer.load_price_frame(ticker=ticker, start_date=start_date, end_date=end_date, lookback_days=365)
     if price_df.empty:
@@ -277,7 +276,8 @@ def _optimize_signal_strategy(
     price_frames = {ticker.upper(): price_df}
     evaluations: List[Dict[str, Any]] = []
     all_missing_model = True
-    for params in grid[:max_evals]:
+    experiment_id = str(uuid.uuid4())
+    for idx, params in enumerate(candidates):
         merged_params = {**params, "execution_mode": "signal"}
         metrics = _run_signal_execution_backtest(
             strategy=strategy,
@@ -302,12 +302,33 @@ def _optimize_signal_strategy(
             "volatility": float(metrics.get("volatility", 0.0) or 0.0),
             "total_trades": int(metrics.get("total_trades", 0) or 0),
         }
+        score = optimizer.score(summary_metrics, objective)
         evaluations.append(
             {
                 "params": params,
                 "metrics": summary_metrics,
-                "score": optimizer.score(summary_metrics, objective),
+                "score": score,
             }
+        )
+        store_params = {
+            **merged_params,
+            "optimizer_mode": mode,
+            "experiment_id": experiment_id,
+            "ticker": ticker.upper(),
+        }
+        persist_optimizer_evaluation_run(
+            db_path,
+            strategy_name=strategy_name,
+            parameters=store_params,
+            client_backtest_id=f"opt_{experiment_id}_{idx}",
+            experiment_id=experiment_id,
+            optimizer_mode=mode,
+            start_date=start_date,
+            end_date=end_date,
+            initial_capital=initial_capital,
+            execution=metrics,
+            objective=objective,
+            evaluation_score=float(score),
         )
 
     if not evaluations:
@@ -336,6 +357,8 @@ def _optimize_signal_strategy(
         "start_date": start_date.date().isoformat(),
         "end_date": end_date.date().isoformat(),
         "objective": objective,
+        "optimizer_mode": mode,
+        "experiment_id": experiment_id,
         "evaluations_run": len(evaluations),
         "best_params": best["params"],
         "best_metrics": best["metrics"],
@@ -355,7 +378,7 @@ async def list_strategies():
         logger.warning("Strategy registry not found in app_state")
         return []
 
-    strategies = registry.list()
+    strategies = registry.list(catalog_only=True)
     logger.info(f"Returning {len(strategies)} strategies", strategies=[s['name'] for s in strategies])
     return strategies
 
@@ -372,6 +395,8 @@ async def get_strategy(name: str):
 
     strategy = registry.get(name)
     if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+    if not getattr(strategy, "catalog_visible", True):
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
 
     # Get base metadata
@@ -454,6 +479,8 @@ async def train_strategy(name: str, request: TrainRequest):
                 initial_capital=float(request.initial_capital),
                 objective=objective,
                 max_evals=int(request.max_evals),
+                optimizer_mode=str(request.optimizer_mode or "grid"),
+                random_seed=request.random_seed,
             )
         except HTTPException:
             raise

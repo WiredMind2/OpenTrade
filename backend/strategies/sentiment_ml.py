@@ -71,6 +71,8 @@ class SentimentMLStrategy(RecursiveForecastStrategy):
             parameters_schema=parameters_schema,
             can_train=True
         )
+        # Kept registered for tests/scripts; omitted from public strategy catalog.
+        self.catalog_visible = False
 
         self.versions = []
         self.current_version = None

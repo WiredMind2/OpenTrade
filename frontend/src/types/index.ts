@@ -397,3 +397,42 @@ export interface StrategyDistributionResponse {
   holding_period_histogram: DistributionBucket[];
   pnl_by_symbol: DistributionBucket[];
 }
+
+export interface StrategyVariantRow {
+  params_hash: string;
+  variant_label?: string | null;
+  strategy: string;
+  representative_run_id: number;
+  run_count: number;
+  total_return: number;
+  annualized_return: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  win_rate: number;
+  total_trades: number;
+  volatility: number;
+  params: Record<string, any>;
+  last_completed_at?: string | null;
+}
+
+export interface StrategyVariantSummary {
+  strategy: string;
+  objective: string;
+  top_n: number;
+  variants: StrategyVariantRow[];
+}
+
+export interface VariantSeriesPayload {
+  params_hash: string;
+  variant_label?: string | null;
+  representative_run_id: number;
+  points: StrategyTimeseriesPoint[];
+}
+
+export interface StrategyVariantTimeseriesResponse {
+  strategy: string;
+  benchmark_ticker: string;
+  granularity: 'daily' | 'weekly' | 'monthly';
+  benchmark_points: StrategyTimeseriesPoint[];
+  variant_series: VariantSeriesPayload[];
+}

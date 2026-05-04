@@ -16,6 +16,9 @@ export interface StrategyTrainRequest {
   initial_capital?: number
   objective?: 'sharpe' | 'return' | 'drawdown' | 'balanced'
   max_evals?: number
+  /** grid = deterministic search order; random = shuffled subset of the same candidate grid */
+  optimizer_mode?: 'grid' | 'random'
+  random_seed?: number | null
 }
 
 export interface StrategyTrainResponse {
@@ -24,6 +27,8 @@ export interface StrategyTrainResponse {
   start_date: string
   end_date: string
   objective: string
+  optimizer_mode?: string
+  experiment_id?: string
   evaluations_run: number
   best_params: Record<string, any>
   best_metrics: {

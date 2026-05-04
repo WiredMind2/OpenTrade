@@ -21,7 +21,12 @@ from backend.schemas import (
     StrategyMetricPoint,
     StrategyTimeseriesPoint,
     StrategyTimeseriesResponse,
+    StrategyVariantRow,
+    StrategyVariantSummaryResponse,
+    StrategyVariantTimeseriesResponse,
+    VariantSeriesPayload,
 )
+from backend.services.strategy_framework import StrategyOptimizerEngine
 
 logger = get_component_logger(__file__)
 router = APIRouter(prefix="/api/strategy-analytics", tags=["Strategy Analytics"])
@@ -316,6 +321,261 @@ def _timeseries_to_points(df: pd.DataFrame) -> List[StrategyTimeseriesPoint]:
     return points
 
 
+def _backtest_runs_columns(conn: sqlite3.Connection) -> set:
+    cur = conn.cursor()
+    return {row[1] for row in cur.execute("PRAGMA table_info(backtest_runs)").fetchall()}
+
+
+def _variant_row_score(engine: StrategyOptimizerEngine, objective: str, row: pd.Series) -> float:
+    return engine.score(
+        {
+            "sharpe_ratio": float(row.get("sharpe_ratio") or 0.0),
+            "total_return": float(row.get("total_return") or 0.0),
+            "max_drawdown": float(row.get("max_drawdown") or 0.0),
+        },
+        objective,
+    )
+
+
+def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str) -> pd.DataFrame:
+    cols = _backtest_runs_columns(conn)
+    if "params_hash" not in cols:
+        return pd.DataFrame()
+    df = pd.read_sql_query(
+        """
+        SELECT id, name, params_hash, variant_label, params, sharpe_ratio, total_return,
+               max_drawdown, win_rate, total_trades, volatility, annualized_return,
+               completed_at, initial_capital, equity_curve, final_value
+        FROM backtest_runs
+        WHERE name = ?
+          AND params_hash IS NOT NULL AND TRIM(params_hash) != ''
+          AND final_value IS NOT NULL
+        """,
+        conn,
+        params=[strategy],
+    )
+    return df
+
+
+def _representative_run_ids_by_hash(
+    df: pd.DataFrame, objective: str, engine: StrategyOptimizerEngine
+) -> Dict[str, int]:
+    """For each params_hash, pick the run id with best objective score (tie-break: higher id)."""
+    out: Dict[str, int] = {}
+    if df.empty:
+        return out
+    for ph, g in df.groupby("params_hash"):
+        g2 = g.copy()
+        g2["_score"] = g2.apply(lambda r: _variant_row_score(engine, objective, r), axis=1)
+        best = g2.sort_values(["_score", "id"], ascending=[False, False]).iloc[0]
+        out[str(ph)] = int(best["id"])
+    return out
+
+
+def _sync_variant_summary(
+    database_path: str,
+    strategy: str,
+    objective: str,
+    top_n: int,
+) -> StrategyVariantSummaryResponse:
+    obj = (objective or "balanced").lower()
+    if obj not in {"sharpe", "return", "drawdown", "balanced"}:
+        raise HTTPException(status_code=400, detail="objective must be sharpe, return, drawdown, or balanced")
+    top_n = max(1, min(int(top_n or 10), 50))
+
+    conn = sqlite3.connect(database_path)
+    try:
+        df = _load_variant_runs_df(conn, strategy)
+        if df.empty:
+            return StrategyVariantSummaryResponse(strategy=strategy, objective=obj, top_n=top_n, variants=[])
+
+        engine = StrategyOptimizerEngine(database_path)
+        id_by_hash = _representative_run_ids_by_hash(df, obj, engine)
+        rep_ids = list(id_by_hash.values())
+        best_rows = df[df["id"].isin(rep_ids)].copy()
+        best_rows["_score"] = best_rows.apply(lambda r: _variant_row_score(engine, obj, r), axis=1)
+        best_rows = best_rows.sort_values(["_score", "id"], ascending=[False, False]).head(top_n)
+
+        counts = df.groupby("params_hash").size()
+
+        variants: List[StrategyVariantRow] = []
+        for _, row in best_rows.iterrows():
+            ph = str(row["params_hash"])
+            params_obj: Dict[str, Any] = {}
+            raw_p = row.get("params")
+            if raw_p and isinstance(raw_p, str):
+                try:
+                    params_obj = json.loads(raw_p)
+                except (json.JSONDecodeError, TypeError):
+                    params_obj = {}
+            elif isinstance(raw_p, dict):
+                params_obj = raw_p
+
+            variants.append(
+                StrategyVariantRow(
+                    params_hash=ph,
+                    variant_label=row.get("variant_label"),
+                    strategy=strategy,
+                    representative_run_id=int(row["id"]),
+                    run_count=int(counts.get(ph, 1)),
+                    total_return=float(row.get("total_return") or 0.0),
+                    annualized_return=float(row.get("annualized_return") or 0.0),
+                    sharpe_ratio=float(row.get("sharpe_ratio") or 0.0),
+                    max_drawdown=float(row.get("max_drawdown") or 0.0),
+                    win_rate=float(row.get("win_rate") or 0.0),
+                    total_trades=int(row.get("total_trades") or 0),
+                    volatility=float(row.get("volatility") or 0.0),
+                    params=params_obj,
+                    last_completed_at=str(row["completed_at"]) if row.get("completed_at") is not None else None,
+                )
+            )
+        return StrategyVariantSummaryResponse(strategy=strategy, objective=obj, top_n=top_n, variants=variants)
+    finally:
+        conn.close()
+
+
+def _normalized_equity_df_from_run(
+    conn: sqlite3.Connection,
+    run_id: int,
+    preset: str,
+    granularity: str,
+) -> pd.DataFrame:
+    row = pd.read_sql_query(
+        "SELECT initial_capital, equity_curve FROM backtest_runs WHERE id = ?",
+        conn,
+        params=[run_id],
+    )
+    if row.empty:
+        return pd.DataFrame(columns=["date", "equity"])
+    ic = float(row.iloc[0]["initial_capital"] or 100000.0)
+    curve_df = _parse_equity_curve(row.iloc[0].get("equity_curve"), ic)
+    if curve_df.empty:
+        return curve_df
+    curve_df = curve_df.copy()
+    curve_df["equity"] = 100.0 * (curve_df["equity"] / curve_df["equity"].iloc[0])
+    curve_df = _apply_preset(curve_df, preset)
+    curve_df = _resample_equity(curve_df, granularity)
+    return curve_df
+
+
+def _sync_variant_timeseries(
+    database_path: str,
+    strategy: str,
+    params_hashes: List[str],
+    benchmark_ticker: str,
+    preset: str,
+    granularity: str,
+    rolling_window: int,
+    objective: str,
+) -> StrategyVariantTimeseriesResponse:
+    obj = (objective or "balanced").lower()
+    if obj not in {"sharpe", "return", "drawdown", "balanced"}:
+        raise HTTPException(status_code=400, detail="objective must be sharpe, return, drawdown, or balanced")
+    if granularity not in ANNUALIZATION:
+        raise HTTPException(status_code=400, detail="Unsupported granularity")
+    if preset not in PRESETS:
+        raise HTTPException(status_code=400, detail="Unsupported preset")
+
+    conn = sqlite3.connect(database_path)
+    try:
+        df = _load_variant_runs_df(conn, strategy)
+        if df.empty or not params_hashes:
+            benchmark_series = _build_benchmark_series(conn, benchmark_ticker, granularity, preset)
+            bp = _timeseries_to_points(benchmark_series) if not benchmark_series.empty else []
+            return StrategyVariantTimeseriesResponse(
+                strategy=strategy,
+                benchmark_ticker=benchmark_ticker.upper(),
+                granularity=granularity,
+                benchmark_points=bp,
+                variant_series=[],
+            )
+
+        engine = StrategyOptimizerEngine(database_path)
+        id_by_hash = _representative_run_ids_by_hash(df, obj, engine)
+        annual_factor = ANNUALIZATION[granularity]
+
+        variant_series: List[VariantSeriesPayload] = []
+        for ph in params_hashes:
+            phs = str(ph).strip()
+            rid = id_by_hash.get(phs)
+            if rid is None:
+                continue
+            meta_rows = df[df["id"] == rid]
+            if meta_rows.empty:
+                continue
+            row_meta = meta_rows.iloc[0]
+            vdf = _normalized_equity_df_from_run(conn, rid, preset, granularity)
+            if vdf.empty or len(vdf) < 2:
+                continue
+            vdf = vdf.copy()
+            vdf["period_return"] = vdf["equity"].pct_change()
+            vdf["drawdown"] = _compute_drawdown(vdf["equity"])
+            vdf["rolling_sharpe"] = _compute_rolling_ratio(
+                vdf["period_return"].fillna(0.0), rolling_window, annual_factor, downside=False
+            )
+            vdf["rolling_sortino"] = _compute_rolling_ratio(
+                vdf["period_return"].fillna(0.0), rolling_window, annual_factor, downside=True
+            )
+            vdf["rolling_volatility"] = (
+                vdf["period_return"].rolling(rolling_window).std() * math.sqrt(annual_factor)
+            )
+            variant_series.append(
+                VariantSeriesPayload(
+                    params_hash=phs,
+                    variant_label=row_meta.get("variant_label"),
+                    representative_run_id=rid,
+                    points=_timeseries_to_points(vdf),
+                )
+            )
+
+        benchmark_series = _build_benchmark_series(conn, benchmark_ticker, granularity, preset)
+        benchmark_points = _timeseries_to_points(benchmark_series) if not benchmark_series.empty else []
+
+        return StrategyVariantTimeseriesResponse(
+            strategy=strategy,
+            benchmark_ticker=benchmark_ticker.upper(),
+            granularity=granularity,
+            benchmark_points=benchmark_points,
+            variant_series=variant_series,
+        )
+    finally:
+        conn.close()
+
+
+def _sync_variant_distribution_for_hash(
+    database_path: str,
+    strategy: str,
+    params_hash: str,
+    objective: str,
+) -> StrategyDistributionResponse:
+    obj = (objective or "balanced").lower()
+    conn = sqlite3.connect(database_path)
+    try:
+        df = _load_variant_runs_df(conn, strategy)
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No variant runs for strategy")
+        subset = df[df["params_hash"].astype(str) == str(params_hash)]
+        if subset.empty:
+            raise HTTPException(status_code=404, detail="Unknown params_hash for this strategy")
+        engine = StrategyOptimizerEngine(database_path)
+        subset = subset.copy()
+        subset["_score"] = subset.apply(lambda r: _variant_row_score(engine, obj, r), axis=1)
+        best = subset.sort_values(["_score", "id"], ascending=[False, False]).iloc[0]
+        rid = int(best["id"])
+        curve_df = _parse_equity_curve(best.get("equity_curve"), float(best.get("initial_capital") or 100000.0))
+        returns = curve_df["equity"].pct_change().dropna() if not curve_df.empty else pd.Series(dtype=float)
+        label = f"{strategy}:{params_hash[:12]}"
+        return StrategyDistributionResponse(
+            strategy=label,
+            returns_histogram=_histogram(returns, 12),
+            trade_pnl_histogram=[],
+            holding_period_histogram=[],
+            pnl_by_symbol=[],
+        )
+    finally:
+        conn.close()
+
+
 def _sync_strategy_analytics_filters(database_path: str) -> StrategyFilterMetadataResponse:
     conn = sqlite3.connect(database_path)
     try:
@@ -532,3 +792,65 @@ async def get_strategy_distributions(strategy: str):
     from backend.main import app_state
 
     return await asyncio.to_thread(_sync_strategy_distributions, app_state["database_path"], strategy)
+
+
+@router.get("/variants/summary", response_model=StrategyVariantSummaryResponse)
+async def get_strategy_variant_summary(
+    strategy: str = Query(..., description="Single strategy name (backtest_runs.name)"),
+    objective: str = Query("balanced", description="sharpe|return|drawdown|balanced"),
+    top_n: int = Query(10, ge=1, le=50),
+):
+    from backend.main import app_state
+
+    return await asyncio.to_thread(
+        _sync_variant_summary,
+        app_state["database_path"],
+        strategy,
+        objective,
+        top_n,
+    )
+
+
+@router.get("/variants/timeseries", response_model=StrategyVariantTimeseriesResponse)
+async def get_strategy_variant_timeseries(
+    strategy: str = Query(...),
+    params_hashes: str = Query(..., description="Comma-separated params_hash values"),
+    benchmark_ticker: str = Query(default="SPY"),
+    preset: str = Query(default="MAX"),
+    granularity: str = Query(default="daily"),
+    rolling_window: int = Query(default=30, ge=5, le=252),
+    objective: str = Query(default="balanced"),
+):
+    from backend.main import app_state
+
+    hashes = [h.strip() for h in params_hashes.split(",") if h.strip()]
+    if not hashes:
+        raise HTTPException(status_code=400, detail="params_hashes is required")
+    return await asyncio.to_thread(
+        _sync_variant_timeseries,
+        app_state["database_path"],
+        strategy,
+        hashes,
+        benchmark_ticker,
+        preset,
+        granularity,
+        rolling_window,
+        objective,
+    )
+
+
+@router.get("/variants/distributions/{strategy}", response_model=StrategyDistributionResponse)
+async def get_strategy_variant_distribution(
+    strategy: str,
+    params_hash: str = Query(..., min_length=8),
+    objective: str = Query(default="balanced"),
+):
+    from backend.main import app_state
+
+    return await asyncio.to_thread(
+        _sync_variant_distribution_for_hash,
+        app_state["database_path"],
+        strategy,
+        params_hash,
+        objective,
+    )

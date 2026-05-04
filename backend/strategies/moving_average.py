@@ -11,6 +11,7 @@ import backtrader as bt
 import numpy as np
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.support import capability_profile, param_float, param_int
 from backend.domain.trading import TargetAllocation
 
 
@@ -19,21 +20,9 @@ class MovingAverageStrategy(BaseStrategy):
 
     def __init__(self):
         parameters_schema = {
-            'short_window': {
-                'type': 'int',
-                'default': 10,
-                'description': 'Short moving average window in days'
-            },
-            'long_window': {
-                'type': 'int',
-                'default': 30,
-                'description': 'Long moving average window in days'
-            },
-            'max_position_pct': {
-                'type': 'float',
-                'default': 0.1,
-                'description': 'Maximum position size as percentage of portfolio value'
-            }
+            "short_window": param_int(10, "Short moving average window in days"),
+            "long_window": param_int(30, "Long moving average window in days"),
+            "max_position_pct": param_float(0.1, "Maximum position size as percentage of portfolio value"),
         }
 
         super().__init__(
@@ -57,14 +46,7 @@ class MovingAverageStrategy(BaseStrategy):
         }
 
     def get_capability_profile(self) -> Dict[str, Any]:
-        return {
-            "requires_predictions": False,
-            "required_prediction_horizons": [],
-            "supports_signal_execution": True,
-            "supports_backtrader_execution": True,
-            "min_history_bars": 120,
-            "supported_objectives": ["balanced", "sharpe", "return", "drawdown"],
-        }
+        return capability_profile(min_history_bars=120)
 
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         """Create and return a Backtrader strategy class with MA crossover logic."""

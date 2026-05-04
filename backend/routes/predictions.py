@@ -389,7 +389,7 @@ async def get_prediction_projections(request: ProjectionSeriesRequest):
     if not registry:
         raise HTTPException(status_code=500, detail="Strategy registry not available")
 
-    all_metadata = registry.list()
+    all_metadata = registry.list(catalog_only=True)
     metadata_by_name = {item.get("name"): item for item in all_metadata}
     strategy_names = request.strategy_names or list(metadata_by_name.keys())
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List
 import itertools
+import random
 import sqlite3
 
 import pandas as pd
@@ -152,6 +153,32 @@ class StrategyOptimizerEngine:
                 for t, h, p in itertools.product([0.0005, 0.001, 0.002, 0.003], [1, 3, 5, 7], [0.05, 0.08, 0.1])
             ]
         return []
+
+    def build_candidates(
+        self,
+        strategy_name: str,
+        optimizer_mode: str,
+        max_evals: int,
+        *,
+        random_seed: int | None = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return up to ``max_evals`` parameter dicts to evaluate.
+
+        ``optimizer_mode``:
+        - ``grid``: deterministic order from the full candidate grid.
+        - ``random``: shuffled subset of the same grid (reproducible if ``random_seed`` is set).
+        """
+        grid = self.candidate_grid(strategy_name)
+        if not grid or max_evals <= 0:
+            return []
+        mode = (optimizer_mode or "grid").strip().lower()
+        if mode == "random":
+            rng = random.Random(random_seed)
+            order = grid[:]
+            rng.shuffle(order)
+            return order[:max_evals]
+        return grid[:max_evals]
 
     @staticmethod
     def score(metrics: Dict[str, float], objective: str) -> float:

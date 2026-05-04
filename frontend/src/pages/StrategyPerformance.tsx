@@ -1,7 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -27,16 +25,17 @@ import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import {
   getStrategyAnalyticsFilters,
-  getStrategyAnalyticsSummary,
-  getStrategyDistributions,
-  getStrategyTimeseries,
+  getStrategyVariantDistribution,
+  getStrategyVariantSummary,
+  getStrategyVariantTimeseries,
 } from '../services/api'
 import type {
   StrategyAnalyticsFilters,
-  StrategyComparisonSummary,
   StrategyDistributionResponse,
-  StrategyMetricPoint,
-  StrategyTimeseriesResponse,
+  StrategyTimeseriesPoint,
+  StrategyVariantRow,
+  StrategyVariantSummary,
+  StrategyVariantTimeseriesResponse,
 } from '../types'
 
 const COLOR_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4']
@@ -46,93 +45,133 @@ const fmtNum = (value: number) => value.toFixed(2)
 const safeNumber = (value: unknown, fallback: number = 0) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback
 
+function shortHash(h: string) {
+  return h.length > 10 ? `${h.slice(0, 6)}…` : h
+}
+
+function monthlyReturnsFromPoints(points: StrategyTimeseriesPoint[]): Record<string, Record<string, number>> {
+  if (!points?.length) return {}
+  const byYm = new Map<string, number>()
+  for (const p of points) {
+    const ym = p.date.slice(0, 7)
+    byYm.set(ym, p.normalized_equity)
+  }
+  const sortedYm = [...byYm.keys()].sort()
+  const heat: Record<string, Record<string, number>> = {}
+  for (let i = 1; i < sortedYm.length; i++) {
+    const prevYm = sortedYm[i - 1]
+    const curYm = sortedYm[i]
+    const prev = byYm.get(prevYm)!
+    const curr = byYm.get(curYm)!
+    const r = (curr - prev) / Math.max(prev, 1e-9)
+    const [y, mo] = curYm.split('-')
+    if (!heat[y]) heat[y] = {}
+    heat[y][mo.padStart(2, '0')] = r
+  }
+  return heat
+}
+
 export default function StrategyPerformance() {
   const [filters, setFilters] = useState<StrategyAnalyticsFilters | null>(null)
-  const [summary, setSummary] = useState<StrategyComparisonSummary | null>(null)
-  const [seriesMap, setSeriesMap] = useState<Record<string, StrategyTimeseriesResponse>>({})
-  const [distMap, setDistMap] = useState<Record<string, StrategyDistributionResponse>>({})
-  const [selectedStrategies, setSelectedStrategies] = useState<string[]>([])
+  const [strategy, setStrategy] = useState('')
+  const [variantSummary, setVariantSummary] = useState<StrategyVariantSummary | null>(null)
+  const [variantTs, setVariantTs] = useState<StrategyVariantTimeseriesResponse | null>(null)
+  const [dist, setDist] = useState<StrategyDistributionResponse | null>(null)
   const [selectedBenchmark, setSelectedBenchmark] = useState('SPY')
   const [selectedPreset, setSelectedPreset] = useState('MAX')
   const [selectedGranularity, setSelectedGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily')
   const [selectedRolling, setSelectedRolling] = useState(30)
-  const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
+  const [objective, setObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
+  const [topN, setTopN] = useState(8)
+  const [activeParamsHash, setActiveParamsHash] = useState<string | null>(null)
   const [analyticsTab, setAnalyticsTab] = useState<'overview' | 'risk' | 'distributions' | 'monthly'>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const strategyOptions = useMemo(() => {
-    const fromFilters = filters?.strategies ?? []
-    const fromSummary = (summary?.metrics ?? []).map((m) => m.strategy)
-    return Array.from(new Set([...fromFilters, ...fromSummary]))
-  }, [filters, summary])
 
-  const loadDashboard = async (seedStrategies?: string[]) => {
+  const loadDashboard = useCallback(async () => {
+    if (!strategy) return
     setLoading(true)
     setError(null)
     try {
-      const allFilters = filters ?? (await getStrategyAnalyticsFilters())
-      if (!filters) {
-        setFilters(allFilters)
+      const summary = await getStrategyVariantSummary({
+        strategy,
+        objective,
+        top_n: topN,
+      })
+      setVariantSummary(summary)
+      const hashes = summary.variants.map((v) => v.params_hash).join(',')
+      if (!hashes) {
+        setVariantTs(null)
+        setActiveParamsHash(null)
+        return
       }
-      const strategies = (seedStrategies && seedStrategies.length > 0 ? seedStrategies : selectedStrategies).slice(0, 6)
-      const summaryData = await getStrategyAnalyticsSummary({
-        strategies,
+      const ts = await getStrategyVariantTimeseries({
+        strategy,
+        params_hashes: hashes,
         benchmark_ticker: selectedBenchmark,
         preset: selectedPreset,
         granularity: selectedGranularity,
         rolling_window: selectedRolling,
+        objective,
       })
-      setSummary(summaryData)
-
-      const seriesEntries = await Promise.all(
-        summaryData.metrics.map(async (metric) => {
-          const [series, distributions] = await Promise.all([
-            getStrategyTimeseries(metric.strategy, {
-              benchmark_ticker: selectedBenchmark,
-              preset: selectedPreset,
-              granularity: selectedGranularity,
-              rolling_window: selectedRolling,
-            }),
-            getStrategyDistributions(metric.strategy),
-          ])
-          return [metric.strategy, { series, distributions }] as const
-        })
-      )
-      const nextSeries: Record<string, StrategyTimeseriesResponse> = {}
-      const nextDist: Record<string, StrategyDistributionResponse> = {}
-      seriesEntries.forEach(([strategy, payload]) => {
-        nextSeries[strategy] = payload.series
-        nextDist[strategy] = payload.distributions
+      setVariantTs(ts)
+      setActiveParamsHash((prev) => {
+        if (prev && summary.variants.some((v) => v.params_hash === prev)) return prev
+        return summary.variants[0]?.params_hash ?? null
       })
-      setSeriesMap(nextSeries)
-      setDistMap(nextDist)
     } catch (e: any) {
-      setError(e.message || 'Failed to load strategy analytics dashboard')
+      setError(e.message || 'Failed to load variant analytics')
+      setVariantSummary(null)
+      setVariantTs(null)
     } finally {
       setLoading(false)
     }
-  }
+  }, [strategy, objective, topN, selectedBenchmark, selectedPreset, selectedGranularity, selectedRolling])
 
   useEffect(() => {
     let mounted = true
     ;(async () => {
       try {
-        const initialFilters = await getStrategyAnalyticsFilters()
+        const f = await getStrategyAnalyticsFilters()
         if (!mounted) return
-        setFilters(initialFilters)
-        const defaults = initialFilters.strategies.slice(0, 3)
-        setSelectedStrategies(defaults)
-        if (initialFilters.benchmarks.includes('SPY')) {
-          setSelectedBenchmark('SPY')
-        } else if (initialFilters.benchmarks.length > 0) {
-          setSelectedBenchmark(initialFilters.benchmarks[0])
+        setFilters(f)
+        const first = f.strategies[0] ?? ''
+        setStrategy(first)
+        if (f.benchmarks.includes('SPY')) setSelectedBenchmark('SPY')
+        else if (f.benchmarks.length > 0) setSelectedBenchmark(f.benchmarks[0])
+        if (first) {
+          setLoading(true)
+          const summary = await getStrategyVariantSummary({
+            strategy: first,
+            objective: 'balanced',
+            top_n: 8,
+          })
+          if (!mounted) return
+          setVariantSummary(summary)
+          const hashes = summary.variants.map((v) => v.params_hash).join(',')
+          if (hashes) {
+            const ts = await getStrategyVariantTimeseries({
+              strategy: first,
+              params_hashes: hashes,
+              benchmark_ticker: f.benchmarks.includes('SPY') ? 'SPY' : f.benchmarks[0],
+              preset: 'MAX',
+              granularity: 'daily',
+              rolling_window: 30,
+              objective: 'balanced',
+            })
+            if (mounted) {
+              setVariantTs(ts)
+              setActiveParamsHash(summary.variants[0]?.params_hash ?? null)
+            }
+          } else if (mounted) {
+            setVariantTs(null)
+            setActiveParamsHash(null)
+          }
         }
-        await loadDashboard(defaults)
       } catch (e: any) {
-        if (mounted) {
-          setError(e.message || 'Failed to initialize strategy analytics')
-          setLoading(false)
-        }
+        if (mounted) setError(e.message || 'Failed to initialize')
+      } finally {
+        if (mounted) setLoading(false)
       }
     })()
     return () => {
@@ -140,58 +179,84 @@ export default function StrategyPerformance() {
     }
   }, [])
 
-  const comparisonCurve = useMemo(() => {
+  useEffect(() => {
+    if (!strategy) return
+    void loadDashboard()
+  }, [strategy, objective, topN, selectedBenchmark, selectedPreset, selectedGranularity, selectedRolling, loadDashboard])
+
+  useEffect(() => {
+    if (analyticsTab !== 'distributions' || !strategy || !activeParamsHash) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const d = await getStrategyVariantDistribution(strategy, activeParamsHash, objective)
+        if (!cancelled) setDist(d)
+      } catch {
+        if (!cancelled) setDist(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [analyticsTab, strategy, activeParamsHash, objective])
+
+  const activeVariant: StrategyVariantRow | undefined = useMemo(
+    () => variantSummary?.variants.find((v) => v.params_hash === activeParamsHash),
+    [variantSummary, activeParamsHash]
+  )
+
+  const activeSeries = useMemo(() => {
+    if (!variantTs || !activeParamsHash) return undefined
+    return variantTs.variant_series.find((s) => s.params_hash === activeParamsHash)
+  }, [variantTs, activeParamsHash])
+
+  const variantComparisonData = useMemo(() => {
+    if (!variantTs?.variant_series?.length) return []
     const byDate: Record<string, any> = {}
-    Object.values(seriesMap).forEach((series) => {
-      series.points.forEach((p) => {
+    variantTs.variant_series.forEach((vs, idx) => {
+      const key = `v_${idx}_${shortHash(vs.params_hash)}`
+      for (const p of vs.points) {
         if (!byDate[p.date]) byDate[p.date] = { date: p.date }
-        byDate[p.date][series.strategy] = safeNumber(p.normalized_equity, 0)
-      })
-      if (series.benchmark_points.length > 0) {
-        series.benchmark_points.forEach((bp) => {
-          if (!byDate[bp.date]) byDate[bp.date] = { date: bp.date }
-          byDate[bp.date][`${selectedBenchmark}_benchmark`] = safeNumber(bp.normalized_equity, 0)
-        })
+        byDate[p.date][key] = safeNumber(p.normalized_equity, 0)
       }
     })
+    if (variantTs.benchmark_points?.length) {
+      const bmKey = `${selectedBenchmark}_benchmark`
+      for (const bp of variantTs.benchmark_points) {
+        if (!byDate[bp.date]) byDate[bp.date] = { date: bp.date }
+        byDate[bp.date][bmKey] = safeNumber(bp.normalized_equity, 0)
+      }
+    }
     return Object.values(byDate).sort((a: any, b: any) => a.date.localeCompare(b.date))
-  }, [seriesMap, selectedBenchmark])
+  }, [variantTs, selectedBenchmark])
+
+  const lineKeys = useMemo(() => {
+    if (!variantTs?.variant_series?.length) return [] as string[]
+    return variantTs.variant_series.map((_, idx) => `v_${idx}_${shortHash(variantTs.variant_series[idx].params_hash)}`)
+  }, [variantTs])
 
   const riskReturnScatter = useMemo(
     () =>
-      (summary?.metrics ?? []).map((m) => ({
-        strategy: m.strategy,
-        risk: safeNumber(m.volatility, 0),
-        return: safeNumber(m.cagr, 0),
+      (variantSummary?.variants ?? []).map((v) => ({
+        name: shortHash(v.params_hash),
+        risk: safeNumber(v.volatility, 0),
+        return: safeNumber(v.total_return, 0),
       })),
-    [summary]
+    [variantSummary]
   )
 
   const rankingBars = useMemo(
     () =>
-      (summary?.metrics ?? []).map((m) => ({
-        strategy: m.strategy,
-        cagr: safeNumber(m.cagr, 0),
-        sharpe: safeNumber(m.sharpe, 0),
-        maxDrawdown: safeNumber(m.max_drawdown, 0),
+      (variantSummary?.variants ?? []).map((v, idx) => ({
+        name: shortHash(v.params_hash),
+        sharpe: safeNumber(v.sharpe_ratio, 0),
+        total_return: safeNumber(v.total_return, 0),
+        maxDrawdown: safeNumber(v.max_drawdown, 0),
+        color: COLOR_PALETTE[idx % COLOR_PALETTE.length],
       })),
-    [summary]
+    [variantSummary]
   )
-  useEffect(() => {
-    const firstStrategy = summary?.metrics[0]?.strategy ?? null
-    if (!firstStrategy) {
-      setActiveStrategy(null)
-      return
-    }
-    if (!activeStrategy || !summary?.metrics.some((m) => m.strategy === activeStrategy)) {
-      setActiveStrategy(firstStrategy)
-    }
-  }, [summary, activeStrategy])
 
-  const activeMetric: StrategyMetricPoint | undefined =
-    summary?.metrics.find((m) => m.strategy === activeStrategy) ?? summary?.metrics[0]
-  const activeDist = activeMetric ? distMap[activeMetric.strategy] : undefined
-  const activeSeries = activeMetric ? seriesMap[activeMetric.strategy] : undefined
   const rollingSeries = useMemo(
     () =>
       (activeSeries?.points ?? []).map((p) => ({
@@ -202,24 +267,15 @@ export default function StrategyPerformance() {
     [activeSeries]
   )
 
-  const toggleStrategy = (strategy: string) => {
-    setSelectedStrategies((prev) =>
-      prev.includes(strategy) ? prev.filter((s) => s !== strategy) : [...prev, strategy].slice(0, 6)
-    )
-  }
-
-  useEffect(() => {
-    if (!filters) return
-    if (selectedStrategies.length === 0) return
-    void loadDashboard()
-  }, [selectedStrategies, selectedBenchmark, selectedPreset, selectedGranularity, selectedRolling])
+  const monthlyMatrix = useMemo(() => monthlyReturnsFromPoints(activeSeries?.points ?? []), [activeSeries])
 
   return (
     <div className="space-y-6">
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Strategy Performance</h2>
         <p className="text-muted-foreground">
-          Advanced cross-strategy analytics with risk, return, trade quality, and benchmark-relative insights.
+          Compare the best parameter variants for one strategy at a time (ranked by objective). Run backtests or train
+          with optimization to populate variants.
         </p>
       </div>
 
@@ -227,65 +283,115 @@ export default function StrategyPerformance() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Layers3 className="h-5 w-5 text-primary" />
-            Comparison Controls
+            Variant comparison controls
           </CardTitle>
-          <CardDescription>Choose strategy set, benchmark, preset range, granularity, and rolling window.</CardDescription>
+          <CardDescription>
+            Pick a strategy, objective used for ranking, how many top variants to show, benchmark, preset, granularity,
+            and rolling window for charts.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <Select value={selectedBenchmark} onValueChange={setSelectedBenchmark}>
-              <SelectTrigger><SelectValue placeholder="Benchmark" /></SelectTrigger>
-              <SelectContent>
-                {(filters?.benchmarks ?? []).map((b) => (
-                  <SelectItem key={b} value={b}>{b}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Strategy</label>
+              <Select value={strategy} onValueChange={setStrategy}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Strategy" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(filters?.strategies ?? []).map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Objective (ranking)</label>
+              <Select value={objective} onValueChange={(v) => setObjective(v as typeof objective)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="balanced">Balanced</SelectItem>
+                  <SelectItem value="sharpe">Sharpe</SelectItem>
+                  <SelectItem value="return">Return</SelectItem>
+                  <SelectItem value="drawdown">Drawdown</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Top N variants</label>
+              <Select value={String(topN)} onValueChange={(v) => setTopN(Number(v))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[3, 5, 8, 10, 15].map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Benchmark</label>
+              <Select value={selectedBenchmark} onValueChange={setSelectedBenchmark}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Benchmark" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(filters?.benchmarks ?? []).map((b) => (
+                    <SelectItem key={b} value={b}>
+                      {b}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Select value={selectedPreset} onValueChange={setSelectedPreset}>
-              <SelectTrigger><SelectValue placeholder="Preset" /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Preset" />
+              </SelectTrigger>
               <SelectContent>
                 {(filters?.available_presets ?? []).map((p) => (
-                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                  <SelectItem key={p} value={p}>
+                    {p}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <Select value={selectedGranularity} onValueChange={(v) => setSelectedGranularity(v as any)}>
-              <SelectTrigger><SelectValue placeholder="Granularity" /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Granularity" />
+              </SelectTrigger>
               <SelectContent>
                 {(filters?.available_granularities ?? []).map((g) => (
-                  <SelectItem key={g} value={g}>{g}</SelectItem>
+                  <SelectItem key={g} value={g}>
+                    {g}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <Select value={String(selectedRolling)} onValueChange={(v) => setSelectedRolling(Number(v))}>
-              <SelectTrigger><SelectValue placeholder="Rolling window" /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Rolling window" />
+              </SelectTrigger>
               <SelectContent>
                 {(filters?.rolling_windows ?? []).map((r) => (
-                  <SelectItem key={r} value={String(r)}>{r} periods</SelectItem>
+                  <SelectItem key={r} value={String(r)}>
+                    {r} periods
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            {strategyOptions.map((strategy) => (
-              <Button
-                key={strategy}
-                variant={selectedStrategies.includes(strategy) ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => toggleStrategy(strategy)}
-              >
-                {strategy}
-              </Button>
-            ))}
-          </div>
-          {strategyOptions.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No strategy names discovered yet. Run at least one backtest, then click refresh.
-            </p>
-          )}
-          <Button onClick={() => loadDashboard()} disabled={loading}>
-            {loading ? 'Refreshing...' : 'Refresh Analytics'}
+          <Button variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
+            {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         </CardContent>
       </Card>
@@ -298,29 +404,32 @@ export default function StrategyPerformance() {
 
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {[1, 2, 3, 4].map((id) => <Skeleton key={id} className="h-56 w-full" />)}
+          {[1, 2, 3, 4].map((id) => (
+            <Skeleton key={id} className="h-56 w-full" />
+          ))}
         </div>
       ) : (
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Active Strategy</CardTitle>
-              <CardDescription>Select which strategy drives the detailed panels below.</CardDescription>
+              <CardTitle>Active variant</CardTitle>
+              <CardDescription>Used for rolling Sharpe/Sortino, monthly view, and distributions.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
-              {(summary?.metrics ?? []).length === 0 ? (
+              {(variantSummary?.variants ?? []).length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No strategy metrics returned yet for the current filters.
+                  No parameter variants found yet. Run optimization (Train) or backtests with different parameters so
+                  rows get a params_hash.
                 </p>
               ) : (
-                (summary?.metrics ?? []).map((metric) => (
+                (variantSummary?.variants ?? []).map((v) => (
                   <Button
-                    key={metric.strategy}
+                    key={v.params_hash}
                     size="sm"
-                    variant={activeMetric?.strategy === metric.strategy ? 'default' : 'outline'}
-                    onClick={() => setActiveStrategy(metric.strategy)}
+                    variant={activeParamsHash === v.params_hash ? 'default' : 'outline'}
+                    onClick={() => setActiveParamsHash(v.params_hash)}
                   >
-                    {metric.strategy}
+                    {shortHash(v.params_hash)}
                   </Button>
                 ))
               )}
@@ -328,54 +437,76 @@ export default function StrategyPerformance() {
           </Card>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card><CardHeader><CardDescription>Total Return</CardDescription><CardTitle className="text-2xl">{activeMetric ? fmtPct(activeMetric.total_return) : '-'}</CardTitle></CardHeader></Card>
-            <Card><CardHeader><CardDescription>Sharpe / Sortino</CardDescription><CardTitle className="text-2xl">{activeMetric ? `${fmtNum(activeMetric.sharpe)} / ${fmtNum(activeMetric.sortino)}` : '-'}</CardTitle></CardHeader></Card>
-            <Card><CardHeader><CardDescription>Max Drawdown</CardDescription><CardTitle className="text-2xl">{activeMetric ? fmtPct(activeMetric.max_drawdown) : '-'}</CardTitle></CardHeader></Card>
-            <Card><CardHeader><CardDescription>Win Rate</CardDescription><CardTitle className="text-2xl">{activeMetric ? fmtPct(activeMetric.win_rate) : '-'}</CardTitle></CardHeader></Card>
+            <Card>
+              <CardHeader>
+                <CardDescription>Total return</CardDescription>
+                <CardTitle className="text-2xl">
+                  {activeVariant ? fmtPct(activeVariant.total_return) : '-'}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardDescription>Sharpe (variant)</CardDescription>
+                <CardTitle className="text-2xl">
+                  {activeVariant ? fmtNum(activeVariant.sharpe_ratio) : '-'}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardDescription>Max drawdown</CardDescription>
+                <CardTitle className="text-2xl">
+                  {activeVariant ? fmtPct(activeVariant.max_drawdown) : '-'}
+                </CardTitle>
+              </CardHeader>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardDescription>Win rate</CardDescription>
+                <CardTitle className="text-2xl">{activeVariant ? fmtPct(activeVariant.win_rate) : '-'}</CardTitle>
+              </CardHeader>
+            </Card>
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle>Strategy Comparison Grid</CardTitle>
-              <CardDescription>All key fields side-by-side for selected strategies.</CardDescription>
+              <CardTitle>Variant leaderboard</CardTitle>
+              <CardDescription>Top parameter sets for {strategy || '—'} using objective {objective}.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="overflow-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border">
-                      <th className="text-left py-2 pr-3">Strategy</th>
+                      <th className="text-left py-2 pr-3">Variant</th>
                       <th className="text-right py-2 px-2">Runs</th>
                       <th className="text-right py-2 px-2">Trades</th>
-                      <th className="text-right py-2 px-2">Total Return</th>
-                      <th className="text-right py-2 px-2">CAGR</th>
+                      <th className="text-right py-2 px-2">Return</th>
+                      <th className="text-right py-2 px-2">Ann. return</th>
                       <th className="text-right py-2 px-2">Sharpe</th>
-                      <th className="text-right py-2 px-2">Sortino</th>
-                      <th className="text-right py-2 px-2">Calmar</th>
-                      <th className="text-right py-2 px-2">Volatility</th>
+                      <th className="text-right py-2 px-2">Vol</th>
                       <th className="text-right py-2 px-2">Max DD</th>
-                      <th className="text-right py-2 px-2">Win Rate</th>
-                      <th className="text-right py-2 px-2">Profit Factor</th>
+                      <th className="text-right py-2 px-2">Win rate</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(summary?.metrics ?? []).map((metric) => (
+                    {(variantSummary?.variants ?? []).map((v) => (
                       <tr
-                        key={metric.strategy}
-                        className={`border-b border-border/50 ${activeMetric?.strategy === metric.strategy ? 'bg-muted/30' : ''}`}
+                        key={v.params_hash}
+                        className={`border-b border-border/50 ${
+                          activeParamsHash === v.params_hash ? 'bg-muted/30' : ''
+                        }`}
                       >
-                        <td className="py-2 pr-3 font-medium">{metric.strategy}</td>
-                        <td className="text-right py-2 px-2">{metric.run_count}</td>
-                        <td className="text-right py-2 px-2">{metric.total_trades}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(metric.total_return)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(metric.cagr)}</td>
-                        <td className="text-right py-2 px-2">{fmtNum(metric.sharpe)}</td>
-                        <td className="text-right py-2 px-2">{fmtNum(metric.sortino)}</td>
-                        <td className="text-right py-2 px-2">{fmtNum(metric.calmar)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(metric.volatility)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(metric.max_drawdown)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(metric.win_rate)}</td>
-                        <td className="text-right py-2 px-2">{fmtNum(metric.profit_factor)}</td>
+                        <td className="py-2 pr-3 font-mono text-xs">{shortHash(v.params_hash)}</td>
+                        <td className="text-right py-2 px-2">{v.run_count}</td>
+                        <td className="text-right py-2 px-2">{v.total_trades}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(v.total_return)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(v.annualized_return)}</td>
+                        <td className="text-right py-2 px-2">{fmtNum(v.sharpe_ratio)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(v.volatility)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(v.max_drawdown)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(v.win_rate)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -394,149 +525,161 @@ export default function StrategyPerformance() {
 
             <TabsContent value="overview" className="mt-4">
               {analyticsTab === 'overview' && (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5 text-primary" />Normalized Equity Comparison</CardTitle>
-                  </CardHeader>
-                  <CardContent className="h-72 min-w-0">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={comparisonCurve}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="date" hide />
-                        <YAxis />
-                        <Tooltip />
-                        <Legend />
-                        {(summary?.metrics ?? []).map((m, idx) => (
-                          <Line key={m.strategy} dataKey={m.strategy} stroke={COLOR_PALETTE[idx % COLOR_PALETTE.length]} dot={false} strokeWidth={2} />
-                        ))}
-                        <Line dataKey={`${selectedBenchmark}_benchmark`} stroke="#94a3b8" strokeDasharray="6 3" dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <TrendingUp className="h-5 w-5 text-primary" />
+                        Normalized equity (variants + benchmark)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="h-72 min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={variantComparisonData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="date" hide />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          {lineKeys.map((k, idx) => (
+                            <Line
+                              key={k}
+                              dataKey={k}
+                              stroke={COLOR_PALETTE[idx % COLOR_PALETTE.length]}
+                              dot={false}
+                              strokeWidth={2}
+                            />
+                          ))}
+                          <Line
+                            dataKey={`${selectedBenchmark}_benchmark`}
+                            stroke="#94a3b8"
+                            strokeDasharray="6 3"
+                            dot={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Gauge className="h-5 w-5 text-primary" />Risk vs Return Scatter</CardTitle>
-                  </CardHeader>
-                  <CardContent className="h-72 min-w-0">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ScatterChart>
-                        <CartesianGrid />
-                        <XAxis type="number" dataKey="risk" name="Volatility" />
-                        <YAxis type="number" dataKey="return" name="CAGR" />
-                        <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                        <Scatter data={riskReturnScatter} fill="#3b82f6" name="Strategies" />
-                      </ScatterChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </div>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Gauge className="h-5 w-5 text-primary" />
+                        Risk vs return (variants)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="h-72 min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ScatterChart>
+                          <CartesianGrid />
+                          <XAxis type="number" dataKey="risk" name="Volatility" />
+                          <YAxis type="number" dataKey="return" name="Total return" />
+                          <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                          <Scatter data={riskReturnScatter} fill="#3b82f6" />
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                </div>
               )}
             </TabsContent>
 
             <TabsContent value="risk" className="mt-4">
               {analyticsTab === 'risk' && (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5 text-primary" />Rolling Sharpe & Sortino</CardTitle>
-                  </CardHeader>
-                  <CardContent className="h-72 min-w-0">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={rollingSeries}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="date" hide />
-                        <YAxis />
-                        <Tooltip />
-                        <Line type="monotone" dataKey="rolling_sharpe" stroke="#3b82f6" dot={false} strokeWidth={2} />
-                        <Line type="monotone" dataKey="rolling_sortino" stroke="#10b981" dot={false} strokeWidth={2} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Activity className="h-5 w-5 text-primary" />
+                        Rolling Sharpe & Sortino (active variant)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="h-72 min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={rollingSeries}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="date" hide />
+                          <YAxis />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="rolling_sharpe" stroke="#3b82f6" dot={false} strokeWidth={2} />
+                          <Line
+                            type="monotone"
+                            dataKey="rolling_sortino"
+                            stroke="#10b981"
+                            dot={false}
+                            strokeWidth={2}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Target className="h-5 w-5 text-primary" />Metric Ranking</CardTitle>
-                  </CardHeader>
-                  <CardContent className="h-72 min-w-0">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={rankingBars}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="strategy" />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="cagr" fill="#3b82f6" />
-                        <Bar dataKey="sharpe" fill="#10b981" />
-                        <Line dataKey="maxDrawdown" stroke="#ef4444" dot={false} />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </div>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Target className="h-5 w-5 text-primary" />
+                        Variant ranking snapshot
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="h-72 min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={rankingBars}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis />
+                          <Tooltip />
+                          <Bar dataKey="sharpe" fill="#3b82f6" />
+                          <Bar dataKey="total_return" fill="#10b981" />
+                          <Line type="monotone" dataKey="maxDrawdown" stroke="#ef4444" dot={false} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                </div>
               )}
             </TabsContent>
 
             <TabsContent value="distributions" className="mt-4">
               {analyticsTab === 'distributions' && (
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                <Card>
-                  <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="h-5 w-5 text-primary" />Returns Distribution</CardTitle></CardHeader>
-                  <CardContent className="h-64 min-w-0">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={activeDist?.returns_histogram ?? []}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="bucket" hide />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="count" fill="#6366f1" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader><CardTitle>Trade PnL Distribution</CardTitle></CardHeader>
-                  <CardContent className="h-64 min-w-0">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={activeDist?.trade_pnl_histogram ?? []}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="bucket" hide />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="count" fill="#0ea5e9" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader><CardTitle>PnL Contribution by Symbol</CardTitle></CardHeader>
-                  <CardContent className="h-64 min-w-0">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={activeDist?.pnl_by_symbol ?? []}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="bucket" />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="value">
-                          {(activeDist?.pnl_by_symbol ?? []).map((_, idx) => (
-                            <Cell key={idx} fill={COLOR_PALETTE[idx % COLOR_PALETTE.length]} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </div>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <BarChart3 className="h-5 w-5 text-primary" />
+                        Returns distribution (active variant)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="h-64 min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={dist?.returns_histogram ?? []}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="bucket" hide />
+                          <YAxis />
+                          <Tooltip />
+                          <Bar dataKey="count" fill="#6366f1" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Params (active)</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <pre className="text-xs overflow-auto max-h-64 bg-muted/40 p-3 rounded-md">
+                        {JSON.stringify(activeVariant?.params ?? {}, null, 2)}
+                      </pre>
+                    </CardContent>
+                  </Card>
+                </div>
               )}
             </TabsContent>
 
             <TabsContent value="monthly" className="mt-4">
               <Card>
                 <CardHeader>
-                  <CardTitle>Monthly Returns Matrix</CardTitle>
-                  <CardDescription>Heatmap-style table for rapid monthly seasonality comparison.</CardDescription>
+                  <CardTitle>Monthly returns (active variant)</CardTitle>
+                  <CardDescription>Approximated from normalized equity curve.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-auto">
@@ -545,12 +688,14 @@ export default function StrategyPerformance() {
                         <tr className="border-b border-border">
                           <th className="text-left py-2 pr-3">Year</th>
                           {Array.from({ length: 12 }, (_, i) => (
-                            <th key={i} className="text-right py-2 px-2">{String(i + 1).padStart(2, '0')}</th>
+                            <th key={i} className="text-right py-2 px-2">
+                              {String(i + 1).padStart(2, '0')}
+                            </th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {Object.entries(activeSeries?.monthly_returns ?? {}).map(([year, months]) => (
+                        {Object.entries(monthlyMatrix).map(([year, months]) => (
                           <tr key={year} className="border-b border-border/50">
                             <td className="py-2 pr-3 font-medium">{year}</td>
                             {Array.from({ length: 12 }, (_, i) => {

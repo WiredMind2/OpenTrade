@@ -85,19 +85,27 @@ class StrategyRegistry:
         with self._lock:
             return self._strategies.get(name)
 
-    def list(self) -> List[Dict[str, Any]]:
-        """List all registered strategies as metadata dicts."""
+    def list(self, *, catalog_only: bool = False) -> List[Dict[str, Any]]:
+        """List all registered strategies as metadata dicts.
+
+        When ``catalog_only`` is True, strategies with ``catalog_visible=False`` are omitted
+        (hidden from the UI / public catalog while remaining registered).
+        """
         with self._lock:
-            return [
-                {
-                    'name': strategy.name,
-                    'description': strategy.description,
-                    'type': strategy.type,
-                    'parameters_schema': strategy.parameters_schema,
-                    'can_train': strategy.can_train
-                }
-                for strategy in self._strategies.values()
-            ]
+            items: List[Dict[str, Any]] = []
+            for strategy in self._strategies.values():
+                if catalog_only and not getattr(strategy, "catalog_visible", True):
+                    continue
+                items.append(
+                    {
+                        "name": strategy.name,
+                        "description": strategy.description,
+                        "type": strategy.type,
+                        "parameters_schema": strategy.parameters_schema,
+                        "can_train": strategy.can_train,
+                    }
+                )
+            return items
 
     def discover(self, strategies_pkg_dir: Path) -> None:
         """Discover and register all strategies from the strategies package directory."""

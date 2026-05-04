@@ -31,14 +31,14 @@ async def run_backtest(
 
     try:
         config = get_config()
+        # Validate date range before touching registry (cheap guard; keeps tests deterministic).
+        if (request.end_date - request.start_date).days > 365 * 5:  # Max 5 years
+            raise HTTPException(status_code=400, detail="Date range too large (max 5 years)")
+
         registry = app_state.get("strategy_registry")
         strategy = registry.get(request.strategy_name) if registry else None
         if not strategy:
             raise HTTPException(status_code=404, detail=f"Strategy '{request.strategy_name}' not found")
-
-        # Validate date range
-        if (request.end_date - request.start_date).days > 365 * 5:  # Max 5 years
-            raise HTTPException(status_code=400, detail="Date range too large (max 5 years)")
 
         ticker = str((request.parameters or {}).get("ticker", "AAPL")).upper()
         preflight = StrategyPreflightService(app_state.get("database_path") or config.database.path).evaluate(

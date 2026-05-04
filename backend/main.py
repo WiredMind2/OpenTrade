@@ -43,6 +43,7 @@ from backend.routes.strategies import router as strategies_router
 from backend.routes.strategy_analytics import router as strategy_analytics_router
 from backend.routes.news import router as news_router
 from backend.ml.storage import ensure_ml_schema
+from backend.db.variant_schema import ensure_variant_schema
 
 
 
@@ -213,6 +214,9 @@ async def init_database():
 
             # Validate/patch ML schema expectations (adds missing columns if needed)
             ensure_ml_schema(conn)
+
+            # Variant / params_hash columns and artifact FK backfill
+            ensure_variant_schema(conn)
 
             # Test connection
             conn.execute("SELECT 1")

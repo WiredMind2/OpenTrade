@@ -413,3 +413,46 @@ class StrategyDistributionResponse(BaseModel):
     trade_pnl_histogram: List[DistributionBucket]
     holding_period_histogram: List[DistributionBucket]
     pnl_by_symbol: List[DistributionBucket]
+
+
+class StrategyVariantRow(BaseModel):
+    """One parameter-set variant (best run among same params_hash)."""
+    params_hash: str
+    variant_label: Optional[str] = None
+    strategy: str
+    representative_run_id: int
+    run_count: int
+    total_return: float
+    annualized_return: float
+    sharpe_ratio: float
+    max_drawdown: float
+    win_rate: float
+    total_trades: int
+    volatility: float
+    params: Dict[str, Any] = Field(default_factory=dict)
+    last_completed_at: Optional[str] = None
+
+
+class StrategyVariantSummaryResponse(BaseModel):
+    """Top-N parameter variants for a single strategy."""
+    strategy: str
+    objective: str
+    top_n: int
+    variants: List[StrategyVariantRow]
+
+
+class VariantSeriesPayload(BaseModel):
+    """Equity series for one variant (for multi-line charts)."""
+    params_hash: str
+    variant_label: Optional[str] = None
+    representative_run_id: int
+    points: List[StrategyTimeseriesPoint]
+
+
+class StrategyVariantTimeseriesResponse(BaseModel):
+    """Benchmark + multiple variant curves for Performance tab."""
+    strategy: str
+    benchmark_ticker: str
+    granularity: str
+    benchmark_points: List[StrategyTimeseriesPoint]
+    variant_series: List[VariantSeriesPayload]

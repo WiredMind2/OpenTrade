@@ -36,13 +36,79 @@ IMPACT_KEYWORDS = {
 }
 
 
-def get_db_connection():
-    """Get a database connection."""
+def _resolve_database_path() -> str:
+    """Same DB file as the rest of the API (see ``main.app_state``)."""
+    from backend.main import app_state
+
+    db_path = app_state.get("database_path")
+    if db_path:
+        return str(db_path)
     config = get_config()
-    db_path = os.path.abspath(
+    return os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", config.database.path)
     )
-    return sqlite3.connect(db_path)
+
+
+def _ticker_text_pattern(ticker_sym: str) -> re.Pattern:
+    """Word-boundary / $ / parens rules aligned with ``map_articles_to_tickers``."""
+    t = str(ticker_sym).upper()
+    if len(t) == 1:
+        return re.compile(r"(\$" + re.escape(t) + r"\b)|\(" + re.escape(t) + r"\)")
+    return re.compile(
+        r"\b"
+        + re.escape(t)
+        + r"\b|\$"
+        + re.escape(t)
+        + r"\b|\("
+        + re.escape(t)
+        + r"\)"
+    )
+
+
+def _article_matches_ticker(
+    title: str | None,
+    content: str | None,
+    ticker_upper: str,
+    pattern: re.Pattern,
+    company_name: str | None,
+) -> bool:
+    raw = " ".join([x for x in [title or "", content or ""] if x])
+    if not raw:
+        return False
+    if pattern.search(raw):
+        return True
+    if company_name and company_name.lower() in raw.lower():
+        return True
+    return False
+
+
+def _fetch_recent_articles_for_ticker_fallback(
+    conn: sqlite3.Connection,
+    ticker_upper: str,
+    limit: int,
+    *,
+    company_name: str | None,
+) -> list:
+    """When ``article_ticker`` is empty, match recent articles by title/content heuristics."""
+    pattern = _ticker_text_pattern(ticker_upper)
+    cur = conn.execute(
+        """
+        SELECT id, title, content, source, url, canonical_timestamp
+        FROM articles
+        ORDER BY datetime(canonical_timestamp) DESC
+        LIMIT 800
+        """
+    )
+    rows = cur.fetchall()
+    out: list = []
+    for row in rows:
+        if _article_matches_ticker(
+            row["title"], row["content"], ticker_upper, pattern, company_name
+        ):
+            out.append(row)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def analyze_sentiment(text: str) -> str:
@@ -75,25 +141,30 @@ def analyze_impact(text: str) -> str:
 
 @router.get("/")
 async def get_news(
-    ticker: str = Query(None, description="Filter by ticker symbol"),
-    limit: int = Query(50, description="Maximum number of results to return")
+    ticker: str | None = Query(None, description="Filter by ticker symbol"),
+    limit: int = Query(50, description="Maximum number of results to return"),
 ):
     """
     Get news articles.
-    
-    - If ticker provided: return articles filtered by ticker
+
+    - If ticker provided: prefer ``article_ticker`` mappings; if none exist (common when
+      ingest ran without ``map_articles_to_tickers``), fall back to matching title/content
+      with the same heuristics as the mapper script.
     - If no ticker: return latest global articles
     """
     logger = get_component_logger(__file__)
-    
-    conn = get_db_connection()
+
+    db_path = _resolve_database_path()
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    
+
     try:
-        if ticker:
-            # Get articles for specific ticker
+        t = (ticker or "").strip()
+        rows: list = []
+        if t:
+            tu = t.upper()
             query = """
-                SELECT 
+                SELECT
                     at.ticker,
                     a.title,
                     a.content as summary,
@@ -107,11 +178,31 @@ async def get_news(
                 ORDER BY a.canonical_timestamp DESC
                 LIMIT ?
             """
-            cursor = conn.execute(query, (ticker.upper(), limit))
+            rows = list(conn.execute(query, (tu, limit)).fetchall())
+            if not rows:
+                name_row = conn.execute(
+                    "SELECT name FROM tickers WHERE ticker = ?",
+                    (tu,),
+                ).fetchone()
+                company_name = str(name_row["name"]) if name_row and name_row["name"] else None
+                fb = _fetch_recent_articles_for_ticker_fallback(
+                    conn, tu, limit, company_name=company_name
+                )
+                rows = [
+                    {
+                        "ticker": tu,
+                        "title": r["title"],
+                        "summary": r["content"],
+                        "source": r["source"],
+                        "url": r["url"],
+                        "published_at": r["canonical_timestamp"],
+                        "relevance_score": 0.5,
+                    }
+                    for r in fb
+                ]
         else:
-            # Get latest global articles
             query = """
-                SELECT 
+                SELECT
                     at.ticker,
                     a.title,
                     a.content as summary,
@@ -124,22 +215,20 @@ async def get_news(
                 ORDER BY a.canonical_timestamp DESC
                 LIMIT ?
             """
-            cursor = conn.execute(query, (limit,))
-        
-        rows = cursor.fetchall()
-        
-        # Convert Row objects to dicts with sentiment analysis
+            rows = list(conn.execute(query, (limit,)).fetchall())
+
         results = []
         for row in rows:
-            article = dict(row)
-            # Combine title and summary for sentiment analysis
+            article = dict(row) if isinstance(row, sqlite3.Row) else row
+            if article.get("relevance_score") is None:
+                article["relevance_score"] = 0.0
             full_text = f"{article.get('title', '')} {article.get('summary', '')}"
-            article['sentiment'] = analyze_sentiment(full_text)
-            article['impact'] = analyze_impact(full_text)
+            article["sentiment"] = analyze_sentiment(full_text)
+            article["impact"] = analyze_impact(full_text)
             results.append(article)
-        
+
         return results
-        
+
     except Exception as e:
         logger.error(f"Error fetching news: {e}")
         raise

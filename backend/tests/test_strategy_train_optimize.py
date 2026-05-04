@@ -22,6 +22,34 @@ def _seed_optimize_db(path):
     conn = sqlite3.connect(path)
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS backtest_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT,
+          started_at TEXT,
+          completed_at TEXT,
+          params JSON,
+          params_hash TEXT,
+          variant_label TEXT,
+          optimizer_mode TEXT,
+          experiment_id TEXT,
+          client_backtest_id TEXT,
+          initial_capital REAL,
+          final_value REAL,
+          total_return REAL,
+          annualized_return REAL,
+          sharpe_ratio REAL,
+          max_drawdown REAL,
+          win_rate REAL,
+          total_trades INTEGER,
+          avg_trade_return REAL,
+          volatility REAL,
+          equity_curve TEXT,
+          metrics JSON
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE price_daily (
           ticker TEXT,
           date TEXT,
