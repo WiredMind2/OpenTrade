@@ -589,6 +589,77 @@ class TestIntegrationWorkflow:
         assert "detail" in data
         assert "ticker is required for strategy parameter training" in data["detail"]
 
+    def _seed_multi_ticker_daily_prices(self, days: int = 420) -> None:
+        """Seed enough calendar days to satisfy strategy preflight (e.g. 120+ bars in-range)."""
+        conn = sqlite3.connect(self.temp_db.name)
+        start = datetime(2024, 1, 1)
+        for sym, bias in (("AAPL", 0.0), ("MSFT", 20.0), ("GOOGL", 40.0)):
+            for i in range(days):
+                day = (start + timedelta(days=i)).date().isoformat()
+                c = 80.0 + i * 0.15 + bias
+                conn.execute(
+                    """
+                    INSERT INTO price_daily
+                    (ticker, date, open, high, low, close, adjusted_close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (sym, day, c, c * 1.01, c * 0.99, c, c, 1000),
+                )
+        conn.commit()
+        conn.close()
+
+    def test_strategy_train_mean_reversion_signal_optimize_integration(self):
+        """Mimics UI: POST /api/strategies/mean_reversion/train with dates and ticker."""
+        self._seed_multi_ticker_daily_prices()
+        response = self.client.post(
+            "/api/strategies/mean_reversion/train",
+            json={
+                "ticker": "AAPL",
+                "start_date": "2024-06-01T00:00:00",
+                "end_date": "2025-03-01T00:00:00",
+                "objective": "balanced",
+                "max_evals": 6,
+            },
+            headers=self.auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["strategy"] == "mean_reversion"
+        assert data["evaluations_run"] == 6
+        assert "best_params" in data
+
+    def test_strategy_train_pairs_trading_pair_ticker_validation_integration(self):
+        """Pairs training without pair_ticker returns 400 with actionable detail."""
+        self._seed_multi_ticker_daily_prices()
+        response = self.client.post(
+            "/api/strategies/pairs_trading/train",
+            json={
+                "ticker": "AAPL",
+                "start_date": "2024-06-01T00:00:00",
+                "end_date": "2025-03-01T00:00:00",
+                "max_evals": 2,
+            },
+            headers=self.auth_headers,
+        )
+        assert response.status_code == 400
+        assert "pair_ticker" in response.json()["detail"].lower()
+
+    def test_strategy_train_pairs_trading_with_pair_integration(self):
+        self._seed_multi_ticker_daily_prices()
+        response = self.client.post(
+            "/api/strategies/pairs_trading/train",
+            json={
+                "ticker": "AAPL",
+                "pair_ticker": "MSFT",
+                "start_date": "2024-06-01T00:00:00",
+                "end_date": "2025-03-01T00:00:00",
+                "max_evals": 4,
+            },
+            headers=self.auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["evaluations_run"] == 4
+
     def test_get_model_job_status(self):
         """Test GET /api/model_jobs/{job_id} endpoint."""
         # Insert a test job

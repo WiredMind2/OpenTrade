@@ -177,7 +177,8 @@ export default function Backtests() {
         response &&
         typeof response === 'object' &&
         'best_params' in response &&
-        (strategy === 'moving_average' || strategy === 'recursive_forecast')
+        'best_metrics' in response &&
+        'evaluations_run' in response
       ) {
         const typed = response as StrategyTrainResponse
         setTrainResult(typed)
