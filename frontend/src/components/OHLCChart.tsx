@@ -161,9 +161,11 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
 
          if (!predictionSettings.showPredictionProjections) return;
 
-         // Filter projections for current symbol
+         // Filter projections for current symbol — normalize both sides to handle
+         // "NASDAQ:AAPL" vs "AAPL" and possible undefined ticker fields.
+         const symbolBase = (symbol || '').split(':').pop()?.toUpperCase() ?? ''
          const relevantProjections = predictionSettings.predictionProjections.filter(
-           p => p.ticker === symbol
+           p => (p.ticker?.toUpperCase() ?? '') === symbolBase
          );
 
          relevantProjections.forEach(projection => {
@@ -243,6 +245,8 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      useEffect(() => {
       if (!containerRef.current) return;
 
+      let isMounted = true;
+
       const initializeChart = async () => {
         try {
           console.log(
@@ -254,6 +258,8 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
           const TradingView = await import(
             "../../public/charting_library/charting_library.esm.js"
           );
+
+          if (!isMounted) return;
 
           if (widgetRef.current) {
             widgetRef.current.remove();
@@ -485,6 +491,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
       initializeChart();
 
       return () => {
+        isMounted = false;
         if (widgetRef.current) {
           detachProjectionManager();
           widgetRef.current.remove();

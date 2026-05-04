@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { getStrategies } from '../api/strategies'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
@@ -34,6 +34,8 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
   const [selectedStrategy, setSelectedStrategy] = useState<string>('')
   const [params, setParams] = useState<Record<string, unknown>>({})
   const [error, setError] = useState<string | null>(null)
+  const onStrategyChangeRef = useRef(onStrategyChange)
+  useEffect(() => { onStrategyChangeRef.current = onStrategyChange })
 
   useEffect(() => {
     getStrategies()
@@ -47,7 +49,7 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
           }
           setSelectedStrategy(first.name)
           setParams(initialParams)
-          onStrategyChange(first.name, initialParams)
+          onStrategyChangeRef.current(first.name, initialParams)
         }
       })
       .catch((err) => {

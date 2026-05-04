@@ -87,6 +87,13 @@ export default function Predictions() {
   const [predictionBacktest, setPredictionBacktest] = useState<PredictionBacktestRow | null>(null)
 
   const chartRef = useRef<any>(null)
+  const pollingCancelRef = useRef<{ cancelled: boolean } | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (pollingCancelRef.current) pollingCancelRef.current.cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     const handleBacktestStatus = (message: { data: PredictionBacktestRow }) => {
@@ -119,6 +126,10 @@ export default function Predictions() {
       return
     }
     rememberTicker(sym)
+    if (pollingCancelRef.current) pollingCancelRef.current.cancelled = true
+    const cancel = { cancelled: false }
+    pollingCancelRef.current = cancel
+
     setBacktestRunning(true)
     setBacktestError(null)
     setBacktestPollPhase('queued')
@@ -143,25 +154,31 @@ export default function Predictions() {
       })
 
       const deadline = Date.now() + 15 * 60_000
-      while (Date.now() < deadline) {
+      while (Date.now() < deadline && !cancel.cancelled) {
         await sleep(1200)
-        const row = await getBacktest(backtestId)
-        const metrics = row.metrics as Record<string, unknown> | undefined
-        const phase = typeof metrics?.phase === 'string' ? metrics.phase : undefined
-        setBacktestPollPhase(phase)
-        const st = typeof metrics?.status === 'string' ? metrics.status : undefined
-        setPredictionBacktest({
-          ...row,
-          id: backtestId,
-          ticker: sym,
-          status: st ?? row.metrics?.status,
-          chart_data: snapshotChartDataFromRow({ ...row, id: backtestId } as PredictionBacktestRow),
-        })
-        if (st === 'completed' || st === 'failed') {
-          if (st === 'failed' && typeof metrics?.error === 'string') {
-            setBacktestError(metrics.error)
+        if (cancel.cancelled) break
+        try {
+          const row = await getBacktest(backtestId)
+          if (cancel.cancelled) break
+          const metrics = row.metrics as Record<string, unknown> | undefined
+          const phase = typeof metrics?.phase === 'string' ? metrics.phase : undefined
+          setBacktestPollPhase(phase)
+          const st = typeof metrics?.status === 'string' ? metrics.status : undefined
+          setPredictionBacktest({
+            ...row,
+            id: backtestId,
+            ticker: sym,
+            status: st ?? row.metrics?.status,
+            chart_data: snapshotChartDataFromRow({ ...row, id: backtestId } as PredictionBacktestRow),
+          })
+          if (st === 'completed' || st === 'failed') {
+            if (st === 'failed' && typeof metrics?.error === 'string') {
+              setBacktestError(metrics.error)
+            }
+            break
           }
-          break
+        } catch {
+          // transient network error — continue polling
         }
       }
     } catch (e: unknown) {
@@ -226,7 +243,7 @@ export default function Predictions() {
   useEffect(() => {
     if (!showPredictionProjections) return
     void generatePredictionProjections(selectedTicker)
-  }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy])
+  }, [selectedTicker, showPredictionProjections, projectionHorizon, projectionStrategy, projectionParams])
 
   const handleStrategyChange = (strategy: string, params: Record<string, any>) => {
     setProjectionStrategy(strategy)
@@ -355,7 +372,7 @@ export default function Predictions() {
                 {backtestError && <p className="text-sm text-destructive">{backtestError}</p>}
                 {predictionBacktest && (() => {
                   const b = predictionBacktest
-                  const returnPercent = b.total_return * 100
+                  const returnPercent = (b.total_return ?? 0) * 100
                   const isPositive = returnPercent > 0
                   const status = b.status ?? b.metrics?.status ?? 'completed'
                   const isFailed = status === 'failed'
