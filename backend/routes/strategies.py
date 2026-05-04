@@ -34,7 +34,7 @@ class TrainRequest(BaseModel):
     end_date: Optional[datetime] = Field(default=None, description="Optimization end date")
     initial_capital: float = Field(default=100000.0, gt=0)
     objective: str = Field(default="balanced", description="sharpe|return|drawdown|balanced")
-    max_evals: int = Field(default=24, ge=1, le=200, description="Maximum parameter sets to evaluate")
+    max_evals: int = Field(default=8, ge=1, le=50, description="Maximum parameter sets to evaluate")
     optimizer_mode: str = Field(default="grid", description="grid|random")
     random_seed: Optional[int] = Field(default=None, description="Seed for random optimizer mode")
 
