@@ -47,6 +47,39 @@ POPULAR_TICKERS = [
     "ACN",    # Accenture
 ]
 
+POPULAR_TICKER_NAMES = {
+    "AAPL": "Apple",
+    "ABBV": "AbbVie",
+    "ABT": "Abbott",
+    "ACN": "Accenture",
+    "AMZN": "Amazon",
+    "AVGO": "Broadcom",
+    "BRK.B": "Berkshire Hathaway",
+    "COST": "Costco",
+    "CSCO": "Cisco",
+    "CVX": "Chevron",
+    "GOOGL": "Alphabet",
+    "HD": "Home Depot",
+    "JNJ": "Johnson & Johnson",
+    "JPM": "JPMorgan Chase",
+    "KO": "Coca-Cola",
+    "LLY": "Eli Lilly",
+    "MA": "Mastercard",
+    "MCD": "McDonald's",
+    "META": "Meta",
+    "MRK": "Merck",
+    "MSFT": "Microsoft",
+    "NVDA": "Nvidia",
+    "PEP": "PepsiCo",
+    "PG": "Procter & Gamble",
+    "TMO": "Thermo Fisher",
+    "TSLA": "Tesla",
+    "UNH": "UnitedHealth Group",
+    "V": "Visa",
+    "WMT": "Walmart",
+    "XOM": "Exxon Mobil",
+}
+
 
 def get_db_path():
     """Get the database path from config or use default."""
@@ -72,14 +105,19 @@ def ensure_tickers_in_db(db_path: str, tickers: list) -> dict:
     
     for ticker in tickers:
         try:
+            name = POPULAR_TICKER_NAMES.get(ticker)
             cur.execute(
                 "INSERT OR IGNORE INTO tickers (ticker, name, exchange) VALUES (?, ?, ?)",
-                (ticker, None, "NASDAQ")
+                (ticker, name, "NASDAQ")
             )
             if cur.rowcount > 0:
                 results["added"] += 1
             else:
                 results["existing"] += 1
+                cur.execute(
+                    "UPDATE tickers SET name = COALESCE(name, ?) WHERE ticker = ?",
+                    (name, ticker),
+                )
         except Exception as e:
             results["errors"].append(f"{ticker}: {str(e)}")
     
@@ -95,6 +133,11 @@ def fetch_and_store_prices(db_path: str, ticker: str, days: int = 730) -> bool:
         import yfinance as yf
     except ImportError:
         print("yfinance not installed. Install with: pip install yfinance")
+        return False
+    try:
+        import pandas as pd
+    except ImportError:
+        print("pandas not installed. Install with: pip install pandas")
         return False
     
     try:
@@ -159,9 +202,6 @@ def fetch_and_store_prices(db_path: str, ticker: str, days: int = 730) -> bool:
     except Exception as e:
         print(f"  Error fetching {ticker}: {e}")
         return False
-
-
-import pandas as pd
 
 
 def main():
