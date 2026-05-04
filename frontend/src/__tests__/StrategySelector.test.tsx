@@ -2,9 +2,9 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import StrategySelector from '../components/StrategySelector';
-import { getStrategies } from '../services/strategyApi';
+import { getStrategies } from '../api/strategies';
 
-jest.mock('../services/strategyApi', () => ({
+jest.mock('../api/strategies', () => ({
   getStrategies: jest.fn(),
 }));
 
@@ -48,7 +48,7 @@ describe('StrategySelector', () => {
 
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
 
-    expect(screen.getByText('Select Strategy:')).toBeInTheDocument();
+    expect(screen.getByText('Select Strategy')).toBeInTheDocument();
     expect(screen.getByRole('combobox')).toBeInTheDocument();
   });
 
@@ -106,9 +106,9 @@ describe('StrategySelector', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Parameters')).toBeInTheDocument();
-      expect(screen.getByText('window:')).toBeInTheDocument();
-      expect(screen.getByText('threshold:')).toBeInTheDocument();
-      expect(screen.getByText('use_short:')).toBeInTheDocument();
+      expect(screen.getByText('window')).toBeInTheDocument();
+      expect(screen.getByText('threshold')).toBeInTheDocument();
+      expect(screen.getByText('use_short')).toBeInTheDocument();
     });
   });
 

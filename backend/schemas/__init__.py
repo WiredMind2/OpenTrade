@@ -26,6 +26,18 @@ class PredictionRequest(BaseModel):
     context: Optional[Dict[str, Any]] = Field(default={}, description="Additional context")
     strategy_name: Optional[str] = Field(default=None, description="Optional strategy to drive prediction output")
     strategy_params: Optional[Dict[str, Any]] = Field(default={}, description="Optional strategy parameter overrides")
+    as_of: Optional[datetime] = Field(
+        default=None,
+        description="Simulate using data available through this timestamp (walk-forward). Omit for live 'now'.",
+    )
+    persist_prediction: Optional[bool] = Field(
+        default=None,
+        description="If true, write to sentiment_predictions. Defaults to true for live, false when as_of is set.",
+    )
+    include_forward_actuals: bool = Field(
+        default=False,
+        description="When as_of is set, add metadata.forward_actual_closes (next horizon daily closes) for evaluation.",
+    )
 
     @field_validator('horizon')
     @classmethod

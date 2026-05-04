@@ -14,6 +14,12 @@ export interface PredictionRequest {
   ticker: string;
   horizon: string;
   context?: Record<string, any>;
+  /** ISO datetime: use features only through this instant (walk-forward simulation). */
+  as_of?: string;
+  /** When false with as_of, skips writing to sentiment_predictions (default false if as_of set). */
+  persist_prediction?: boolean;
+  /** With as_of, request next-horizon realized daily closes in metadata for evaluation. */
+  include_forward_actuals?: boolean;
 }
 
 export interface PredictionResponse {
@@ -240,48 +246,6 @@ export interface TrainingProgressMessage extends WebSocketMessage {
   };
 }
 
-// Model-related types
-export interface ModelSummary {
-  name: string;
-  type: string;
-  version: string;
-  description: string;
-  capabilities: string[];
-  config_schema: Record<string, any>;
-}
-
-export interface ModelPredictRequest {
-  inputs: Record<string, any>;
-  config: Record<string, any>;
-}
-
-export interface ModelPredictResponse {
-  predictions: Array<Record<string, any>>;
-  meta: Record<string, any>;
-}
-
-export interface RetrainRequest {
-  training_payload: Record<string, any>;
-  config: Record<string, any>;
-  options: Record<string, any>;
-}
-
-export interface RetrainResponse {
-  job_id?: string;
-  status: string;
-  model_meta?: Record<string, any>;
-}
-
-export interface JobStatus {
-  id: string;
-  model_name: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-  config: string;
-  result: string;
-  error: string;
-}
 export interface StrategyMetadata {
   name: string;
   description: string;

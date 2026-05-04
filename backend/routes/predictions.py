@@ -205,7 +205,13 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
             database_path=app_state["database_path"],
             models_loaded=models_loaded,
         )
-        result = service.predict(request.ticker, request.horizon)
+        result = service.predict(
+            request.ticker,
+            request.horizon,
+            as_of=request.as_of,
+            persist=request.persist_prediction,
+            include_forward_actuals=request.include_forward_actuals,
+        )
         result.metadata["prediction_latency_ms"] = int((time.time() - start) * 1000)
 
         response = PredictionResponse(

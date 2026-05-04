@@ -6,7 +6,7 @@ import type {
 } from "../../public/charting_library/charting_library.d.ts";
 import TradingViewUDFDatafeed from "../services/tradingViewUDF";
 import { attachProjectionManager, detachProjectionManager } from "../lib/ChartProjectionManager";
-import { projectStrategy } from "../services/strategyApi";
+import { projectStrategy } from "../api/strategies";
 import type { ProjectionPoint, PredictionProjection } from "../types";
 import type { NewsArticle } from "@/api/news";
 

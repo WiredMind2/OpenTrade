@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from backend.routes.predictions import generate_prediction
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
@@ -223,3 +223,48 @@ def test_predict_endpoint_returns_interval_metadata():
     assert body["feature_schema_version"] == "ml_features_v1"
     assert body["interval_lower"] == -0.01
     assert body["interval_upper"] == 0.02
+
+
+def test_predict_endpoint_passes_simulation_options_to_service():
+    client = TestClient(app)
+    mock_service = MagicMock()
+
+    class _Model:
+        model_version = "lightgbm_1d"
+        model_name = "lightgbm_1d"
+        feature_schema_version = "ml_features_v2"
+
+    class _Result:
+        ticker = "AAPL"
+        horizon = "1d"
+        predicted_return = 0.01
+        confidence = 0.5
+        timestamp = datetime(2024, 6, 15, 12, 0, 0)
+        model = _Model()
+        features_used = []
+        intervals = None
+        metadata = {"forward_actual_closes": [{"date": "2024-06-16", "close": 101.0}]}
+
+    mock_service.predict.return_value = _Result()
+
+    anchor = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    with patch("backend.routes.predictions.PredictionService", return_value=mock_service):
+        with patch("backend.main.app_state", {"database_path": "x", "models_loaded": {"lightgbm_1d": {}}}):
+            response = client.post(
+                "/predict",
+                json={
+                    "ticker": "AAPL",
+                    "horizon": "1d",
+                    "as_of": anchor.isoformat(),
+                    "persist_prediction": False,
+                    "include_forward_actuals": True,
+                },
+            )
+    assert response.status_code == 200
+    mock_service.predict.assert_called_once()
+    kwargs = mock_service.predict.call_args.kwargs
+    as_arg = kwargs["as_of"]
+    assert as_arg is not None
+    assert as_arg.year == 2024 and as_arg.month == 6 and as_arg.day == 15
+    assert kwargs["persist"] is False
+    assert kwargs["include_forward_actuals"] is True

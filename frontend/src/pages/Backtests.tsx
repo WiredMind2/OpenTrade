@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { getBacktests, runBacktest } from '../services/api'
 import {
-  listStrategies,
   preflightStrategy,
   trainStrategy,
   type StrategyPreflightResponse,
@@ -28,6 +27,7 @@ import {
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
+import StrategySelector from '../components/StrategySelector'
 
 type BacktestListItem = BacktestResult & {
   id?: string | number
@@ -43,10 +43,7 @@ type BacktestListItem = BacktestResult & {
 export default function Backtests() {
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
-  const [strategyQuery, setStrategyQuery] = useState('')
-  const [strategyOptions, setStrategyOptions] = useState<string[]>([])
-  const [showStrategySuggestions, setShowStrategySuggestions] = useState(false)
-  const [strategyLoadError, setStrategyLoadError] = useState<string | null>(null)
+  const [strategyParams, setStrategyParams] = useState<Record<string, any>>({})
   const [startDate, setStartDate] = useState('2023-01-01')
   const [endDate, setEndDate] = useState('2023-12-31')
   const [running, setRunning] = useState(false)
@@ -78,46 +75,7 @@ export default function Backtests() {
     fetchBacktests()
   }, [])
 
-  useEffect(() => {
-    const fetchStrategies = async () => {
-      try {
-        const data = await listStrategies()
-        const names = data
-          .map((item) => item.name?.trim())
-          .filter((name): name is string => Boolean(name))
-          .sort()
-        setStrategyOptions(names)
-        setStrategyLoadError(null)
-        if (names.length > 0) {
-          setStrategy((prev) => prev.trim() ? prev : names[0])
-          setStrategyQuery((prev) => prev.trim() ? prev : names[0])
-        } else {
-          setStrategy('')
-          setStrategyQuery('')
-          setStrategyLoadError('No strategies available. Create a strategy before running backtests.')
-        }
-      } catch (e) {
-        console.error('Failed to fetch strategy options:', e)
-        setStrategy('')
-        setStrategyQuery('')
-        setStrategyLoadError('Failed to load strategies. Please refresh and try again.')
-      }
-    }
-
-    void fetchStrategies()
-  }, [])
-
-  const filteredStrategyOptions = strategyOptions
-    .filter((name) => name.toLowerCase().includes(strategyQuery.trim().toLowerCase()))
-    .slice(0, 10)
-
-  const handleStrategySelect = (selected: string) => {
-    setStrategy(selected)
-    setStrategyQuery(selected)
-    setShowStrategySuggestions(false)
-  }
-
-  const hasValidStrategySelection = strategyOptions.includes(strategy)
+  const hasValidStrategySelection = strategy.trim().length > 0
 
   useEffect(() => {
     const handleBacktestStatus = (message: any) => {
@@ -163,7 +121,7 @@ export default function Backtests() {
 
   const startBacktest = async () => {
     if (!hasValidStrategySelection) {
-      alert('Please select an existing strategy from the dropdown')
+      alert('Please select a strategy')
       return
     }
     setRunning(true)
@@ -184,7 +142,7 @@ export default function Backtests() {
         start_date: startDate,
         end_date: endDate,
         initial_capital: 100000,
-        parameters: { ...(trainedParams ?? {}), ticker: ticker.trim().toUpperCase() },
+        parameters: { ...strategyParams, ...(trainedParams ?? {}), ticker: ticker.trim().toUpperCase() },
       })
 
       setBacktests(prev => [{ ...data, id: data.metrics?.backtest_id, status: 'running', chart_data: [] }, ...prev])
@@ -197,7 +155,7 @@ export default function Backtests() {
 
   const runTraining = async () => {
     if (!hasValidStrategySelection) {
-      alert('Please select an existing strategy from the dropdown')
+      alert('Please select a strategy')
       return
     }
     if (!ticker.trim()) {
@@ -285,56 +243,12 @@ export default function Backtests() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Strategy Name</label>
-                <div className="relative">
-                  <Input
-                    value={strategyQuery}
-                    onChange={(e) => {
-                      const value = e.target.value
-                      setStrategyQuery(value)
-                      if (strategyOptions.includes(value)) {
-                        setStrategy(value)
-                      } else {
-                        setStrategy('')
-                      }
-                      setShowStrategySuggestions(true)
-                    }}
-                    onFocus={() => setShowStrategySuggestions(true)}
-                    onBlur={() => {
-                      if (!strategyOptions.includes(strategyQuery)) {
-                        setStrategy('')
-                      }
-                      window.setTimeout(() => setShowStrategySuggestions(false), 120)
-                    }}
-                    placeholder="Search and select an existing strategy"
-                  />
-                  {showStrategySuggestions && filteredStrategyOptions.length > 0 && (
-                    <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-md">
-                      <div className="max-h-56 overflow-y-auto py-1">
-                        {filteredStrategyOptions.map((name) => (
-                          <button
-                            key={name}
-                            type="button"
-                            className="w-full px-3 py-2 text-left text-sm hover:bg-accent"
-                            onMouseDown={(e) => {
-                              e.preventDefault()
-                              handleStrategySelect(name)
-                            }}
-                          >
-                            {name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {strategyLoadError && (
-                  <p className="text-xs text-destructive">{strategyLoadError}</p>
-                )}
-                {!strategyLoadError && strategyQuery.trim() && !hasValidStrategySelection && (
-                  <p className="text-xs text-muted-foreground">
-                    Select one of the existing strategies from the list.
-                  </p>
-                )}
+                <StrategySelector
+                  onStrategyChange={(selectedStrategy, params) => {
+                    setStrategy(selectedStrategy)
+                    setStrategyParams(params)
+                  }}
+                />
               </div>
               
               <div className="space-y-2">

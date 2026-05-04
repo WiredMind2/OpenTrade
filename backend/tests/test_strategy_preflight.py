@@ -61,7 +61,7 @@ def _seed_db(path, include_predictions=False):
     conn.close()
 
 
-def test_preflight_recursive_forecast_blocks_without_predictions(tmp_path):
+def test_preflight_recursive_forecast_ready_without_stored_predictions(tmp_path):
     db_path = tmp_path / "preflight_no_preds.db"
     _seed_db(db_path, include_predictions=False)
     client = TestClient(app)
@@ -76,8 +76,8 @@ def test_preflight_recursive_forecast_blocks_without_predictions(tmp_path):
         )
     assert res.status_code == 200
     body = res.json()
-    assert body["ready"] is False
-    assert any(i["code"] == "PREDICTION_GAP" for i in body["issues"])
+    assert body["ready"] is True
+    assert not any(i["code"] == "PREDICTION_GAP" for i in body["issues"])
 
 
 def test_preflight_moving_average_ready_with_history(tmp_path):

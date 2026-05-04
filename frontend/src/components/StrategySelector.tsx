@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getStrategies } from '../services/strategyApi';
+import { getStrategies } from '../api/strategies';
 
 interface ParameterSchema {
   type: string;
@@ -50,14 +50,18 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
     const name = e.target.value;
     setSelectedStrategy(name);
     const strategy = strategies.find(s => s.name === name);
-    if (strategy) {
-      const initialParams: Record<string, any> = {};
-      for (const [key, schema] of Object.entries(strategy.parameters_schema)) {
-        initialParams[key] = schema.default;
-      }
-      setParams(initialParams);
-      onStrategyChange(name, initialParams);
+    if (!strategy) {
+      setParams({});
+      onStrategyChange('', {});
+      return;
     }
+
+    const initialParams: Record<string, any> = {};
+    for (const [key, schema] of Object.entries(strategy.parameters_schema)) {
+      initialParams[key] = schema.default;
+    }
+    setParams(initialParams);
+    onStrategyChange(name, initialParams);
   };
 
   const handleParamChange = (key: string, value: any) => {

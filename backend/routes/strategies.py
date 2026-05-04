@@ -316,8 +316,8 @@ def _optimize_signal_strategy(
         raise HTTPException(
             status_code=400,
             detail=(
-                "No recursive forecast models/predictions available for requested ticker/date range. "
-                "Run the ML prediction pipeline first, then retry strategy training."
+                "No recursive forecast models available for the requested ticker and date range. "
+                "Load horizon models (for example lightgbm_1d) into the running API, then retry."
             ),
         )
     evaluations.sort(

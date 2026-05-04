@@ -1,11 +1,10 @@
 import React from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import Predictions from './pages/Predictions'
 import Backtests from './pages/Backtests'
 import Portfolio from './pages/Portfolio'
 import Scripts from './pages/Scripts'
-import Models from './pages/Models'
 import Strategies from './pages/Strategies'
 import StrategyPerformance from './pages/StrategyPerformance'
 import { ThemeProvider } from './components/ThemeProvider'
@@ -40,7 +39,6 @@ export default function App() {
               <Route path="/backtests" element={<Backtests />} />
               <Route path="/portfolio" element={<Portfolio />} />
               <Route path="/scripts" element={<Scripts />} />
-              <Route path="/models" element={<Navigate to="/strategies" replace />} />
               <Route path="/strategies" element={<Strategies />} />
               <Route path="/strategy-performance" element={<StrategyPerformance />} />
             </Routes>

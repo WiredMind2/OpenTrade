@@ -1,4 +1,4 @@
-import { getStrategies, projectStrategy } from '../services/strategyApi';
+import { getStrategies, projectStrategy } from '../api/strategies';
 
 jest.mock('../services/api', () => ({
   __esModule: true,

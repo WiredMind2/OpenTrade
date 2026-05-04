@@ -50,6 +50,11 @@ export default function Predictions() {
   const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
   const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
 
+  /** Walk-forward: empty = live; otherwise ISO string sent to /predict as `as_of`. */
+  const [simulateAsOfLocal, setSimulateAsOfLocal] = useState('')
+  const [includeForwardActuals, setIncludeForwardActuals] = useState(true)
+  const [persistHistoricalPrediction, setPersistHistoricalPrediction] = useState(false)
+
   const chartRef = useRef<any>(null)
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -137,13 +142,29 @@ export default function Predictions() {
     setSubmitting(true)
     try {
       const normalizedTicker = ticker.trim().toUpperCase()
+      const simIso =
+        simulateAsOfLocal.trim() === ''
+          ? undefined
+          : (() => {
+              const d = new Date(simulateAsOfLocal)
+              return Number.isNaN(d.getTime()) ? undefined : d.toISOString()
+            })()
+      const simOpts =
+        simIso == null
+          ? undefined
+          : {
+              as_of: simIso,
+              include_forward_actuals: includeForwardActuals,
+              persist_prediction: persistHistoricalPrediction,
+            }
       const results = await Promise.all(
         ['1d', '3d', '7d'].map(h =>
           createPrediction(
             normalizedTicker,
             h,
             projectionStrategy || undefined,
-            projectionStrategy ? projectionParams : undefined
+            projectionStrategy ? projectionParams : undefined,
+            simOpts
           )
         )
       )
@@ -256,7 +277,8 @@ export default function Predictions() {
             Generate New Prediction
           </CardTitle>
           <CardDescription>
-            Search a ticker, then click Predict to generate 1-day, 3-day and 7-day forecasts
+            Search a ticker, then click Predict for 1d / 3d / 7d forecasts. Optionally set &quot;Simulate as
+            of&quot; to run models with data only through that time and compare to realized forward closes.
           </CardDescription>
           {projectionStrategy && (
             <p className="text-xs text-muted-foreground">
@@ -264,7 +286,7 @@ export default function Predictions() {
             </p>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative w-full sm:flex-1">
               <Input
@@ -378,6 +400,44 @@ export default function Predictions() {
                 </>
               )}
             </Button>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 border-t pt-4">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">Simulate as of (optional, local time)</p>
+              <Input
+                type="datetime-local"
+                value={simulateAsOfLocal}
+                onChange={(e) => setSimulateAsOfLocal(e.target.value)}
+                className="font-mono text-sm"
+              />
+            </div>
+            <div className="flex flex-col justify-end gap-2 text-sm">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeForwardActuals}
+                  onChange={(e) => setIncludeForwardActuals(e.target.checked)}
+                  disabled={!simulateAsOfLocal.trim()}
+                  className="rounded border-input"
+                />
+                <span className={!simulateAsOfLocal.trim() ? 'text-muted-foreground' : ''}>
+                  Include realized forward closes in response
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={persistHistoricalPrediction}
+                  onChange={(e) => setPersistHistoricalPrediction(e.target.checked)}
+                  disabled={!simulateAsOfLocal.trim()}
+                  className="rounded border-input"
+                />
+                <span className={!simulateAsOfLocal.trim() ? 'text-muted-foreground' : ''}>
+                  Persist simulated rows to DB
+                </span>
+              </label>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -555,6 +615,54 @@ export default function Predictions() {
                               )
                             })}
                           </div>
+
+                          {(() => {
+                            const sim = horizonOrder
+                              .map(h => byHorizon[h]?.metadata?.simulation_as_of)
+                              .find(Boolean) as string | undefined
+                            const rowsByH = Object.fromEntries(
+                              horizonOrder.map(h => {
+                                const p = byHorizon[h]
+                                const rows = p?.metadata?.forward_actual_closes as
+                                  | { date: string; close: number }[]
+                                  | undefined
+                                return [h, rows]
+                              })
+                            ) as Record<string, { date: string; close: number }[] | undefined>
+                            if (!sim && !horizonOrder.some(h => (rowsByH[h] ?? []).length > 0)) return null
+                            return (
+                              <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-2">
+                                {sim && (
+                                  <p className="text-muted-foreground">
+                                    Simulated as of: <span className="font-mono text-foreground">{sim}</span>
+                                  </p>
+                                )}
+                                {horizonOrder.some(h => (rowsByH[h] ?? []).length > 0) && (
+                                  <>
+                                    <p className="font-medium text-muted-foreground">Realized daily closes (forward)</p>
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                      {horizonOrder.map(h => {
+                                        const rows = rowsByH[h] ?? []
+                                        if (!rows.length) return <div key={h} />
+                                        return (
+                                          <div key={h}>
+                                            <span className="font-mono text-[10px] text-muted-foreground">{h}</span>
+                                            <ul className="mt-1 space-y-0.5 font-mono">
+                                              {rows.map((r) => (
+                                                <li key={r.date}>
+                                                  {r.date}: {r.close.toFixed(2)}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })()}
                         </CardContent>
                       </Card>
                     )

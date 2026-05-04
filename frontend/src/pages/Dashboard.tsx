@@ -210,11 +210,11 @@ export default function Dashboard() {
               <span className="ml-auto text-xs text-tv-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity">→</span>
             </Link>
             
-            <Link to="/models" className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv group">
+            <Link to="/strategies" className="flex items-center gap-2 p-3 rounded border border-tv-border-secondary hover:border-primary hover:bg-tv-bg-hover transition-tv group">
               <Activity className="h-6 w-6 text-tv-orange group-hover:scale-110 transition-transform" />
               <div>
-                <p className="font-medium text-xs text-tv-text-primary">Market Data</p>
-                <p className="text-xs text-tv-text-tertiary">Live updates</p>
+                <p className="font-medium text-xs text-tv-text-primary">Strategies</p>
+                <p className="text-xs text-tv-text-tertiary">Manage and train</p>
               </div>
               <span className="ml-auto text-xs text-tv-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity">→</span>
             </Link>

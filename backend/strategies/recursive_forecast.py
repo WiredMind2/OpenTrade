@@ -34,7 +34,9 @@ class RecursiveForecastStrategy(BaseStrategy):
 
     def get_capability_profile(self) -> Dict[str, Any]:
         return {
-            "requires_predictions": True,
+            # Forecasts are produced at runtime from price history + loaded horizon models;
+            # trading_model_predictions rows are optional (DB cache / offline batch only).
+            "requires_predictions": False,
             "required_prediction_horizons": ["1d", "3d", "7d"],
             "supports_signal_execution": True,
             "supports_backtrader_execution": True,
@@ -168,9 +170,10 @@ class RecursiveForecastStrategy(BaseStrategy):
                         models_loaded=app_state.get("models_loaded", {}),
                     )
                     result = None
+                    bar_as_of = datetime.strptime(date, "%Y-%m-%d")
                     for horizon in self._candidate_horizons():
                         try:
-                            result = service.predict(ticker=ticker, horizon=horizon)
+                            result = service.predict(ticker=ticker, horizon=horizon, as_of=bar_as_of)
                             break
                         except KeyError:
                             continue
@@ -287,7 +290,7 @@ class RecursiveForecastStrategy(BaseStrategy):
                     result = None
                     for horizon in candidate_horizons:
                         try:
-                            result = service.predict(ticker=symbol, horizon=horizon)
+                            result = service.predict(ticker=symbol, horizon=horizon, as_of=as_of)
                             used_horizon = horizon
                             break
                         except KeyError:

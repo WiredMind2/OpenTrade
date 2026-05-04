@@ -137,17 +137,31 @@ export const getLatestPriceAnchor = async (ticker: string): Promise<LatestPriceA
   }
 }
 
+export type CreatePredictionOptions = {
+  as_of?: string
+  persist_prediction?: boolean
+  include_forward_actuals?: boolean
+}
+
 export const createPrediction = async (
   ticker: string,
   horizon: string,
   strategyName?: string,
-  strategyParams?: Record<string, any>
+  strategyParams?: Record<string, any>,
+  options?: CreatePredictionOptions
 ) => {
   const response = await instance.post('/predict', {
     ticker: ticker.toUpperCase(),
     horizon,
     strategy_name: strategyName,
     strategy_params: strategyParams,
+    ...(options?.as_of != null && options.as_of !== ''
+      ? {
+          as_of: options.as_of,
+          persist_prediction: options.persist_prediction,
+          include_forward_actuals: options.include_forward_actuals ?? true,
+        }
+      : {}),
   })
   return response.data
 }
@@ -196,27 +210,6 @@ export const runBacktest = async (data: {
   return response.data
 }
 
-export const forecastStrategy = async (strategyName: string, data: {
-  symbol: string
-  horizon_days?: number
-  params?: Record<string, any>
-  as_of?: string
-  current_price?: number
-}) => {
-  const response = await instance.post(`/api/strategies/${strategyName}/forecast`, data)
-  return response.data
-}
-
-export const generateStrategySignals = async (strategyName: string, data: {
-  symbols: string[]
-  params?: Record<string, any>
-  as_of?: string
-  current_prices?: Record<string, number>
-}) => {
-  const response = await instance.post(`/api/strategies/${strategyName}/signals`, data)
-  return response.data
-}
-
 // MA Predictions API functions
 export const generateMAPredictions = async (data: {
   start_date: string
@@ -235,36 +228,6 @@ export const generateMAPredictions = async (data: {
 
 export const getMAPredictionStatus = async (executionId: string) => {
   const response = await instance.get(`/scripts/generate-ma-predictions/status/${executionId}`)
-  return response.data
-}
-
-// Model API functions
-export const getModels = async () => {
-  console.log('Fetching models from /api/models')
-  const response = await instance.get('/api/models')
-  console.log('Models response:', response.data)
-  return response.data
-}
-
-export const predictWithModel = async (modelName: string, inputs: Record<string, any>, config: Record<string, any>) => {
-  const response = await instance.post(`/api/models/${modelName}/predict`, {
-    inputs,
-    config
-  })
-  return response.data
-}
-
-export const retrainModel = async (modelName: string, trainingPayload: Record<string, any>, config: Record<string, any>, options: Record<string, any>) => {
-  const response = await instance.post(`/api/models/${modelName}/retrain`, {
-    training_payload: trainingPayload,
-    config,
-    options
-  })
-  return response.data
-}
-
-export const getJobStatus = async (jobId: string) => {
-  const response = await instance.get(`/jobs/${jobId}`)
   return response.data
 }
 

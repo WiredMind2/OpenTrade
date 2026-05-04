@@ -83,7 +83,7 @@ def test_train_strategy_optimizes_moving_average(tmp_path):
     assert "best_metrics" in body
 
 
-def test_train_strategy_recursive_forecast_requires_prediction_models(tmp_path):
+def test_train_strategy_recursive_forecast_fails_without_loaded_models(tmp_path):
     db_path = tmp_path / "optimize_recursive.db"
     _seed_optimize_db(db_path)
     client = TestClient(app)
@@ -93,11 +93,11 @@ def test_train_strategy_recursive_forecast_requires_prediction_models(tmp_path):
             json={
                 "ticker": "AAPL",
                 "start_date": "2024-06-01T00:00:00",
-                "end_date": "2025-03-01T00:00:00",
+                "end_date": "2024-07-31T00:00:00",
                 "objective": "balanced",
-                "max_evals": 6,
+                "max_evals": 1,
             },
         )
     assert res.status_code == 400
     body = res.json()
-    assert "Preflight failed: No predictions found for AAPL" in body["detail"]
+    assert "No recursive forecast models available" in body["detail"]

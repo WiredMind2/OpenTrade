@@ -547,7 +547,7 @@ def test_run_backtest_background_live_recursive_forecast_horizon_fallback(tmp_pa
 
     call_horizons = []
 
-    def _predict_side_effect(self, ticker, horizon):
+    def _predict_side_effect(self, ticker, horizon, **kwargs):
         call_horizons.append(horizon)
         if horizon == "7d":
             raise KeyError("No model available for horizon 7d")

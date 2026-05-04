@@ -1,6 +1,7 @@
 """
 Advanced strategy analytics endpoints for performance comparison dashboards.
 """
+import asyncio
 import json
 import math
 import sqlite3
@@ -141,23 +142,14 @@ def _aggregate_series_for_strategy(
     granularity: str,
     preset: str,
 ) -> pd.DataFrame:
-    runs = pd.read_sql_query(
-        """
-        SELECT initial_capital, equity_curve
-        FROM backtest_runs
-        WHERE name = ? AND equity_curve IS NOT NULL
-        """,
-        conn,
-        params=[strategy],
-    )
-    if runs.empty:
-        return pd.DataFrame(columns=["date", "equity"])
     run_series = []
     run_ids = pd.read_sql_query(
         "SELECT id, initial_capital, equity_curve FROM backtest_runs WHERE name = ?",
         conn,
         params=[strategy],
     )
+    if run_ids.empty:
+        return pd.DataFrame(columns=["date", "equity"])
     for _, row in run_ids.iterrows():
         curve_df = _parse_equity_curve(row["equity_curve"], float(row["initial_capital"] or 100000.0))
         if curve_df.empty:
@@ -307,11 +299,25 @@ def _resolve_strategy_names(conn: sqlite3.Connection, selected: List[str]) -> Li
     return strategies[:10]
 
 
-@router.get("/filters", response_model=StrategyFilterMetadataResponse)
-async def get_strategy_analytics_filters():
-    from backend.main import app_state
+def _timeseries_to_points(df: pd.DataFrame) -> List[StrategyTimeseriesPoint]:
+    points: List[StrategyTimeseriesPoint] = []
+    for _, row in df.iterrows():
+        points.append(
+            StrategyTimeseriesPoint(
+                date=row["date"].date().isoformat(),
+                normalized_equity=float(row["equity"]),
+                drawdown=float(row.get("drawdown", 0.0) or 0.0),
+                rolling_sharpe=float(row["rolling_sharpe"]) if pd.notna(row.get("rolling_sharpe")) else None,
+                rolling_sortino=float(row["rolling_sortino"]) if pd.notna(row.get("rolling_sortino")) else None,
+                rolling_volatility=float(row["rolling_volatility"]) if pd.notna(row.get("rolling_volatility")) else None,
+                period_return=float(row["period_return"]) if pd.notna(row.get("period_return")) else None,
+            )
+        )
+    return points
 
-    conn = sqlite3.connect(app_state["database_path"])
+
+def _sync_strategy_analytics_filters(database_path: str) -> StrategyFilterMetadataResponse:
+    conn = sqlite3.connect(database_path)
     try:
         strategies = pd.read_sql_query("SELECT DISTINCT name FROM backtest_runs ORDER BY name", conn)["name"].dropna().astype(str).tolist()
         benchmark_df = pd.read_sql_query("SELECT DISTINCT ticker FROM price_daily ORDER BY ticker LIMIT 50", conn)
@@ -329,22 +335,15 @@ async def get_strategy_analytics_filters():
         conn.close()
 
 
-@router.get("/summary", response_model=StrategyComparisonSummaryResponse)
-async def get_strategy_analytics_summary(
-    strategies: List[str] = Query(default=[]),
-    benchmark_ticker: str = Query(default="SPY"),
-    preset: str = Query(default="MAX"),
-    granularity: str = Query(default="daily"),
-    rolling_window: int = Query(default=30, ge=5, le=252),
-):
-    from backend.main import app_state
-
-    if preset not in PRESETS:
-        raise HTTPException(status_code=400, detail="Unsupported preset")
-    if granularity not in ANNUALIZATION:
-        raise HTTPException(status_code=400, detail="Unsupported granularity")
-
-    conn = sqlite3.connect(app_state["database_path"])
+def _sync_strategy_analytics_summary(
+    database_path: str,
+    strategies: List[str],
+    benchmark_ticker: str,
+    preset: str,
+    granularity: str,
+    rolling_window: int,
+) -> StrategyComparisonSummaryResponse:
+    conn = sqlite3.connect(database_path)
     try:
         selected = _resolve_strategy_names(conn, strategies)
         benchmark_series = _build_benchmark_series(conn, benchmark_ticker, granularity, preset)
@@ -384,20 +383,15 @@ async def get_strategy_analytics_summary(
         conn.close()
 
 
-@router.get("/timeseries/{strategy}", response_model=StrategyTimeseriesResponse)
-async def get_strategy_timeseries(
+def _sync_strategy_timeseries(
+    database_path: str,
     strategy: str,
-    benchmark_ticker: str = Query(default="SPY"),
-    preset: str = Query(default="MAX"),
-    granularity: str = Query(default="daily"),
-    rolling_window: int = Query(default=30, ge=5, le=252),
-):
-    from backend.main import app_state
-
-    if preset not in PRESETS or granularity not in ANNUALIZATION:
-        raise HTTPException(status_code=400, detail="Unsupported filter option")
-
-    conn = sqlite3.connect(app_state["database_path"])
+    benchmark_ticker: str,
+    preset: str,
+    granularity: str,
+    rolling_window: int,
+) -> StrategyTimeseriesResponse:
+    conn = sqlite3.connect(database_path)
     try:
         strategy_series = _aggregate_series_for_strategy(conn, strategy, granularity, preset)
         if strategy_series.empty:
@@ -417,22 +411,6 @@ async def get_strategy_timeseries(
             strategy_series["period_return"].rolling(rolling_window).std() * math.sqrt(annual_factor)
         )
 
-        def to_points(df: pd.DataFrame) -> List[StrategyTimeseriesPoint]:
-            points: List[StrategyTimeseriesPoint] = []
-            for _, row in df.iterrows():
-                points.append(
-                    StrategyTimeseriesPoint(
-                        date=row["date"].date().isoformat(),
-                        normalized_equity=float(row["equity"]),
-                        drawdown=float(row.get("drawdown", 0.0) or 0.0),
-                        rolling_sharpe=float(row["rolling_sharpe"]) if pd.notna(row.get("rolling_sharpe")) else None,
-                        rolling_sortino=float(row["rolling_sortino"]) if pd.notna(row.get("rolling_sortino")) else None,
-                        rolling_volatility=float(row["rolling_volatility"]) if pd.notna(row.get("rolling_volatility")) else None,
-                        period_return=float(row["period_return"]) if pd.notna(row.get("period_return")) else None,
-                    )
-                )
-            return points
-
         benchmark_df = benchmark_series.copy()
         if not benchmark_df.empty:
             benchmark_df["drawdown"] = _compute_drawdown(benchmark_df["equity"])
@@ -442,19 +420,16 @@ async def get_strategy_timeseries(
             strategy=strategy,
             benchmark_ticker=benchmark_ticker.upper(),
             granularity=granularity,
-            points=to_points(strategy_series),
-            benchmark_points=to_points(benchmark_df) if not benchmark_df.empty else [],
+            points=_timeseries_to_points(strategy_series),
+            benchmark_points=_timeseries_to_points(benchmark_df) if not benchmark_df.empty else [],
             monthly_returns=monthly_returns,
         )
     finally:
         conn.close()
 
 
-@router.get("/distributions/{strategy}", response_model=StrategyDistributionResponse)
-async def get_strategy_distributions(strategy: str):
-    from backend.main import app_state
-
-    conn = sqlite3.connect(app_state["database_path"])
+def _sync_strategy_distributions(database_path: str, strategy: str) -> StrategyDistributionResponse:
+    conn = sqlite3.connect(database_path)
     try:
         returns_df = _aggregate_series_for_strategy(conn, strategy, "daily", "MAX")
         returns = returns_df["equity"].pct_change().dropna() if not returns_df.empty else pd.Series(dtype=float)
@@ -493,3 +468,67 @@ async def get_strategy_distributions(strategy: str):
         )
     finally:
         conn.close()
+
+
+@router.get("/filters", response_model=StrategyFilterMetadataResponse)
+async def get_strategy_analytics_filters():
+    from backend.main import app_state
+
+    return await asyncio.to_thread(_sync_strategy_analytics_filters, app_state["database_path"])
+
+
+@router.get("/summary", response_model=StrategyComparisonSummaryResponse)
+async def get_strategy_analytics_summary(
+    strategies: List[str] = Query(default=[]),
+    benchmark_ticker: str = Query(default="SPY"),
+    preset: str = Query(default="MAX"),
+    granularity: str = Query(default="daily"),
+    rolling_window: int = Query(default=30, ge=5, le=252),
+):
+    from backend.main import app_state
+
+    if preset not in PRESETS:
+        raise HTTPException(status_code=400, detail="Unsupported preset")
+    if granularity not in ANNUALIZATION:
+        raise HTTPException(status_code=400, detail="Unsupported granularity")
+
+    return await asyncio.to_thread(
+        _sync_strategy_analytics_summary,
+        app_state["database_path"],
+        strategies,
+        benchmark_ticker,
+        preset,
+        granularity,
+        rolling_window,
+    )
+
+
+@router.get("/timeseries/{strategy}", response_model=StrategyTimeseriesResponse)
+async def get_strategy_timeseries(
+    strategy: str,
+    benchmark_ticker: str = Query(default="SPY"),
+    preset: str = Query(default="MAX"),
+    granularity: str = Query(default="daily"),
+    rolling_window: int = Query(default=30, ge=5, le=252),
+):
+    from backend.main import app_state
+
+    if preset not in PRESETS or granularity not in ANNUALIZATION:
+        raise HTTPException(status_code=400, detail="Unsupported filter option")
+
+    return await asyncio.to_thread(
+        _sync_strategy_timeseries,
+        app_state["database_path"],
+        strategy,
+        benchmark_ticker,
+        preset,
+        granularity,
+        rolling_window,
+    )
+
+
+@router.get("/distributions/{strategy}", response_model=StrategyDistributionResponse)
+async def get_strategy_distributions(strategy: str):
+    from backend.main import app_state
+
+    return await asyncio.to_thread(_sync_strategy_distributions, app_state["database_path"], strategy)

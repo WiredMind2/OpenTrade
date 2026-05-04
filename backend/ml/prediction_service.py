@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import joblib
 import pandas as pd
@@ -21,6 +21,27 @@ from backend.ml.forecasting.datasource import DataSource
 
 
 logger = get_component_logger(__file__)
+
+
+def _fetch_forward_closes(
+    conn: sqlite3.Connection, ticker: str, as_of_date, limit: int
+) -> List[Dict[str, Any]]:
+    """Next `limit` daily closes strictly after `as_of_date` (ISO date string or date)."""
+    if limit <= 0:
+        return []
+    as_of_str = as_of_date.isoformat() if hasattr(as_of_date, "isoformat") else str(as_of_date)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT date, close
+        FROM price_daily
+        WHERE ticker = ? AND date > ?
+        ORDER BY date ASC
+        LIMIT ?
+        """,
+        (ticker.upper(), as_of_str, limit),
+    )
+    return [{"date": r[0], "close": float(r[1])} for r in cur.fetchall() if r[1] is not None]
 
 
 class PredictionService:
@@ -42,14 +63,43 @@ class PredictionService:
                 return key
         raise KeyError(f"No model available for horizon {horizon}")
 
-    def predict(self, ticker: str, horizon: str) -> PredictionResult:
+    def predict(
+        self,
+        ticker: str,
+        horizon: str,
+        *,
+        as_of: Optional[datetime] = None,
+        persist: Optional[bool] = None,
+        include_forward_actuals: bool = False,
+    ) -> PredictionResult:
+        """
+        Run inference for ``ticker`` / ``horizon``.
+
+        ``as_of``: use only prices and articles available through this instant (historical
+        simulation / walk-forward). When omitted, uses current UTC time (live).
+
+        ``persist``: when ``None``, results are written to ``sentiment_predictions`` only
+        for live calls (``as_of`` omitted); historical simulations skip persistence by default.
+
+        ``include_forward_actuals``: when ``True`` and ``as_of`` is set, attach the next
+        ``horizon`` daily realized closes in ``metadata["forward_actual_closes"]`` for evaluation.
+        """
+        if as_of is not None:
+            effective = as_of
+            if effective.tzinfo is not None:
+                effective = effective.astimezone(timezone.utc).replace(tzinfo=None)
+        else:
+            effective = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        if persist is None:
+            persist = as_of is None
+
         model_key = self._resolve_model_key(horizon)
         model_data = self.models_loaded[model_key]
         model = model_data.get("lgbm", model_data)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         with sqlite3.connect(self.database_path) as conn:
-            vector = self.pipeline.build_vector(conn, FeatureInput(ticker=ticker.upper(), as_of=now))
+            vector = self.pipeline.build_vector(conn, FeatureInput(ticker=ticker.upper(), as_of=effective))
             predicted_return = float(model.predict(vector)[0])
             confidence = max(0.1, min(0.95, 1.0 - abs(predicted_return) * 2.0))
             band = abs(predicted_return) * max(0.15, (1.0 - confidence))
@@ -58,7 +108,7 @@ class PredictionService:
             path_prices = []
             try:
                 ds = DataSource(self.database_path)
-                hist = ds.load_ohlcv(ticker=ticker.upper(), end_date=now.date().isoformat())
+                hist = ds.load_ohlcv(ticker=ticker.upper(), end_date=effective.date().isoformat())
                 if not hist.empty and horizon_steps > 1:
                     fb = FeatureBuilder()
                     pre = Preprocessor(use_scaler=False)
@@ -82,18 +132,25 @@ class PredictionService:
             except Exception as exc:
                 logger.warning("Recursive path generation failed: %s", exc)
 
-            metadata = {
-                "request_id": f"req_{now.timestamp()}",
+            metadata: Dict[str, Any] = {
+                "request_id": f"req_{effective.timestamp()}",
                 "model_key": model_key,
                 "prediction_latency_ms": 0,
                 "predicted_path_targets": path_targets,
                 "predicted_path_prices": path_prices,
             }
+            if as_of is not None:
+                metadata["simulation_as_of"] = effective.isoformat()
+            if include_forward_actuals and as_of is not None:
+                metadata["forward_actual_closes"] = _fetch_forward_closes(
+                    conn, ticker.upper(), effective.date(), horizon_steps
+                )
             result = PredictionResult(
                 ticker=ticker.upper(),
                 horizon=horizon,  # type: ignore[arg-type]
                 predicted_return=predicted_return,
                 confidence=confidence,
+                timestamp=effective,
                 model=ModelMetadata(
                     model_name=model_key,
                     model_version=model_key,
@@ -107,7 +164,8 @@ class PredictionService:
                 ),
                 metadata=metadata,
             )
-            self._persist_prediction(conn, result)
+            if persist:
+                self._persist_prediction(conn, result)
             return result
 
     def _persist_prediction(self, conn: sqlite3.Connection, result: PredictionResult) -> None:
