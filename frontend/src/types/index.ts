@@ -302,6 +302,27 @@ export interface ProjectionResponse {
   metadata: StrategyMetadata;
 }
 
+/** Overlay paths for optional multi-model prediction fan on the chart */
+export interface PredictionProjectionPoint {
+  time: number;
+  price: number;
+  confidence: number;
+  upperBound?: number;
+  lowerBound?: number;
+}
+
+export interface PredictionProjection {
+  id: string;
+  ticker: string;
+  strategy_name: string;
+  horizon: number;
+  points: PredictionProjectionPoint[];
+  confidence: number;
+  color: string;
+  createdAt: string;
+  metadata?: Record<string, any>;
+}
+
 export interface StrategyAnalyticsFilters {
   strategies: string[];
   benchmarks: string[];
