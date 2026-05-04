@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.config import get_config
 from backend.logging_config import get_component_logger
+from backend.utils.ticker_aliases import aliases_for_ticker
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
@@ -77,8 +78,10 @@ def _article_matches_ticker(
         return False
     if pattern.search(raw):
         return True
-    if company_name and company_name.lower() in raw.lower():
-        return True
+    raw_lower = raw.lower()
+    for alias in aliases_for_ticker(ticker_upper, company_name):
+        if alias.lower() in raw_lower:
+            return True
     return False
 
 

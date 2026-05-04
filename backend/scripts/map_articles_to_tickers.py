@@ -15,6 +15,7 @@ import argparse
 import re
 import os
 from backend.scripts.script_logger import logger
+from backend.utils.ticker_aliases import aliases_for_ticker
 
 
 def load_tickers(conn):
@@ -58,7 +59,7 @@ def map_articles(conn, tickers):
                         found_any = True
                     except Exception as e:
                         logger.error('Insert failed for %d %s: %s', aid, ticker_sym, e)
-            # Company name matching (if available)
+            # Company / alias matching. News articles often mention "Apple" instead of "AAPL".
             if name and not found_any:
                 try:
                     if name.lower() in raw_text.lower():
@@ -67,6 +68,17 @@ def map_articles(conn, tickers):
                         found_any = True
                 except Exception as e:
                     logger.error('Insert failed for %d %s: %s', aid, ticker_sym, e)
+            if not found_any:
+                raw_lower = raw_text.lower()
+                for alias in aliases_for_ticker(ticker_sym, name):
+                    try:
+                        if alias.lower() in raw_lower:
+                            cur.execute('INSERT OR IGNORE INTO article_ticker (article_id, ticker, relevance_score) VALUES (?, ?, ?)', (aid, ticker_sym, 0.8))
+                            mapped += cur.rowcount
+                            found_any = True
+                            break
+                    except Exception as e:
+                        logger.error('Insert failed for %d %s: %s', aid, ticker_sym, e)
         # optional: if no ticker found, leave unmapped for manual review
     conn.commit()
     return mapped
