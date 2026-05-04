@@ -92,6 +92,7 @@ export function buildBacktestEquitySeries(backtest: {
   chart_data?: unknown[]
   metrics?: Record<string, unknown>
   start_date?: string
+  end_date?: string
 }): BacktestChartPoint[] {
   const eq = Array.isArray(backtest.equity_curve) ? backtest.equity_curve : []
   const simStart = simulationStartYmd(backtest)

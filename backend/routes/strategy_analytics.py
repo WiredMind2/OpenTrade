@@ -166,7 +166,29 @@ def _variant_row_score(engine: StrategyOptimizerEngine, objective: str, row: pd.
     )
 
 
-def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str) -> pd.DataFrame:
+def _params_ticker(raw_params: Any) -> str:
+    if not raw_params:
+        return ""
+    try:
+        params = json.loads(raw_params) if isinstance(raw_params, str) else raw_params
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(params, dict):
+        return ""
+    return str(params.get("ticker") or "").strip().upper()
+
+
+def _filter_variant_runs_by_ticker(df: pd.DataFrame, ticker: str | None) -> pd.DataFrame:
+    t = str(ticker or "").strip().upper()
+    if not t or df.empty or "params" not in df.columns:
+        return df
+    out = df.copy()
+    out["_ticker"] = out["params"].apply(_params_ticker)
+    out = out[out["_ticker"] == t].drop(columns=["_ticker"])
+    return out
+
+
+def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str, ticker: str | None = None) -> pd.DataFrame:
     cols = _backtest_runs_columns(conn)
     if "params_hash" not in cols:
         return pd.DataFrame()
@@ -183,7 +205,7 @@ def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str) -> pd.DataFra
         conn,
         params=[strategy],
     )
-    return df
+    return _filter_variant_runs_by_ticker(df, ticker)
 
 
 def _representative_run_ids_by_hash(
@@ -206,6 +228,7 @@ def _sync_variant_summary(
     strategy: str,
     objective: str,
     top_n: int,
+    ticker: str | None = None,
 ) -> StrategyVariantSummaryResponse:
     obj = (objective or "balanced").lower()
     if obj not in {"sharpe", "return", "drawdown", "balanced"}:
@@ -214,7 +237,7 @@ def _sync_variant_summary(
 
     conn = sqlite3.connect(database_path)
     try:
-        df = _load_variant_runs_df(conn, strategy)
+        df = _load_variant_runs_df(conn, strategy, ticker)
         if df.empty:
             return StrategyVariantSummaryResponse(strategy=strategy, objective=obj, top_n=top_n, variants=[])
 
@@ -296,6 +319,7 @@ def _sync_variant_timeseries(
     granularity: str,
     rolling_window: int,
     objective: str,
+    ticker: str | None = None,
 ) -> StrategyVariantTimeseriesResponse:
     obj = (objective or "balanced").lower()
     if obj not in {"sharpe", "return", "drawdown", "balanced"}:
@@ -307,7 +331,7 @@ def _sync_variant_timeseries(
 
     conn = sqlite3.connect(database_path)
     try:
-        df = _load_variant_runs_df(conn, strategy)
+        df = _load_variant_runs_df(conn, strategy, ticker)
         if df.empty or not params_hashes:
             benchmark_series = _build_benchmark_series(conn, benchmark_ticker, granularity, preset)
             bp = _timeseries_to_points(benchmark_series) if not benchmark_series.empty else []
@@ -376,11 +400,12 @@ def _sync_variant_distribution_for_hash(
     strategy: str,
     params_hash: str,
     objective: str,
+    ticker: str | None = None,
 ) -> StrategyDistributionResponse:
     obj = (objective or "balanced").lower()
     conn = sqlite3.connect(database_path)
     try:
-        df = _load_variant_runs_df(conn, strategy)
+        df = _load_variant_runs_df(conn, strategy, ticker)
         if df.empty:
             raise HTTPException(status_code=404, detail="No variant runs for strategy")
         subset = df[df["params_hash"].astype(str) == str(params_hash)]
@@ -435,6 +460,7 @@ async def get_strategy_variant_summary(
     strategy: str = Query(..., description="Single strategy name (backtest_runs.name)"),
     objective: str = Query("balanced", description="sharpe|return|drawdown|balanced"),
     top_n: int = Query(10, ge=1, le=50),
+    ticker: str | None = Query(None, description="Optional ticker stored in backtest params"),
 ):
     from backend.main import app_state
 
@@ -444,6 +470,7 @@ async def get_strategy_variant_summary(
         strategy,
         objective,
         top_n,
+        ticker,
     )
 
 
@@ -456,6 +483,7 @@ async def get_strategy_variant_timeseries(
     granularity: str = Query(default="daily"),
     rolling_window: int = Query(default=30, ge=5, le=252),
     objective: str = Query(default="balanced"),
+    ticker: str | None = Query(None),
 ):
     from backend.main import app_state
 
@@ -472,6 +500,7 @@ async def get_strategy_variant_timeseries(
         granularity,
         rolling_window,
         objective,
+        ticker,
     )
 
 
@@ -480,6 +509,7 @@ async def get_strategy_variant_distribution(
     strategy: str,
     params_hash: str = Query(..., min_length=8),
     objective: str = Query(default="balanced"),
+    ticker: str | None = Query(None),
 ):
     from backend.main import app_state
 
@@ -489,4 +519,5 @@ async def get_strategy_variant_distribution(
         strategy,
         params_hash,
         objective,
+        ticker,
     )
