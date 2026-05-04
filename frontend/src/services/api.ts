@@ -140,6 +140,23 @@ export const getTickerPricesForRange = async (
   return Array.isArray(rows) ? rows : []
 }
 
+export interface PriceHistoryRow {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  adjusted_close: number
+  volume: number
+}
+
+export const getPriceHistory = async (ticker: string, limit: number = 2): Promise<PriceHistoryRow[]> => {
+  const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
+    params: { limit },
+  })
+  return Array.isArray(response.data?.data) ? response.data.data : []
+}
+
 export const getLatestPriceAnchor = async (ticker: string): Promise<LatestPriceAnchor | null> => {
   const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
     params: { limit: 1 },
