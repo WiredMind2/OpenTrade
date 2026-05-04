@@ -172,9 +172,9 @@ def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str) -> pd.DataFra
         return pd.DataFrame()
     df = pd.read_sql_query(
         """
-        SELECT id, name, params_hash, variant_label, params, sharpe_ratio, total_return,
-               max_drawdown, win_rate, total_trades, volatility, annualized_return,
-               completed_at, initial_capital, equity_curve, final_value
+        SELECT rowid AS id, name, params_hash, variant_label, params, sharpe_ratio,
+               total_return, max_drawdown, win_rate, total_trades, volatility,
+               annualized_return, completed_at, initial_capital, equity_curve, final_value
         FROM backtest_runs
         WHERE name = ?
           AND params_hash IS NOT NULL AND TRIM(params_hash) != ''
@@ -189,7 +189,7 @@ def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str) -> pd.DataFra
 def _representative_run_ids_by_hash(
     df: pd.DataFrame, objective: str, engine: StrategyOptimizerEngine
 ) -> Dict[str, int]:
-    """For each params_hash, pick the run id with best objective score (tie-break: higher id)."""
+    """For each params_hash, pick the run rowid with best objective score."""
     out: Dict[str, int] = {}
     if df.empty:
         return out
@@ -270,7 +270,7 @@ def _normalized_equity_df_from_run(
     granularity: str,
 ) -> pd.DataFrame:
     row = pd.read_sql_query(
-        "SELECT initial_capital, equity_curve FROM backtest_runs WHERE id = ?",
+        "SELECT initial_capital, equity_curve FROM backtest_runs WHERE rowid = ?",
         conn,
         params=[run_id],
     )
