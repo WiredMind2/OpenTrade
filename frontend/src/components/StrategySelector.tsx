@@ -1,181 +1,213 @@
-import React, { useState, useEffect } from 'react';
-import { getStrategies } from '../api/strategies';
+import React, { useState, useEffect } from 'react'
+import { getStrategies } from '../api/strategies'
+import { Input } from './ui/input'
+import { Label } from './ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select'
+import { Switch } from './ui/switch'
 
 interface ParameterSchema {
-  type: string;
-  default: any;
-  description: string;
+  type: string
+  default: unknown
+  description: string
 }
 
 interface Strategy {
-  name: string;
-  description: string;
-  type: string;
-  parameters_schema: Record<string, ParameterSchema>;
-  can_train: boolean;
+  name: string
+  description: string
+  type: string
+  parameters_schema: Record<string, ParameterSchema>
+  can_train: boolean
 }
 
 interface StrategySelectorProps {
-  onStrategyChange: (strategy: string, params: Record<string, any>) => void;
+  onStrategyChange: (strategy: string, params: Record<string, unknown>) => void
 }
 
 const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange }) => {
-  const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [selectedStrategy, setSelectedStrategy] = useState<string>('');
-  const [params, setParams] = useState<Record<string, any>>({});
-  const [error, setError] = useState<string | null>(null);
+  const [strategies, setStrategies] = useState<Strategy[]>([])
+  const [selectedStrategy, setSelectedStrategy] = useState<string>('')
+  const [params, setParams] = useState<Record<string, unknown>>({})
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     getStrategies()
       .then((data: Strategy[]) => {
-        setStrategies(data);
+        setStrategies(data)
         if (data.length > 0) {
-          const first = data[0];
-          const initialParams: Record<string, any> = {};
+          const first = data[0]
+          const initialParams: Record<string, unknown> = {}
           for (const [key, schema] of Object.entries(first.parameters_schema)) {
-            initialParams[key] = schema.default;
+            initialParams[key] = schema.default
           }
-          setSelectedStrategy(first.name);
-          setParams(initialParams);
-          onStrategyChange(first.name, initialParams);
+          setSelectedStrategy(first.name)
+          setParams(initialParams)
+          onStrategyChange(first.name, initialParams)
         }
       })
-      .catch(err => {
-        console.error('Failed to fetch strategies:', err);
-        setError('Unable to load strategies. Please try again later.');
-      });
-  }, []);
+      .catch((err) => {
+        console.error('Failed to fetch strategies:', err)
+        setError('Unable to load strategies. Please try again later.')
+      })
+  }, [])
 
-  const handleStrategyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const name = e.target.value;
-    setSelectedStrategy(name);
-    const strategy = strategies.find(s => s.name === name);
+  const handleStrategyChange = (name: string) => {
+    setSelectedStrategy(name)
+    const strategy = strategies.find((s) => s.name === name)
     if (!strategy) {
-      setParams({});
-      onStrategyChange('', {});
-      return;
+      setParams({})
+      onStrategyChange('', {})
+      return
     }
 
-    const initialParams: Record<string, any> = {};
+    const initialParams: Record<string, unknown> = {}
     for (const [key, schema] of Object.entries(strategy.parameters_schema)) {
-      initialParams[key] = schema.default;
+      initialParams[key] = schema.default
     }
-    setParams(initialParams);
-    onStrategyChange(name, initialParams);
-  };
+    setParams(initialParams)
+    onStrategyChange(name, initialParams)
+  }
 
-  const handleParamChange = (key: string, value: any) => {
-    const newParams = { ...params, [key]: value };
-    setParams(newParams);
-    onStrategyChange(selectedStrategy, newParams);
-  };
-
-  const inputClass = "w-full h-9 rounded-md border border-input bg-secondary px-3 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+  const handleParamChange = (key: string, value: unknown) => {
+    const newParams = { ...params, [key]: value }
+    setParams(newParams)
+    onStrategyChange(selectedStrategy, newParams)
+  }
 
   const renderParamInput = (key: string, schema: ParameterSchema) => {
-    const value = params[key];
+    const value = params[key]
+    const narrowInput = 'min-w-0 max-w-full'
     switch (schema.type) {
       case 'int':
         return (
-          <input
+          <Input
             id={`param-${key}`}
             type="number"
-            step="1"
-            value={value}
-            onChange={e => handleParamChange(key, parseInt(e.target.value, 10))}
+            step={1}
+            className={narrowInput}
+            value={String(value ?? '')}
+            onChange={(e) => handleParamChange(key, parseInt(e.target.value, 10))}
             placeholder={schema.description}
-            className={inputClass}
           />
-        );
+        )
       case 'float':
         return (
-          <input
+          <Input
             id={`param-${key}`}
             type="number"
             step="any"
-            value={value}
-            onChange={e => handleParamChange(key, parseFloat(e.target.value))}
+            className={narrowInput}
+            value={String(value ?? '')}
+            onChange={(e) => handleParamChange(key, parseFloat(e.target.value))}
             placeholder={schema.description}
-            className={inputClass}
           />
-        );
+        )
       case 'string':
         return (
-          <input
+          <Input
             id={`param-${key}`}
             type="text"
-            value={value}
-            onChange={e => handleParamChange(key, e.target.value)}
+            className={narrowInput}
+            value={String(value ?? '')}
+            onChange={(e) => handleParamChange(key, e.target.value)}
             placeholder={schema.description}
-            className={inputClass}
           />
-        );
+        )
       case 'bool':
       case 'boolean':
         return (
-          <input
-            id={`param-${key}`}
-            type="checkbox"
-            checked={value}
-            onChange={e => handleParamChange(key, e.target.checked)}
-            className="h-4 w-4 rounded border-input accent-primary cursor-pointer"
-          />
-        );
+          <div className="flex min-w-0 items-start gap-2 pt-1">
+            <Switch
+              id={`param-${key}`}
+              className="mt-0.5 shrink-0"
+              checked={Boolean(value)}
+              onCheckedChange={(checked) => handleParamChange(key, checked)}
+            />
+            <span className="min-w-0 flex-1 break-words text-sm text-muted-foreground">{schema.description}</span>
+          </div>
+        )
       default:
         return (
-          <input
+          <Input
             id={`param-${key}`}
             type="text"
-            value={value}
-            onChange={e => handleParamChange(key, e.target.value)}
+            className={narrowInput}
+            value={String(value ?? '')}
+            onChange={(e) => handleParamChange(key, e.target.value)}
             placeholder={schema.description}
-            className={inputClass}
           />
-        );
+        )
     }
-  };
+  }
 
   return (
-    <div className="space-y-1.5">
-      <label htmlFor="strategy-select" className="text-sm font-medium text-foreground">
-        Select Strategy
-      </label>
-      <select
-        id="strategy-select"
-        value={selectedStrategy}
-        onChange={handleStrategyChange}
-        className={inputClass}
-      >
-        <option value="" className="bg-secondary text-foreground">-- Select a Strategy --</option>
-        {strategies.map(strategy => (
-          <option key={strategy.name} value={strategy.name} className="bg-secondary text-foreground">
-            {strategy.name} - {strategy.description}
-          </option>
-        ))}
-      </select>
+    <div className="min-w-0 max-w-full space-y-3">
+      <div className="min-w-0 space-y-2">
+        <Label htmlFor="strategy-select">Strategy</Label>
+        {strategies.length === 0 ? (
+          <div
+            id="strategy-select"
+            className="flex h-9 min-w-0 items-center rounded-lg border border-input bg-muted px-3 text-sm text-muted-foreground"
+          >
+            Loading strategies…
+          </div>
+        ) : (
+          <Select value={selectedStrategy} onValueChange={handleStrategyChange}>
+            <SelectTrigger
+              id="strategy-select"
+              className="h-auto min-h-9 w-full min-w-0 items-start py-2 [&>span]:whitespace-normal [&>span]:break-words [&>span]:line-clamp-none [&>span]:overflow-visible"
+            >
+              <SelectValue placeholder="Choose a strategy" />
+            </SelectTrigger>
+            <SelectContent>
+              {strategies.map((strategy) => (
+                <SelectItem key={strategy.name} value={strategy.name} textValue={`${strategy.name} ${strategy.description}`}>
+                  <span className="block w-full min-w-0 max-w-full truncate font-medium leading-tight">
+                    {strategy.name}
+                  </span>
+                  <span className="mt-0.5 block w-full min-w-0 max-w-full whitespace-normal break-words text-xs leading-snug text-muted-foreground [overflow-wrap:anywhere] [word-break:break-word]">
+                    {strategy.description}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
 
-      {error && (
-        <p className="text-sm text-destructive">{error}</p>
-      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
-      {selectedStrategy && (
-        <div className="space-y-3 pt-1">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Parameters</p>
-          {Object.entries(strategies.find(s => s.name === selectedStrategy)?.parameters_schema || {}).map(([key, schema]) => (
-            <div key={key} className="space-y-1">
-              <label htmlFor={`param-${key}`} className="text-sm font-medium text-foreground capitalize">
+      {selectedStrategy ? (
+        <div className="min-w-0 space-y-4 border-t border-border pt-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Parameters</p>
+          {Object.entries(
+            strategies.find((s) => s.name === selectedStrategy)?.parameters_schema || {}
+          ).map(([key, schema]) => (
+            <div key={key} className="min-w-0 space-y-2">
+              <Label htmlFor={`param-${key}`} className="block min-w-0 break-words capitalize">
                 {key}
-              </label>
-              <div className={schema.type === 'bool' || schema.type === 'boolean' ? '' : 'w-full'}>
+              </Label>
+              <div
+                className={
+                  schema.type === 'bool' || schema.type === 'boolean' ? 'min-w-0' : 'min-w-0 w-full max-w-full'
+                }
+              >
                 {renderParamInput(key, schema)}
               </div>
-              <p className="text-xs text-muted-foreground">{schema.description}</p>
+              {schema.type !== 'bool' && schema.type !== 'boolean' ? (
+                <p className="min-w-0 break-words text-xs text-muted-foreground">{schema.description}</p>
+              ) : null}
             </div>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
-  );
-};
+  )
+}
 
-export default StrategySelector;
+export default StrategySelector

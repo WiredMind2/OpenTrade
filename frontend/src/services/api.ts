@@ -4,6 +4,7 @@ import type {
   StrategyVariantSummary,
   StrategyVariantTimeseriesResponse,
   StrategyDistributionResponse,
+  TickerStrategyLeaderboardResponse,
 } from '../types'
 
 // Jest (CommonJS) cannot parse `import.meta`. Keep baseURL flexible without relying on it.
@@ -65,6 +66,23 @@ export const runPipeline = async (steps?: string[]) => {
 
 export const getPipelineStatus = async (executionId: string) => {
   const response = await instance.get(`/scripts/pipeline/status/${executionId}`)
+  return response.data
+}
+
+export const runBatchStrategyTraining = async (data: {
+  ticker: string
+  start_date: string
+  end_date: string
+  initial_capital?: number
+  objective?: string
+  max_evals?: number
+  optimizer_mode?: string
+  random_seed?: number | null
+  pair_ticker?: string | null
+  universe_limit?: number
+  stop_on_error?: boolean
+}) => {
+  const response = await instance.post('/scripts/batch-strategy-training', data)
   return response.data
 }
 
@@ -284,6 +302,15 @@ export const getMAPredictionStatus = async (executionId: string) => {
 // Strategy analytics API functions
 export const getStrategyAnalyticsFilters = async (): Promise<StrategyAnalyticsFilters> => {
   const response = await instance.get('/api/strategy-analytics/filters')
+  return response.data
+}
+
+export const getTickerStrategyLeaderboard = async (query: {
+  objective: string
+  top_n: number
+  ticker?: string
+}): Promise<TickerStrategyLeaderboardResponse> => {
+  const response = await instance.get('/api/strategy-analytics/tickers/leaderboard', { params: query })
   return response.data
 }
 

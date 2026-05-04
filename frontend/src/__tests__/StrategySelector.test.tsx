@@ -1,12 +1,13 @@
-import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import '@testing-library/jest-dom';
-import StrategySelector from '../components/StrategySelector';
-import { getStrategies } from '../api/strategies';
+import React from 'react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import '@testing-library/jest-dom'
+import StrategySelector from '../components/StrategySelector'
+import { getStrategies } from '../api/strategies'
 
 jest.mock('../api/strategies', () => ({
   getStrategies: jest.fn(),
-}));
+}))
 
 const mockStrategies = [
   {
@@ -16,9 +17,9 @@ const mockStrategies = [
     parameters_schema: {
       window: { type: 'int', default: 20, description: 'Moving average window' },
       threshold: { type: 'float', default: 0.02, description: 'Signal threshold' },
-      use_short: { type: 'boolean', default: true, description: 'Use short positions' }
+      use_short: { type: 'boolean', default: true, description: 'Use short positions' },
     },
-    can_train: false
+    can_train: false,
   },
   {
     name: 'sentiment_ml',
@@ -26,210 +27,172 @@ const mockStrategies = [
     type: 'ml',
     parameters_schema: {
       confidence_threshold: { type: 'float', default: 0.8, description: 'Confidence threshold' },
-      model_path: { type: 'string', default: '/models/sentiment', description: 'Model path' }
+      model_path: { type: 'string', default: '/models/sentiment', description: 'Model path' },
     },
-    can_train: true
-  }
-];
+    can_train: true,
+  },
+]
 
 describe('StrategySelector', () => {
-  const mockOnStrategyChange = jest.fn();
-  const mockedGetStrategies = getStrategies as jest.MockedFunction<typeof getStrategies>;
+  const mockOnStrategyChange = jest.fn()
+  const mockedGetStrategies = getStrategies as jest.MockedFunction<typeof getStrategies>
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    mockedGetStrategies.mockResolvedValue(mockStrategies as any);
-  });
+    jest.clearAllMocks()
+    mockedGetStrategies.mockResolvedValue(mockStrategies as never)
+  })
 
-  it('renders loading state initially', () => {
-    mockedGetStrategies.mockImplementationOnce(() =>
-      new Promise(() => {}) // Never resolves
-    );
+  it('renders loading state before strategies resolve', async () => {
+    mockedGetStrategies.mockImplementationOnce(() => new Promise(() => {}))
 
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
-    expect(screen.getByText('Select Strategy')).toBeInTheDocument();
-    expect(screen.getByRole('combobox')).toBeInTheDocument();
-  });
+    expect(screen.getByText('Strategy')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.getByText('Loading strategies…')).toBeInTheDocument()
+  })
 
-  it('fetches and displays strategies on mount', async () => {
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
+  it('fetches strategies and selects the first by default', async () => {
+    const user = userEvent.setup()
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
     await waitFor(() => {
-      expect(screen.getByText('-- Select a Strategy --')).toBeInTheDocument();
-      expect(screen.getByText('moving_average - Moving Average Strategy')).toBeInTheDocument();
-      expect(screen.getByText('sentiment_ml - Sentiment ML Strategy')).toBeInTheDocument();
-    });
-  });
+      expect(mockedGetStrategies).toHaveBeenCalled()
+    })
+
+    expect(mockOnStrategyChange).toHaveBeenCalledWith('moving_average', {
+      window: 20,
+      threshold: 0.02,
+      use_short: true,
+    })
+
+    const trigger = screen.getByRole('combobox')
+    await user.click(trigger)
+    expect(await screen.findByRole('option', { name: /sentiment_ml/i })).toBeInTheDocument()
+  })
 
   it('handles fetch error gracefully', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    mockedGetStrategies.mockRejectedValueOnce(new Error('Network error'));
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+    mockedGetStrategies.mockRejectedValueOnce(new Error('Network error'))
 
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
-
-    await waitFor(() => {
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to fetch strategies:', expect.any(Error));
-    });
-
-    consoleSpy.mockRestore();
-  });
-
-  it('calls onStrategyChange when strategy is selected', async () => {
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
     await waitFor(() => {
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-    });
+      expect(consoleSpy).toHaveBeenCalledWith('Failed to fetch strategies:', expect.any(Error))
+    })
 
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'moving_average' } });
+    expect(await screen.findByText('Unable to load strategies. Please try again later.')).toBeInTheDocument()
+    consoleSpy.mockRestore()
+  })
 
-    await waitFor(() => {
-      expect(mockOnStrategyChange).toHaveBeenLastCalledWith('moving_average', {
-        window: 20,
-        threshold: 0.02,
-        use_short: true
-      });
-    });
-  });
+  it('calls onStrategyChange when another strategy is chosen', async () => {
+    const user = userEvent.setup()
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
-  it('renders parameters when strategy is selected', async () => {
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
+    await waitFor(() => expect(screen.getByRole('combobox')).not.toBeDisabled())
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-    });
+    mockOnStrategyChange.mockClear()
 
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'moving_average' } });
+    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: /sentiment_ml/i }))
 
     await waitFor(() => {
-      expect(screen.getByText('Parameters')).toBeInTheDocument();
-      expect(screen.getByText('window')).toBeInTheDocument();
-      expect(screen.getByText('threshold')).toBeInTheDocument();
-      expect(screen.getByText('use_short')).toBeInTheDocument();
-    });
-  });
+      expect(mockOnStrategyChange).toHaveBeenLastCalledWith('sentiment_ml', {
+        confidence_threshold: 0.8,
+        model_path: '/models/sentiment',
+      })
+    })
+  })
 
-  it('renders different input types for parameters', async () => {
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-    });
-
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'moving_average' } });
+  it('renders parameters for the selected strategy', async () => {
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
     await waitFor(() => {
-      // Check for number input (int type)
-      const windowInput = screen.getByDisplayValue('20');
-      expect(windowInput).toHaveAttribute('type', 'number');
-      expect(windowInput).toHaveAttribute('step', '1');
+      expect(screen.getByText('Parameters')).toBeInTheDocument()
+    })
 
-      // Check for number input (float type)
-      const thresholdInput = screen.getByDisplayValue('0.02');
-      expect(thresholdInput).toHaveAttribute('type', 'number');
-      expect(thresholdInput).toHaveAttribute('step', 'any');
+    expect(screen.getByText('window')).toBeInTheDocument()
+    expect(screen.getByText('threshold')).toBeInTheDocument()
+    expect(screen.getByText('use_short')).toBeInTheDocument()
+  })
 
-      // Check for checkbox (boolean type)
-      const checkbox = screen.getByRole('checkbox');
-      expect(checkbox).toBeChecked();
-    });
-  });
+  it('renders appropriate controls for parameter types', async () => {
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
+
+    await waitFor(() => expect(screen.getByDisplayValue('20')).toBeInTheDocument())
+
+    const windowInput = screen.getByDisplayValue('20')
+    expect(windowInput).toHaveAttribute('type', 'number')
+    expect(windowInput).toHaveAttribute('step', '1')
+
+    const thresholdInput = screen.getByDisplayValue('0.02')
+    expect(thresholdInput).toHaveAttribute('type', 'number')
+    expect(thresholdInput).toHaveAttribute('step', 'any')
+
+    expect(screen.getByRole('switch')).toBeChecked()
+  })
 
   it('renders string input for unknown parameter types', async () => {
-    const strategiesWithUnknownType = [{
-      name: 'custom',
-      description: 'Custom Strategy',
-      type: 'custom',
-      parameters_schema: {
-        custom_param: { type: 'unknown', default: 'default_value', description: 'Custom parameter' }
+    const strategiesWithUnknownType = [
+      {
+        name: 'custom',
+        description: 'Custom Strategy',
+        type: 'custom',
+        parameters_schema: {
+          custom_param: { type: 'unknown', default: 'default_value', description: 'Custom parameter' },
+        },
+        can_train: false,
       },
-      can_train: false
-    }];
+    ]
 
-    mockedGetStrategies.mockResolvedValueOnce(strategiesWithUnknownType as any);
+    mockedGetStrategies.mockResolvedValueOnce(strategiesWithUnknownType as never)
 
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
+    const user = userEvent.setup()
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-    });
+    await waitFor(() => expect(screen.getByRole('combobox')).not.toBeDisabled())
 
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'custom' } });
+    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: /custom/i }))
 
     await waitFor(() => {
-      const input = screen.getByDisplayValue('default_value');
-      expect(input).toHaveAttribute('type', 'text');
-    });
-  });
+      const input = screen.getByDisplayValue('default_value')
+      expect(input).toHaveAttribute('type', 'text')
+    })
+  })
 
-  it('updates parameters and calls onStrategyChange when parameter values change', async () => {
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-    });
-
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'moving_average' } });
+  it('updates parameters and calls onStrategyChange when values change', async () => {
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
     await waitFor(() => {
       expect(mockOnStrategyChange).toHaveBeenCalledWith('moving_average', {
         window: 20,
         threshold: 0.02,
-        use_short: true
-      });
-    });
+        use_short: true,
+      })
+    })
 
-    // Clear previous calls
-    mockOnStrategyChange.mockClear();
+    mockOnStrategyChange.mockClear()
 
-    // Change a parameter value
-    const windowInput = screen.getByDisplayValue('20');
-    fireEvent.change(windowInput, { target: { value: '30' } });
+    const windowInput = screen.getByDisplayValue('20')
+    fireEvent.change(windowInput, { target: { value: '30' } })
 
     await waitFor(() => {
       expect(mockOnStrategyChange).toHaveBeenCalledWith('moving_average', {
         window: 30,
         threshold: 0.02,
-        use_short: true
-      });
-    });
-  });
-
-  it('calls onStrategyChange with empty values when no strategy is selected', async () => {
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-    });
-
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: '' } });
-
-    await waitFor(() => {
-      expect(mockOnStrategyChange).toHaveBeenCalledWith('', {});
-    });
-  });
+        use_short: true,
+      })
+    })
+  })
 
   it('shows parameter descriptions', async () => {
-    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />);
+    render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
     await waitFor(() => {
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-    });
-
-    const select = screen.getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'moving_average' } });
-
-    await waitFor(() => {
-      expect(screen.getByText('Moving average window')).toBeInTheDocument();
-      expect(screen.getByText('Signal threshold')).toBeInTheDocument();
-      expect(screen.getByText('Use short positions')).toBeInTheDocument();
-    });
-  });
-});
+      expect(screen.getByText('Moving average window')).toBeInTheDocument()
+      expect(screen.getByText('Signal threshold')).toBeInTheDocument()
+      expect(screen.getByText('Use short positions')).toBeInTheDocument()
+    })
+  })
+})

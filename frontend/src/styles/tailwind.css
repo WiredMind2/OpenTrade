@@ -4,75 +4,93 @@
 
 @layer base {
   :root {
+    /* shadcn neutral + Nova radius (see components.json base-nova) */
+    --radius: 0.625rem;
     --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --foreground: 0 0% 9%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 0 0% 9%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --popover-foreground: 0 0% 9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.25rem;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 45%;
 
-    --tv-bg-primary: 0 0% 100%;
-    --tv-bg-secondary: 220 14% 96%;
-    --tv-bg-tertiary: 220 13% 91%;
-    --tv-bg-elevated: 0 0% 99%;
-    --tv-bg-hover: 221 83% 95%;
-    --tv-border-primary: 214 32% 88%;
-    --tv-border-secondary: 214 32% 82%;
-    --tv-border-hover: 214 32% 70%;
-    --tv-text-primary: 222 47% 11%;
-    --tv-text-secondary: 215 14% 40%;
-    --tv-text-tertiary: 215 14% 58%;
-    --tv-text-disabled: 215 14% 74%;
+    --sidebar: 0 0% 98%;
+    --sidebar-foreground: 0 0% 9%;
+    --sidebar-primary: 0 0% 9%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 0 0% 96.1%;
+    --sidebar-accent-foreground: 0 0% 9%;
+    --sidebar-border: 0 0% 91%;
+    --sidebar-ring: 0 0% 45%;
+
+    --tv-bg-primary: var(--background);
+    --tv-bg-secondary: var(--sidebar);
+    --tv-bg-tertiary: var(--muted);
+    --tv-bg-elevated: var(--card);
+    --tv-bg-hover: var(--accent);
+    --tv-border-primary: var(--sidebar-border);
+    --tv-border-secondary: var(--border);
+    --tv-border-hover: var(--ring);
+    --tv-text-primary: var(--foreground);
+    --tv-text-secondary: var(--muted-foreground);
+    --tv-text-tertiary: 0 0% 55%;
+    --tv-text-disabled: 0 0% 70%;
   }
 
   .dark {
-    --background: 217 33% 7%;
-    --foreground: 225 11% 85%;
-    --card: 220 20% 18%;
-    --card-foreground: 225 11% 85%;
-    --popover: 217 33% 7%;
-    --popover-foreground: 225 11% 85%;
-    --primary: 221 100% 57%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 220 17% 20%;
-    --secondary-foreground: 225 11% 85%;
-    --muted: 220 17% 20%;
-    --muted-foreground: 225 8% 51%;
-    --accent: 220 17% 20%;
-    --accent-foreground: 225 11% 85%;
-    --destructive: 354 85% 57%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 220 17% 20%;
-    --input: 220 17% 20%;
-    --ring: 221 100% 57%;
-    --radius: 0.25rem;
+    --background: 0 0% 9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 12%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 12%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 18%;
+    --input: 0 0% 18%;
+    --ring: 0 0% 45%;
 
-    --tv-bg-primary: 217 33% 7%;
-    --tv-bg-secondary: 220 20% 18%;
-    --tv-bg-tertiary: 220 17% 20%;
-    --tv-bg-elevated: 219 30% 10%;
-    --tv-bg-hover: 221 83% 20%;
-    --tv-border-primary: 220 17% 20%;
-    --tv-border-secondary: 220 15% 26%;
-    --tv-border-hover: 220 13% 32%;
-    --tv-text-primary: 225 11% 85%;
-    --tv-text-secondary: 225 8% 51%;
-    --tv-text-tertiary: 220 12% 34%;
-    --tv-text-disabled: 220 15% 26%;
+    --sidebar: 0 0% 12%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 0 0% 98%;
+    --sidebar-primary-foreground: 0 0% 9%;
+    --sidebar-accent: 0 0% 15%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 0 0% 18%;
+    --sidebar-ring: 0 0% 45%;
+
+    --tv-bg-primary: var(--background);
+    --tv-bg-secondary: var(--sidebar);
+    --tv-bg-tertiary: var(--muted);
+    --tv-bg-elevated: var(--card);
+    --tv-bg-hover: var(--accent);
+    --tv-border-primary: var(--sidebar-border);
+    --tv-border-secondary: var(--border);
+    --tv-border-hover: 0 0% 28%;
+    --tv-text-primary: var(--foreground);
+    --tv-text-secondary: var(--muted-foreground);
+    --tv-text-tertiary: 0 0% 45%;
+    --tv-text-disabled: 0 0% 35%;
   }
 }
 
@@ -80,24 +98,22 @@
   * {
     @apply border-border;
   }
-  
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
-  
-  /* Remove default focus outline, we'll use ring instead */
+
   *:focus {
     outline: none;
   }
 }
 
-html, body, #root { 
+html, body, #root {
   height: 100%;
   overflow-x: hidden;
 }
 
-/* TradingView-style scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -108,25 +124,23 @@ html, body, #root {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--tv-border-secondary));
-  border-radius: 4px;
+  background: hsl(var(--border));
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--tv-border-hover));
+  background: hsl(var(--muted-foreground) / 0.35);
 }
 
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* Firefox scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--tv-border-secondary)) transparent;
+  scrollbar-color: hsl(var(--border)) transparent;
 }
 
-/* Smooth transitions - more subtle than before */
 @layer utilities {
   .transition-tv {
     transition-property: color, background-color, border-color, opacity, transform;
@@ -136,16 +150,14 @@ html, body, #root {
 }
 
 ::selection {
-  background-color: hsl(var(--primary) / 0.25);
+  background-color: hsl(var(--primary) / 0.15);
   color: hsl(var(--foreground));
 }
 
-/* Remove default button styles */
 button {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Utility classes for TradingView styling */
 @layer utilities {
   .text-tv-primary {
     color: hsl(var(--tv-text-primary));
@@ -178,22 +190,20 @@ button {
   .border-tv-secondary {
     border-color: hsl(var(--tv-border-secondary));
   }
-  
-  /* Compact spacing for TradingView feel */
+
   .compact {
     @apply p-2 gap-2;
   }
-  
+
   .compact-x {
     @apply px-2 gap-x-2;
   }
-  
+
   .compact-y {
     @apply py-2 gap-y-2;
   }
 }
 
-/* Loading shimmer effect */
 @keyframes shimmer {
   0% {
     background-position: -1000px 0;
@@ -207,15 +217,14 @@ button {
   animation: shimmer 2s linear infinite;
   background: linear-gradient(
     to right,
-    hsl(var(--tv-bg-secondary)) 0%,
-    hsl(var(--tv-bg-tertiary)) 20%,
-    hsl(var(--tv-bg-secondary)) 40%,
-    hsl(var(--tv-bg-secondary)) 100%
+    hsl(var(--muted)) 0%,
+    hsl(var(--accent)) 20%,
+    hsl(var(--muted)) 40%,
+    hsl(var(--muted)) 100%
   );
   background-size: 1000px 100%;
 }
 
-/* Indeterminate bar while waiting on long-running API calls */
 @keyframes server-wait-slide {
   0% {
     transform: translateX(-100%);

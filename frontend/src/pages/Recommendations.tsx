@@ -190,18 +190,19 @@ const levelConfig: Record<string, { label: string; variant: 'destructive' | 'def
 function MetricTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-tv-text-secondary">{label}</span>
-      <span className="text-base font-semibold text-tv-text-primary tabular-nums">{value}</span>
-      {sub && <span className="text-xs text-tv-text-secondary">{sub}</span>}
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-base font-semibold text-foreground tabular-nums">{value}</span>
+      {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
     </div>
   )
 }
 
 function ProfileSnapshot({ profile }: { profile: UserProfile }) {
-  const ddColor = profile.avgDrawdown < -0.15 ? 'text-destructive' : profile.avgDrawdown < -0.10 ? 'text-tv-orange' : 'text-tv-green'
-  const srColor = profile.avgSharpe < 1.0 ? 'text-tv-orange' : 'text-tv-green'
-  const wrColor = profile.avgWinRate < 0.45 ? 'text-tv-orange' : 'text-tv-green'
-  const retColor = profile.avgReturn < 0 ? 'text-destructive' : 'text-tv-green'
+  const ddColor =
+    profile.avgDrawdown < -0.15 ? 'text-destructive' : profile.avgDrawdown < -0.10 ? 'text-warning' : 'text-success'
+  const srColor = profile.avgSharpe < 1.0 ? 'text-warning' : 'text-success'
+  const wrColor = profile.avgWinRate < 0.45 ? 'text-warning' : 'text-success'
+  const retColor = profile.avgReturn < 0 ? 'text-destructive' : 'text-success'
 
   return (
     <Card>
@@ -213,19 +214,19 @@ function ProfileSnapshot({ profile }: { profile: UserProfile }) {
       <CardContent className="pt-4">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
           <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-tv-text-secondary">Avg. Return</span>
+            <span className="text-xs text-muted-foreground">Avg. Return</span>
             <span className={`text-base font-semibold tabular-nums ${retColor}`}>{fmtPct(profile.avgReturn)}</span>
           </div>
           <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-tv-text-secondary">Max Drawdown</span>
+            <span className="text-xs text-muted-foreground">Max Drawdown</span>
             <span className={`text-base font-semibold tabular-nums ${ddColor}`}>{fmtPct(profile.avgDrawdown)}</span>
           </div>
           <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-tv-text-secondary">Sharpe Ratio</span>
+            <span className="text-xs text-muted-foreground">Sharpe Ratio</span>
             <span className={`text-base font-semibold tabular-nums ${srColor}`}>{profile.avgSharpe.toFixed(2)}</span>
           </div>
           <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-tv-text-secondary">Win Rate</span>
+            <span className="text-xs text-muted-foreground">Win Rate</span>
             <span className={`text-base font-semibold tabular-nums ${wrColor}`}>{fmtPct(profile.avgWinRate)}</span>
           </div>
         </div>
@@ -239,17 +240,17 @@ function FocusCard({ area, category }: { area: FocusArea; category: Category }) 
   const focusRules = category.rules.filter((r) => r.level === 'critical' || r.level === 'important')
 
   return (
-    <Card className={area.severity === 'high' ? 'border-destructive/40' : 'border-tv-orange/40'}>
+    <Card className={area.severity === 'high' ? 'border-destructive/40' : 'border-warning/40'}>
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2">
-          <Icon className="h-4 w-4 text-tv-text-secondary shrink-0" />
+          <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
           <CardTitle className="text-sm font-semibold">{category.title}</CardTitle>
           <Badge variant={area.severity === 'high' ? 'destructive' : 'warning'} className="ml-auto shrink-0">
             Focus area
           </Badge>
         </div>
         <CardDescription className="flex items-start gap-1.5 pt-1">
-          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-tv-text-secondary" />
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           {area.reason}
         </CardDescription>
       </CardHeader>
@@ -262,7 +263,7 @@ function FocusCard({ area, category }: { area: FocusArea; category: Category }) 
               <Badge variant={cfg.variant} className="mt-0.5 shrink-0 w-20 justify-center">
                 {cfg.label}
               </Badge>
-              <p className="text-sm text-tv-text-primary leading-relaxed">{rule.text}</p>
+              <p className="text-sm leading-relaxed text-foreground">{rule.text}</p>
             </div>
           )
         })}
@@ -288,9 +289,9 @@ function RulesTab({ category }: { category: Category }) {
                 {cfg.label}
               </Badge>
               <div>
-                <p className="text-sm text-tv-text-primary leading-relaxed">{rule.text}</p>
+                <p className="text-sm leading-relaxed text-foreground">{rule.text}</p>
                 {rule.detail && (
-                  <p className="text-xs text-tv-text-secondary mt-0.5">{rule.detail}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{rule.detail}</p>
                 )}
               </div>
             </div>
@@ -326,15 +327,15 @@ export default function Recommendations() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-tv-text-primary">Best Practices</h1>
-        <p className="text-sm text-tv-text-secondary mt-1">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Best Practices</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           Core guidelines for disciplined, risk-aware trading.
         </p>
       </div>
 
       {/* Performance snapshot */}
       {loading ? (
-        <Skeleton className="h-24 w-full rounded" />
+        <Skeleton className="h-24 w-full rounded-lg" />
       ) : profile ? (
         <ProfileSnapshot profile={profile} />
       ) : null}
@@ -342,7 +343,7 @@ export default function Recommendations() {
       {/* Personalised focus areas */}
       {!loading && focusAreas.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-tv-text-primary">Recommended focus areas</h2>
+          <h2 className="text-sm font-semibold text-foreground">Recommended focus areas</h2>
           <div className="grid gap-4 md:grid-cols-2">
             {focusAreas.map((area) => {
               const cat = categories.find((c) => c.id === area.categoryId)!
@@ -355,7 +356,7 @@ export default function Recommendations() {
       {/* Full reference */}
       <div className="space-y-3">
         {(profile || !loading) && (
-          <h2 className="text-sm font-semibold text-tv-text-primary">
+          <h2 className="text-sm font-semibold text-foreground">
             {focusAreas.length > 0 ? 'Full reference' : 'Guidelines'}
           </h2>
         )}
