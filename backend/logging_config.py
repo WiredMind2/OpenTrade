@@ -37,8 +37,6 @@ COMPONENT_LOGGER_MAPPING = {
     "backend.scripts.apply_schema": "scripts",
     "backend.scripts.backtest_runner": "scripts",
     "backend.scripts.download_kaggle": "scripts",
-    "backend.scripts.predictions.generate_sentiment_predictions": "scripts",
-    "backend.scripts.predictions.generate_trading_predictions": "scripts",
     "backend.scripts.ingest_minute_prices": "scripts",
     "backend.scripts.ingest_news": "scripts",
     "backend.scripts.ingest_prices": "scripts",
@@ -47,7 +45,6 @@ COMPONENT_LOGGER_MAPPING = {
     "backend.scripts.run_pipeline": "scripts",
     "backend.scripts.scan_csvs": "scripts",
     "backend.scripts.scrape_articles": "scripts",
-    "backend.scripts.train_sentiment_model": "scripts",
     # Core
     "backend.data_processing": "core",
     "backend.feature_engineering": "core",

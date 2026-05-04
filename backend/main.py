@@ -42,7 +42,6 @@ from backend.routes.udf import router as udf_router
 from backend.routes.strategies import router as strategies_router
 from backend.routes.strategy_analytics import router as strategy_analytics_router
 from backend.routes.news import router as news_router
-from backend.ml.storage import ensure_ml_schema
 from backend.db.variant_schema import ensure_variant_schema
 from backend.services.news_auto_ingest import (
     daily_news_auto_ingest_worker,
@@ -236,9 +235,6 @@ async def init_database():
                     )
                 raise
             conn.commit()
-
-            # Validate/patch ML schema expectations (adds missing columns if needed)
-            ensure_ml_schema(conn)
 
             # Variant / params_hash columns and artifact FK backfill
             ensure_variant_schema(conn)

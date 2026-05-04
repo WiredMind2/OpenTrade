@@ -52,6 +52,9 @@ export default function Predictions() {
   const excludeKey = useMemo(() => [...excludedIds].sort((a, b) => a - b).join(','), [excludedIds])
   const pinKey = useMemo(() => [...pinnedIds].sort((a, b) => a - b).join(','), [pinnedIds])
 
+  /** Stable object for chart props — inline `{}` would be a new reference every render. */
+  const chartStrategyParams = useMemo(() => ({}), [])
+
   const sym = selectedTicker.trim().toUpperCase()
 
   useEffect(() => {
@@ -341,7 +344,7 @@ export default function Predictions() {
               symbol={selectedTicker}
               height="600px"
               strategyName=""
-              params={{}}
+              params={chartStrategyParams}
               horizon={30}
               onSymbolChange={(symbol) => {
                 const normalized = rememberTicker(symbol)

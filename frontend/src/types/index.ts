@@ -18,7 +18,7 @@ export interface PredictionRequest {
   strategy_params?: Record<string, any>;
   /** ISO datetime: use features only through this instant (walk-forward simulation). */
   as_of?: string;
-  /** When false with as_of, skips writing to sentiment_predictions (default false if as_of set). */
+  /** Legacy field; server ML persistence was removed. */
   persist_prediction?: boolean;
   /** With as_of, request next-horizon realized daily closes in metadata for evaluation. */
   include_forward_actuals?: boolean;

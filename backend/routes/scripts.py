@@ -166,7 +166,7 @@ async def execute_script(
     request: ScriptExecutionRequest,
     background_tasks: BackgroundTasks
 ):
-    """Execute a data processing or ML script."""
+    """Execute a registered data or pipeline script."""
     try:
         config = get_config()
 
@@ -418,11 +418,6 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
         if script_name == "run_pipeline":
             if "steps" in parameters:
                 cmd.extend(["--steps"] + parameters["steps"])
-        elif script_name == "train_sentiment_model":
-            if "csv" in parameters:
-                cmd.extend(["--csv", parameters["csv"]])
-            if "outdir" in parameters:
-                cmd.extend(["--outdir", parameters["outdir"]])
         elif script_name == "backtest_runner":
             if "db" in parameters:
                 cmd.extend(["--db", parameters["db"]])
@@ -666,7 +661,6 @@ def get_script_path(script_name: str) -> Optional[str]:
 
     script_map = {
         "run_pipeline": "run_pipeline.py",
-        "train_sentiment_model": "train_sentiment_model.py",
         "backtest_runner": "backtest_runner.py",
         "train_all_strategies": "train_all_strategies.py",
     }

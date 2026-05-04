@@ -10,6 +10,10 @@ import { projectStrategy } from "../api/strategies";
 import type { ProjectionPoint, PredictionProjection } from "../types";
 import type { NewsArticle } from "@/api/news";
 
+/** Stable defaults so default props are not new references every render (avoids useEffect loops). */
+const EMPTY_PARAMS: Record<string, any> = {};
+const EMPTY_PREDICTION_PROJECTIONS: PredictionProjection[] = [];
+
 /**
  * Candle data point
  */
@@ -95,11 +99,11 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      bullishColor = "#10b981",
      bearishColor = "#ef4444",
      strategyName = "moving_average",
-     params = {},
+     params = EMPTY_PARAMS,
      horizon = 30,
      mode = "price",
      showPredictionProjections = false,
-     predictionProjections = [],
+     predictionProjections = EMPTY_PREDICTION_PROJECTIONS,
      onSymbolChange,
    }, ref) => {
        const { theme } = useTheme();
@@ -521,9 +525,14 @@ widgetRef.current = new TradingView.widget(widgetOptions);
     }, [isDark])
 
     useEffect(() => {
-      setPredictionSettings({
-        showPredictionProjections,
-        predictionProjections,
+      setPredictionSettings((prev) => {
+        if (
+          prev.showPredictionProjections === showPredictionProjections &&
+          prev.predictionProjections === predictionProjections
+        ) {
+          return prev;
+        }
+        return { showPredictionProjections, predictionProjections };
       });
     }, [showPredictionProjections, predictionProjections]);
 

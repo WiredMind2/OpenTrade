@@ -5,7 +5,6 @@ import json
 import numpy as np
 import pandas as pd
 import sqlite3
-import time
 import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
@@ -20,7 +19,6 @@ from backend.schemas import PredictionRequest, PredictionResponse, ChartDataResp
 from backend.data_validation import DataValidator, DataQualityLevel
 from backend.data_processing import aggregate_predictions, process_prediction_record
 from backend.cache import chart_data_cache
-from backend.ml.prediction_service import PredictionService
 
 
 logger = get_component_logger(__file__)
@@ -63,20 +61,6 @@ def _get_app_state() -> Dict[str, Any]:
             return state
 
     return states[0]
-
-
-def _has_any_market_context(db_path: str, ticker: str) -> Optional[bool]:
-    """Return True/False for context availability, or None on DB errors."""
-    try:
-        with sqlite3.connect(db_path) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT 1 FROM price_daily WHERE ticker = ? LIMIT 1", (ticker.upper(),))
-            if cur.fetchone():
-                return True
-            cur.execute("SELECT 1 FROM articles WHERE ticker = ? LIMIT 1", (ticker.upper(),))
-            return cur.fetchone() is not None
-    except Exception:
-        return None
 
 
 def _persist_fallback_prediction(db_path: str, ticker: str, horizon: str, model_name: str) -> None:
@@ -155,74 +139,13 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
                 },
             )
 
-        if os.getenv("ML_PREDICTION_V2_ENABLED", "true").lower() not in {"true", "1", "yes"}:
-            raise HTTPException(status_code=503, detail="ML prediction v2 is disabled by configuration")
-        model_key = ml_model_key
-        models_loaded = app_state.get("models_loaded") or {}
-        if model_key not in models_loaded:
-            raise HTTPException(status_code=404, detail=f"No model available for horizon {request.horizon}")
-        model_entry = models_loaded.get(model_key) or {}
-        if "lgbm" in model_entry and model_entry.get("lgbm") is None:
-            raise HTTPException(status_code=500, detail=f"Model for horizon {request.horizon} is not initialized")
-        db_path = app_state.get("database_path")
-        if isinstance(db_path, str) and "lgbm" in model_entry:
-            context_available = _has_any_market_context(db_path, request.ticker)
-            if context_available is None:
-                raise HTTPException(status_code=500, detail="Database access failed")
-            if not context_available:
-                _persist_fallback_prediction(db_path, request.ticker, request.horizon, model_key)
-                return PredictionResponse(
-                    ticker=request.ticker.upper(),
-                    horizon=request.horizon,
-                    predicted_return=0.0,
-                    confidence=0.1,
-                    timestamp=_utc_now(),
-                    strategy_name=None,
-                    model_id=model_key,
-                    features_used=[],
-                    metadata={"fallback": True, "reason": "no_market_context"},
-                )
-        start = time.time()
-        service = PredictionService(
-            database_path=app_state["database_path"],
-            models_loaded=models_loaded,
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "On-demand sentiment ML inference was removed. Pass strategy_name for a strategy projection, "
+                "or use GET /predictions/recent for stored sentiment_predictions rows."
+            ),
         )
-        result = service.predict(
-            request.ticker,
-            request.horizon,
-            as_of=request.as_of,
-            persist=request.persist_prediction,
-            include_forward_actuals=request.include_forward_actuals,
-        )
-        result.metadata["prediction_latency_ms"] = int((time.time() - start) * 1000)
-
-        response = PredictionResponse(
-            ticker=result.ticker,
-            horizon=result.horizon,
-            predicted_return=result.predicted_return,
-            confidence=result.confidence,
-            timestamp=result.timestamp,
-            strategy_name=None,
-            model_id=result.model.model_name,
-            features_used=result.features_used,
-            feature_schema_version=result.model.feature_schema_version,
-            interval_lower=result.intervals.lower if result.intervals else None,
-            interval_upper=result.intervals.upper if result.intervals else None,
-            metadata=result.metadata,
-        )
-
-        logger.info(
-            f"Prediction made for {request.ticker} ({request.horizon}): {result.predicted_return:.4f}",
-            extra={
-                "ticker": request.ticker,
-                "horizon": request.horizon,
-                "predicted_return": result.predicted_return,
-                "confidence": result.confidence,
-                "model": result.model.model_name,
-            }
-        )
-
-        return response
 
     except HTTPException:
         # Allow FastAPI HTTPExceptions (like 404 for missing model) to propagate

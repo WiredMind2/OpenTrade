@@ -448,13 +448,13 @@ class TestAPIEndpoints:
         mock_run_script.return_value = None
 
         payload = {
-            "script_name": "train_sentiment_model",
-            "parameters": {"csv": "data/training.csv"}
+            "script_name": "backtest_runner",
+            "parameters": {"start": "2023-01-01", "end": "2023-12-31"}
         }
         response = self.client.post("/scripts/execute", json=payload)
         assert response.status_code == 200
         data = response.json()
-        assert data["script_name"] == "train_sentiment_model"
+        assert data["script_name"] == "backtest_runner"
         assert data["status"] == "running"
         assert "execution_id" in data
 
@@ -471,7 +471,7 @@ class TestAPIEndpoints:
         """Test getting script execution status."""
         # First create a mock execution
         payload = {
-            "script_name": "train_sentiment_model",
+            "script_name": "backtest_runner",
             "parameters": {}
         }
         response = self.client.post("/scripts/execute", json=payload)

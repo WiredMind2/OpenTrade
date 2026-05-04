@@ -32,7 +32,7 @@ class PredictionRequest(BaseModel):
     )
     persist_prediction: Optional[bool] = Field(
         default=None,
-        description="If true, write to sentiment_predictions. Defaults to true for live, false when as_of is set.",
+        description="Reserved for historical clients; ML persistence was removed.",
     )
     include_forward_actuals: bool = Field(
         default=False,
@@ -124,7 +124,7 @@ class ScriptExecutionRequest(BaseModel):
     @classmethod
     def validate_script_name(cls, v):
         valid_scripts = [
-            'run_pipeline', 'train_sentiment_model', 'backtest_runner', 'train_all_strategies'
+            'run_pipeline', 'backtest_runner', 'train_all_strategies'
         ]
         if v not in valid_scripts:
             raise ValueError(f'script_name must be one of: {", ".join(valid_scripts)}')

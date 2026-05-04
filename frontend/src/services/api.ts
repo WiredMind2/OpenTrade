@@ -86,17 +86,6 @@ export const runBatchStrategyTraining = async (data: {
   return response.data
 }
 
-// Predictions API functions
-export const getPredictions = async () => {
-  const response = await instance.get('/predictions/recent')
-  return response.data
-}
-
-export const getTickers = async () => {
-  const response = await instance.get('/predictions/tickers')
-  return response.data
-}
-
 export interface UdfSearchSymbol {
   symbol: string
   full_name: string
@@ -188,35 +177,6 @@ export const getPriceHistory = async (ticker: string, limit: number = 2): Promis
     params: { limit },
   })
   return Array.isArray(response.data?.data) ? response.data.data : []
-}
-
-export type CreatePredictionOptions = {
-  as_of?: string
-  persist_prediction?: boolean
-  include_forward_actuals?: boolean
-}
-
-export const createPrediction = async (
-  ticker: string,
-  horizon: string,
-  strategyName?: string,
-  strategyParams?: Record<string, any>,
-  options?: CreatePredictionOptions
-) => {
-  const response = await instance.post('/predict', {
-    ticker: ticker.toUpperCase(),
-    horizon,
-    strategy_name: strategyName,
-    strategy_params: strategyParams,
-    ...(options?.as_of != null && options.as_of !== ''
-      ? {
-          as_of: options.as_of,
-          persist_prediction: options.persist_prediction,
-          include_forward_actuals: options.include_forward_actuals ?? true,
-        }
-      : {}),
-  })
-  return response.data
 }
 
 export interface SavedModel {
