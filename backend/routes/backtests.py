@@ -205,7 +205,7 @@ async def list_backtests(
         cur.execute("""
             SELECT id, name, started_at, completed_at, initial_capital, final_value,
                    total_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
-                   metrics, equity_curve
+                   metrics, equity_curve, params
             FROM backtest_runs
             ORDER BY completed_at DESC
             LIMIT ? OFFSET ?
@@ -215,9 +215,18 @@ async def list_backtests(
         for row in cur.fetchall():
             (bt_id, name, started_at, completed_at, initial_capital, final_value,
              total_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
-             metrics_json, equity_curve_json) = row
+             metrics_json, equity_curve_json, params_json) = row
 
             metrics = json.loads(metrics_json) if metrics_json else {}
+            run_ticker = None
+            try:
+                params_obj = json.loads(params_json) if params_json else {}
+                if isinstance(params_obj, dict):
+                    t = params_obj.get("ticker")
+                    if isinstance(t, str) and t.strip():
+                        run_ticker = t.strip().upper()
+            except (json.JSONDecodeError, TypeError):
+                run_ticker = None
             execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
             equity_curve = json.loads(equity_curve_json) if equity_curve_json else []
             chart_data = []
@@ -227,13 +236,14 @@ async def list_backtests(
                 value = point.get("value")
                 if value is None:
                     continue
-                chart_data.append({
-                    "day": idx,
-                    "value": value,
-                })
+                pt = {"day": idx, "value": value}
+                if isinstance(point.get("date"), str) and point.get("date"):
+                    pt["date"] = point["date"]
+                chart_data.append(pt)
 
             backtests.append({
                 "id": bt_id,
+                "ticker": run_ticker,
                 "strategy_name": name,
                 "start_date": started_at,
                 "end_date": completed_at,

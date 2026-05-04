@@ -44,6 +44,12 @@ from backend.routes.strategy_analytics import router as strategy_analytics_route
 from backend.routes.news import router as news_router
 from backend.ml.storage import ensure_ml_schema
 from backend.db.variant_schema import ensure_variant_schema
+from backend.services.news_auto_ingest import (
+    daily_news_auto_ingest_worker,
+    news_auto_ingest_disabled,
+    parse_interval_sec,
+    parse_query,
+)
 
 
 
@@ -58,7 +64,8 @@ app_state = {
     "strategy_registry": strategy_registry,
     "database_path": None,
     "active_websockets": set(),
-    "chart_broadcast_task": None
+    "chart_broadcast_task": None,
+    "news_ingest_task": None,
 }
 
 
@@ -104,6 +111,17 @@ async def lifespan(app: FastAPI):
     is_test_env = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING") or ("pytest" in sys.modules))
     if not is_test_env:
         app_state["chart_broadcast_task"] = asyncio.create_task(chart_broadcast_worker())
+        news_key = config.newsapi_key or os.getenv("NEWSAPI_KEY")
+        if news_key and not news_auto_ingest_disabled():
+            app_state["news_ingest_task"] = asyncio.create_task(
+                daily_news_auto_ingest_worker(
+                    app_state["database_path"],
+                    api_key=news_key,
+                    interval_sec=parse_interval_sec(),
+                    query=parse_query(),
+                )
+            )
+            logger.info("Scheduled background news auto-ingest (NewsAPI)")
 
     logger.info("Trading Backtester API started successfully")
 
@@ -118,6 +136,13 @@ async def lifespan(app: FastAPI):
             app_state["chart_broadcast_task"].cancel()
             try:
                 await app_state["chart_broadcast_task"]
+            except asyncio.CancelledError:
+                pass
+
+        if app_state.get("news_ingest_task"):
+            app_state["news_ingest_task"].cancel()
+            try:
+                await app_state["news_ingest_task"]
             except asyncio.CancelledError:
                 pass
 

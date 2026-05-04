@@ -2,11 +2,8 @@ import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
   getPredictions,
-  createPrediction,
-  getTickers,
   getPredictionProjections,
   getLatestPriceAnchor,
-  searchUdfSymbols,
   runBacktest,
   getBacktest,
 } from '../services/api'
@@ -22,7 +19,6 @@ import { Skeleton } from '../components/ui/skeleton'
 import {
   TrendingUp,
   TrendingDown,
-  Sparkles,
   Clock,
   Target,
   Activity,
@@ -37,53 +33,23 @@ import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
 import { resolveProjectionAnchor } from '../utils/projectionAnchor'
 import { NewsSidebar } from '../components/NewsSidebar'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
+import BacktestEquityCompareChart from '../components/BacktestEquityCompareChart'
+import { buildBacktestEquitySeries } from '../utils/backtestChart'
 
 type PredictionBacktestRow = BacktestResult & {
   id?: string | number
+  ticker?: string
   status?: string
   error?: string
-  chart_data?: Array<{ day: number; value: number }>
+  chart_data?: Array<{ day: number; value: number; date?: string }>
 }
 
-function toChartNumber(v: unknown): number | null {
-  if (typeof v === 'number' && Number.isFinite(v)) return v
-  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
-  return null
-}
-
-function buildBacktestEquityChartData(b: PredictionBacktestRow): Array<{ day: number; value: number }> {
-  const fromChart = Array.isArray(b.chart_data) ? b.chart_data : []
-  const fromChartPoints = fromChart
-    .map((p: Record<string, unknown>, idx: number) => {
-      const value = toChartNumber(p?.value)
-      if (value == null) return null
-      const dayRaw = p?.day
-      const day = typeof dayRaw === 'number' && Number.isFinite(dayRaw) ? dayRaw : idx
-      return { day, value }
-    })
-    .filter((p): p is { day: number; value: number } => p != null)
-
-  if (fromChartPoints.length > 0) return fromChartPoints
-
-  const eq = Array.isArray(b.equity_curve) ? b.equity_curve : []
-  return eq
-    .map((p: Record<string, unknown>, idx: number) => {
-      const value = toChartNumber(p?.value)
-      if (value == null) return null
-      return { day: idx, value }
-    })
-    .filter((p): p is { day: number; value: number } => p != null)
-}
-
-function equityChartYDomain(chartData: Array<{ value: number }>): [number, number] | undefined {
-  if (chartData.length === 0) return undefined
-  const values = chartData.map(d => d.value)
-  const minV = Math.min(...values)
-  const maxV = Math.max(...values)
-  const span = maxV - minV
-  const pad = span > 0 ? span * 0.05 : Math.max(Math.abs(minV) * 0.01, 1)
-  return [minV - pad, maxV + pad]
+function snapshotChartDataFromRow(b: PredictionBacktestRow): Array<{ day: number; value: number; date?: string }> {
+  return buildBacktestEquitySeries(b).map((p) => ({
+    day: p.day,
+    value: p.value,
+    ...(p.dateKey ? { date: p.dateKey } : {}),
+  }))
 }
 
 function sleep(ms: number): Promise<void> {
@@ -109,20 +75,10 @@ function backtestPhaseLabel(phase: string | undefined): string {
 
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
-  const [ticker, setTicker] = useState('AAPL')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
   const [selectedTicker, setSelectedTicker] = useState('AAPL')
   const [activeTab, setActiveTab] = useState('chart')
-  const COMMON_TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'JPM', 'SPY']
-
-  const [availableTickers, setAvailableTickers] = useState<string[]>(COMMON_TICKERS)
-  const [tickerSearch, setTickerSearch] = useState('')
-  const [searchingTickers, setSearchingTickers] = useState(false)
-  const [showTickerSuggestions, setShowTickerSuggestions] = useState(true)
-  const [highlightedIndex, setHighlightedIndex] = useState(-1)
-  const suggestionsRef = useRef<HTMLDivElement>(null)
 
   // Projection controls state
   const [projectionStrategy, setProjectionStrategy] = useState('')
@@ -134,11 +90,6 @@ export default function Predictions() {
   const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
   const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
 
-  /** Walk-forward: empty = live; otherwise ISO string sent to /predict as `as_of`. */
-  const [simulateAsOfLocal, setSimulateAsOfLocal] = useState('')
-  const [includeForwardActuals, setIncludeForwardActuals] = useState(true)
-  const [persistHistoricalPrediction, setPersistHistoricalPrediction] = useState(false)
-
   const [backtestStartDate, setBacktestStartDate] = useState('2023-01-01')
   const [backtestEndDate, setBacktestEndDate] = useState('2023-12-31')
   const [backtestRunning, setBacktestRunning] = useState(false)
@@ -147,7 +98,6 @@ export default function Predictions() {
   const [predictionBacktest, setPredictionBacktest] = useState<PredictionBacktestRow | null>(null)
 
   const chartRef = useRef<any>(null)
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fetchPredictions = async () => {
     setLoading(true)
@@ -162,67 +112,8 @@ export default function Predictions() {
     }
   }
 
-  const fetchTickers = async () => {
-    try {
-      const data: string[] = await getTickers()
-      if (data?.length) mergeTickers(data)
-    } catch (e: any) {
-      console.error('Failed to fetch tickers:', e)
-    }
-  }
-
-  const filterTickers = (val: string, tickers: string[]) => {
-    if (!val) return tickers
-    const upper = val.toUpperCase()
-    const startsWith = tickers.filter(t => t.startsWith(upper))
-    const contains = tickers.filter(t => !t.startsWith(upper) && t.includes(upper))
-    return [...startsWith, ...contains]
-  }
-
-  const shownTickers = filterTickers(tickerSearch, availableTickers)
-
-  const mergeTickers = (symbols: string[]) => {
-    setAvailableTickers((prev) => {
-      const merged = new Set<string>(prev)
-      symbols.forEach((s) => {
-        if (s?.trim()) {
-          merged.add(s.trim().toUpperCase())
-        }
-      })
-      return Array.from(merged).sort()
-    })
-  }
-
-  const searchAndAddTicker = async (queryOverride?: string) => {
-    const query = (queryOverride ?? tickerSearch).trim().toUpperCase()
-    if (!query) return
-    setSearchingTickers(true)
-    try {
-      const results = await searchUdfSymbols(query, '', 30)
-      const foundTickers = results
-        .map((item) => (item.ticker || item.symbol || '').toUpperCase())
-        .filter(Boolean)
-      mergeTickers(foundTickers.length > 0 ? foundTickers : [query])
-    } catch (e) {
-      console.error('Ticker search failed:', e)
-    } finally {
-      setSearchingTickers(false)
-    }
-  }
-
-  const handleTickerSelect = (symbol: string) => {
-    const normalized = symbol.trim().toUpperCase()
-    if (!normalized) return
-    mergeTickers([normalized])
-    setTickerSearch(normalized)
-    setTicker(normalized)
-    setSelectedTicker(normalized)
-    setShowTickerSuggestions(false)
-  }
-
   useEffect(() => {
     fetchPredictions()
-    fetchTickers()
   }, [])
 
   useEffect(() => {
@@ -233,7 +124,7 @@ export default function Predictions() {
         if (!prev || !bid) return prev
         const prevId = prev.metrics?.backtest_id ?? prev.id
         if (prevId == null || String(prevId) !== String(bid)) return prev
-        const chartData = buildBacktestEquityChartData(row)
+        const chartData = snapshotChartDataFromRow(row as PredictionBacktestRow)
         return {
           ...row,
           chart_data: chartData,
@@ -273,6 +164,7 @@ export default function Predictions() {
       setPredictionBacktest({
         ...data,
         id: backtestId,
+        ticker: sym,
         status: (data.metrics?.status as string | undefined) ?? 'running',
         chart_data: [],
       })
@@ -288,8 +180,9 @@ export default function Predictions() {
         setPredictionBacktest({
           ...row,
           id: backtestId,
+          ticker: sym,
           status: st ?? row.metrics?.status,
-          chart_data: buildBacktestEquityChartData({ ...row, id: backtestId }),
+          chart_data: snapshotChartDataFromRow({ ...row, id: backtestId } as PredictionBacktestRow),
         })
         if (st === 'completed' || st === 'failed') {
           if (st === 'failed' && typeof metrics?.error === 'string') {
@@ -305,51 +198,6 @@ export default function Predictions() {
     } finally {
       setBacktestRunning(false)
       setBacktestPollPhase(undefined)
-    }
-  }
-
-  const submit = async () => {
-    if (!ticker.trim()) {
-      alert('Please enter a ticker symbol')
-      return
-    }
-    setSubmitting(true)
-    try {
-      const normalizedTicker = ticker.trim().toUpperCase()
-      const simIso =
-        simulateAsOfLocal.trim() === ''
-          ? undefined
-          : (() => {
-              const d = new Date(simulateAsOfLocal)
-              return Number.isNaN(d.getTime()) ? undefined : d.toISOString()
-            })()
-      const simOpts =
-        simIso == null
-          ? undefined
-          : {
-              as_of: simIso,
-              include_forward_actuals: includeForwardActuals,
-              persist_prediction: persistHistoricalPrediction,
-            }
-      const results = await Promise.all(
-        ['1d', '3d', '7d'].map(h =>
-          createPrediction(
-            normalizedTicker,
-            h,
-            projectionStrategy || undefined,
-            projectionStrategy ? projectionParams : undefined,
-            simOpts
-          )
-        )
-      )
-      setPreds(prev => [...results, ...prev])
-      setSelectedTicker(normalizedTicker)
-      setTicker(normalizedTicker)
-      setActiveTab('predictions')
-    } catch (e: any) {
-      alert('Failed to make prediction: ' + (e.message || 'Unknown error'))
-    } finally {
-      setSubmitting(false)
     }
   }
 
@@ -439,183 +287,11 @@ export default function Predictions() {
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Predictions</h2>
         <p className="text-muted-foreground">
-          Generate forecasts and run historical strategy backtests on the chart ticker to inform future prices and
-          buy/sell timing. Parameter training lives on the Backtests page.
+          Choose a symbol on the chart, configure projection controls, then run a historical strategy backtest to
+          simulate the strategy over your date range. ML sentiment rows (if any) still appear under Recent Predictions;
+          parameter training lives on the Backtests page.
         </p>
       </div>
-
-      {/* Prediction Form — always visible */}
-      <Card className="border-muted shadow-md">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" />
-            Generate New Prediction
-          </CardTitle>
-          <CardDescription>
-            Search a ticker, then click Predict for 1d / 3d / 7d forecasts. Optionally set &quot;Simulate as
-            of&quot; to run models with data only through that time and compare to realized forward closes.
-          </CardDescription>
-          {projectionStrategy && (
-            <p className="text-xs text-muted-foreground">
-              Active prediction strategy: <span className="font-mono">{projectionStrategy}</span>
-            </p>
-          )}
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="relative w-full sm:flex-1">
-              <Input
-                value={tickerSearch}
-                onChange={(e) => {
-                  const val = e.target.value.toUpperCase()
-                  setTickerSearch(val)
-                  setHighlightedIndex(-1)
-                  setShowTickerSuggestions(true)
-                  if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
-                  if (val.length >= 1) {
-                    searchDebounceRef.current = setTimeout(() => {
-                      void searchAndAddTicker(val)
-                    }, 400)
-                  }
-                }}
-                onFocus={() => {
-                  setShowTickerSuggestions(true)
-                  setHighlightedIndex(-1)
-                }}
-                onKeyDown={(e) => {
-                  if (!showTickerSuggestions) return
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault()
-                    setHighlightedIndex(i => {
-                      const next = Math.min(i + 1, shownTickers.length - 1)
-                      suggestionsRef.current?.children[next]?.scrollIntoView({ block: 'nearest' })
-                      return next
-                    })
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault()
-                    setHighlightedIndex(i => {
-                      const next = Math.max(i - 1, 0)
-                      suggestionsRef.current?.children[next]?.scrollIntoView({ block: 'nearest' })
-                      return next
-                    })
-                  } else if (e.key === 'Enter') {
-                    e.preventDefault()
-                    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
-                    if (highlightedIndex >= 0 && shownTickers[highlightedIndex]) {
-                      handleTickerSelect(shownTickers[highlightedIndex])
-                    } else if (tickerSearch.trim()) {
-                      void searchAndAddTicker()
-                    }
-                  } else if (e.key === 'Escape') {
-                    setShowTickerSuggestions(false)
-                  }
-                }}
-                placeholder="Rechercher un ticker (ex: AAPL, GOOGL…)"
-                className="font-mono"
-              />
-              {showTickerSuggestions && (
-                <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-lg">
-                  <div className="flex items-center justify-between px-3 py-1.5 border-b text-xs text-muted-foreground">
-                    <span>
-                      {shownTickers.length === 0
-                        ? 'Aucun résultat'
-                        : `${shownTickers.length} résultat${shownTickers.length > 1 ? 's' : ''}`}
-                    </span>
-                    {searchingTickers && <span className="text-primary animate-pulse">Recherche…</span>}
-                  </div>
-                  <div ref={suggestionsRef} className="max-h-72 overflow-y-auto py-1">
-                    {shownTickers.map((symbol, idx) => (
-                      <button
-                        key={symbol}
-                        type="button"
-                        className={`w-full px-3 py-2 text-left text-sm font-mono transition-colors ${
-                          idx === highlightedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'
-                        }`}
-                        onMouseEnter={() => setHighlightedIndex(idx)}
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          handleTickerSelect(symbol)
-                        }}
-                      >
-                        {tickerSearch
-                          ? (() => {
-                              const upper = tickerSearch.toUpperCase()
-                              const start = symbol.indexOf(upper)
-                              if (start === -1) return symbol
-                              return (
-                                <>
-                                  {symbol.slice(0, start)}
-                                  <span className="font-bold text-primary">{symbol.slice(start, start + upper.length)}</span>
-                                  {symbol.slice(start + upper.length)}
-                                </>
-                              )
-                            })()
-                          : symbol}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <Button
-              onClick={submit}
-              disabled={submitting || !ticker.trim()}
-              className="w-full sm:w-auto min-w-[120px]"
-              size="default"
-            >
-              {submitting ? (
-                <>
-                  <Activity className="mr-2 h-4 w-4 animate-spin" />
-                  Predicting...
-                </>
-              ) : (
-                <>
-                  <Target className="mr-2 h-4 w-4" />
-                  Predict
-                </>
-              )}
-            </Button>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 border-t pt-4">
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Simulate as of (optional, local time)</p>
-              <Input
-                type="datetime-local"
-                value={simulateAsOfLocal}
-                onChange={(e) => setSimulateAsOfLocal(e.target.value)}
-                className="font-mono text-sm"
-              />
-            </div>
-            <div className="flex flex-col justify-end gap-2 text-sm">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={includeForwardActuals}
-                  onChange={(e) => setIncludeForwardActuals(e.target.checked)}
-                  disabled={!simulateAsOfLocal.trim()}
-                  className="rounded border-input"
-                />
-                <span className={!simulateAsOfLocal.trim() ? 'text-muted-foreground' : ''}>
-                  Include realized forward closes in response
-                </span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={persistHistoricalPrediction}
-                  onChange={(e) => setPersistHistoricalPrediction(e.target.checked)}
-                  disabled={!simulateAsOfLocal.trim()}
-                  className="rounded border-input"
-                />
-                <span className={!simulateAsOfLocal.trim() ? 'text-muted-foreground' : ''}>
-                  Persist simulated rows to DB
-                </span>
-              </label>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
@@ -633,7 +309,8 @@ export default function Predictions() {
                   Projection Controls
                 </CardTitle>
                 <CardDescription>
-                  Configure strategy projections and prediction overlays for the chart
+                  Pick a strategy and parameters for the chart; this drives projection overlays and the historical
+                  backtest below.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -735,8 +412,9 @@ export default function Predictions() {
                   const isPositive = returnPercent > 0
                   const status = b.status ?? b.metrics?.status ?? 'completed'
                   const isFailed = status === 'failed'
-                  const chartData = buildBacktestEquityChartData(b)
-                  const yDomain = equityChartYDomain(chartData)
+                  const curvePreview = snapshotChartDataFromRow(b)
+                  const hasCurve =
+                    curvePreview.length > 0 || (Array.isArray(b.equity_curve) && b.equity_curve.length > 0)
                   return (
                     <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -755,38 +433,20 @@ export default function Predictions() {
                           {b.error || b.metrics?.error || 'Backtest failed'}
                         </p>
                       )}
-                      {chartData.length > 0 && (
-                        <div className="h-[140px] w-full">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={chartData}>
-                              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                              <XAxis dataKey="day" className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
-                              <YAxis
-                                className="text-xs"
-                                tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                                domain={yDomain}
-                                tickFormatter={v => `$${(Number(v) / 1000).toFixed(0)}k`}
-                              />
-                              <RechartsTooltip
-                                contentStyle={{
-                                  backgroundColor: 'hsl(var(--card))',
-                                  border: '1px solid hsl(var(--border))',
-                                  borderRadius: '0.5rem',
-                                }}
-                                formatter={(value: number) => [`$${value.toFixed(2)}`, 'Portfolio']}
-                              />
-                              <Line
-                                type="monotone"
-                                dataKey="value"
-                                stroke={
-                                  isPositive ? 'hsl(142, 76%, 36%)' : 'hsl(0, 84.2%, 60.2%)'
-                                }
-                                strokeWidth={2}
-                                dot={false}
-                              />
-                            </LineChart>
-                          </ResponsiveContainer>
-                        </div>
+                      {hasCurve && (
+                        <BacktestEquityCompareChart
+                          backtest={{
+                            ...b,
+                            ticker:
+                              (typeof b.ticker === 'string' && b.ticker.trim()
+                                ? b.ticker.trim().toUpperCase()
+                                : selectedTicker.trim().toUpperCase()) || undefined,
+                          }}
+                          isPositive={isPositive}
+                          isFailed={isFailed}
+                          tickerOverride={selectedTicker.trim().toUpperCase() || undefined}
+                          height={170}
+                        />
                       )}
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
                         <div className="flex items-center gap-2 rounded-md bg-background/80 p-2">
@@ -836,8 +496,6 @@ export default function Predictions() {
                     const normalized = symbol.trim().toUpperCase()
                     if (normalized && normalized !== selectedTicker) {
                       setSelectedTicker(normalized)
-                      setTickerSearch(normalized)
-                      setTicker(normalized)
                     }
                   }}
                 />
@@ -876,8 +534,10 @@ export default function Predictions() {
               <Card className="border-dashed">
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <TrendingUp className="h-12 w-12 text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground text-center">
-                    No predictions yet. Generate your first prediction above!
+                  <p className="text-muted-foreground text-center max-w-md">
+                    No ML prediction rows in the database yet. Open the Chart tab, choose a symbol, then use
+                    Historical strategy backtest to run a simulation; pipeline-generated predictions will appear here
+                    when available.
                   </p>
                 </CardContent>
               </Card>

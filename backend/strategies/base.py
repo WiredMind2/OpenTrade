@@ -6,7 +6,9 @@ This module defines the abstract base class that all trading strategies must imp
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import Dict, Any, Type, Literal, List
+import sqlite3
+from typing import Dict, Any, Type, Literal, List, Optional
+
 import backtrader as bt
 
 from backend.domain.trading import ForecastOutput, TargetAllocation
@@ -138,8 +140,11 @@ class BaseStrategy(ABC):
         symbols: List[str],
         as_of: datetime,
         current_prices: Dict[str, float],
+        *,
+        db_conn: Optional[sqlite3.Connection] = None,
     ) -> List[TargetAllocation]:
         """Convert forecast outputs to executable target allocations."""
+        _ = db_conn  # optional shared SQLite connection (used by signal-mode backtest overrides)
         params = parameters or {}
         threshold = max(float(params.get("prediction_threshold", 0.002)), 0.0)
         max_position_pct = min(max(float(params.get("max_position_pct", 0.1)), 0.0), 1.0)

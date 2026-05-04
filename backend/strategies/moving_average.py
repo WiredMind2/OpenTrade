@@ -6,7 +6,7 @@ This module implements a simple moving average crossover trading strategy.
 
 import sqlite3
 from datetime import datetime
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 import backtrader as bt
 import numpy as np
 
@@ -61,6 +61,7 @@ class MovingAverageStrategy(BaseStrategy):
 
             def __init__(self):
                 self.equity_curve = []
+                self.decision_markers: List[Dict[str, Any]] = []
                 self.trades = []
 
                 # Create indicators for each data feed
@@ -123,11 +124,29 @@ class MovingAverageStrategy(BaseStrategy):
                         shares_to_buy = int((target_value - current_value) / data.close[0])
                         if shares_to_buy > 0:
                             self.buy(data=data, size=shares_to_buy)
+                            day = self.datas[0].datetime.date(0).isoformat()
+                            self.decision_markers.append(
+                                {
+                                    "date": day,
+                                    "side": "buy",
+                                    "ticker": str(ticker).upper(),
+                                    "reason": "ma_golden_cross",
+                                }
+                            )
                     elif target_value < current_value:
                         # Sell
                         shares_to_sell = int((current_value - target_value) / data.close[0])
                         if shares_to_sell > 0:
                             self.sell(data=data, size=shares_to_sell)
+                            day = self.datas[0].datetime.date(0).isoformat()
+                            self.decision_markers.append(
+                                {
+                                    "date": day,
+                                    "side": "sell",
+                                    "ticker": str(ticker).upper(),
+                                    "reason": "ma_death_cross",
+                                }
+                            )
 
                 # Record equity curve
                 current_date = self.datas[0].datetime.date(0).isoformat()
@@ -154,6 +173,8 @@ class MovingAverageStrategy(BaseStrategy):
         symbols: List[str],
         as_of: datetime,
         current_prices: Dict[str, float],
+        *,
+        db_conn: Optional[sqlite3.Connection] = None,
     ) -> List[TargetAllocation]:
         from backend.main import app_state
 
@@ -164,7 +185,8 @@ class MovingAverageStrategy(BaseStrategy):
         db_path = app_state.get("database_path") or "data/backtest.db"
 
         allocations: List[TargetAllocation] = []
-        conn = sqlite3.connect(db_path)
+        own_conn = db_conn is None
+        conn = sqlite3.connect(db_path) if own_conn else db_conn
         try:
             cur = conn.cursor()
             for symbol in symbols:
@@ -230,7 +252,8 @@ class MovingAverageStrategy(BaseStrategy):
                     )
                 )
         finally:
-            conn.close()
+            if own_conn:
+                conn.close()
         return allocations
 
     def train(self, config: Dict[str, Any]) -> Any:

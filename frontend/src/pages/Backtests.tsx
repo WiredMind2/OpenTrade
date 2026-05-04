@@ -25,11 +25,13 @@ import {
   Target,
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
 import StrategySelector from '../components/StrategySelector'
+import BacktestEquityCompareChart from '../components/BacktestEquityCompareChart'
+import { buildBacktestEquitySeries } from '../utils/backtestChart'
 
 type BacktestListItem = BacktestResult & {
   id?: string | number
+  ticker?: string | null
   status?: string
   error?: string
   chart_data?: Array<{ day: number; value: number }>
@@ -37,47 +39,6 @@ type BacktestListItem = BacktestResult & {
   signals_emitted?: number
   order_intents?: number
   order_fills?: number
-}
-
-function toChartNumber(v: unknown): number | null {
-  if (typeof v === 'number' && Number.isFinite(v)) return v
-  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
-  return null
-}
-
-/** Prefer chart_data; fall back to equity_curve so completed runs still plot after WS/JSON quirks. */
-function buildBacktestEquityChartData(b: BacktestListItem): Array<{ day: number; value: number }> {
-  const fromChart = Array.isArray(b.chart_data) ? b.chart_data : []
-  const fromChartPoints = fromChart
-    .map((p: Record<string, unknown>, idx: number) => {
-      const value = toChartNumber(p?.value)
-      if (value == null) return null
-      const dayRaw = p?.day
-      const day = typeof dayRaw === 'number' && Number.isFinite(dayRaw) ? dayRaw : idx
-      return { day, value }
-    })
-    .filter((p): p is { day: number; value: number } => p != null)
-
-  if (fromChartPoints.length > 0) return fromChartPoints
-
-  const eq = Array.isArray(b.equity_curve) ? b.equity_curve : []
-  return eq
-    .map((p: Record<string, unknown>, idx: number) => {
-      const value = toChartNumber(p?.value)
-      if (value == null) return null
-      return { day: idx, value }
-    })
-    .filter((p): p is { day: number; value: number } => p != null)
-}
-
-function equityChartYDomain(chartData: Array<{ value: number }>): [number, number] | undefined {
-  if (chartData.length === 0) return undefined
-  const values = chartData.map(d => d.value)
-  const minV = Math.min(...values)
-  const maxV = Math.max(...values)
-  const span = maxV - minV
-  const pad = span > 0 ? span * 0.05 : Math.max(Math.abs(minV) * 0.01, 1)
-  return [minV - pad, maxV + pad]
 }
 
 type ServerWaitPhase = 'idle' | 'preflight' | 'training'
@@ -135,7 +96,11 @@ export default function Backtests() {
   useEffect(() => {
     const handleBacktestStatus = (message: any) => {
       const backtestResult = message.data as BacktestListItem
-      const chartData = buildBacktestEquityChartData(backtestResult)
+      const chartData = buildBacktestEquitySeries(backtestResult).map((p) => ({
+        day: p.day,
+        value: p.value,
+        ...(p.dateKey ? { date: p.dateKey } : {}),
+      }))
       const normalizedResult: BacktestListItem = {
         ...backtestResult,
         chart_data: chartData,
@@ -474,9 +439,6 @@ export default function Backtests() {
               const isPositive = returnPercent > 0
               const status = b.status ?? b.metrics?.status ?? 'completed'
               const isFailed = status === 'failed'
-              const chartData = buildBacktestEquityChartData(b)
-              const yDomain = equityChartYDomain(chartData)
-              
               return (
                 <Card 
                   key={i}
@@ -525,39 +487,13 @@ export default function Backtests() {
                         Backtest failed: {b.error || b.metrics?.error || 'Unknown error'}
                       </p>
                     )}
-                    {/* Mini Chart */}
                     <div className="mb-4">
-                      <ResponsiveContainer width="100%" height={150}>
-                        <LineChart data={chartData}>
-                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                          <XAxis 
-                            dataKey="day" 
-                            className="text-xs"
-                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                          />
-                          <YAxis 
-                            className="text-xs"
-                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                            domain={yDomain}
-                            tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                          />
-                          <RechartsTooltip 
-                            contentStyle={{ 
-                              backgroundColor: 'hsl(var(--card))',
-                              border: '1px solid hsl(var(--border))',
-                              borderRadius: '0.5rem'
-                            }}
-                            formatter={(value: any) => [`$${value.toFixed(2)}`, 'Portfolio Value']}
-                          />
-                          <Line 
-                            type="monotone" 
-                            dataKey="value" 
-                            stroke={isPositive ? 'hsl(142, 76%, 36%)' : 'hsl(0, 84.2%, 60.2%)'} 
-                            strokeWidth={2}
-                            dot={false}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
+                      <BacktestEquityCompareChart
+                        backtest={b}
+                        isPositive={isPositive}
+                        isFailed={isFailed}
+                        height={170}
+                      />
                     </div>
 
                     {/* Metrics */}

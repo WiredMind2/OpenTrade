@@ -112,6 +112,34 @@ export interface LatestPriceAnchor {
   latestTime: number
 }
 
+export type PriceDailyRow = {
+  date: string
+  open?: number | null
+  high?: number | null
+  low?: number | null
+  close?: number | null
+  adjusted_close?: number | null
+  volume?: number | null
+}
+
+/** Daily OHLC rows for a ticker in [startDate, endDate] (YYYY-MM-DD), ascending by date in DB but returned newest-first from API. */
+export const getTickerPricesForRange = async (
+  ticker: string,
+  startDate: string,
+  endDate: string,
+  limit = 1000,
+): Promise<PriceDailyRow[]> => {
+  const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
+    params: {
+      start_date: `${startDate.slice(0, 10)}T00:00:00`,
+      end_date: `${endDate.slice(0, 10)}T23:59:59`,
+      limit,
+    },
+  })
+  const rows = response.data?.data
+  return Array.isArray(rows) ? rows : []
+}
+
 export const getLatestPriceAnchor = async (ticker: string): Promise<LatestPriceAnchor | null> => {
   const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
     params: { limit: 1 },

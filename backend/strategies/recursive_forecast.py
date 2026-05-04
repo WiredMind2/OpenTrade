@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, List, Optional, Type
 
 import backtrader as bt
 
@@ -57,6 +57,7 @@ class RecursiveForecastStrategy(BaseStrategy):
 
             def __init__(self):
                 self.equity_curve = []
+                self.decision_markers: List[Dict[str, Any]] = []
                 self.trades = []
                 self.model_name = model_name
                 self.prediction_threshold = self.p.prediction_threshold
@@ -105,10 +106,26 @@ class RecursiveForecastStrategy(BaseStrategy):
                         shares_to_buy = int((target_value - current_value) / data.close[0])
                         if shares_to_buy > 0:
                             self.buy(data=data, size=shares_to_buy)
+                            self.decision_markers.append(
+                                {
+                                    "date": current_date,
+                                    "side": "buy",
+                                    "ticker": str(ticker).upper(),
+                                    "reason": "recursive_forecast_buy",
+                                }
+                            )
                     elif target_value < current_value:
                         shares_to_sell = int((current_value - target_value) / data.close[0])
                         if shares_to_sell > 0:
                             self.sell(data=data, size=shares_to_sell)
+                            self.decision_markers.append(
+                                {
+                                    "date": current_date,
+                                    "side": "sell",
+                                    "ticker": str(ticker).upper(),
+                                    "reason": "recursive_forecast_sell",
+                                }
+                            )
 
                 self.equity_curve.append({"date": current_date, "value": self.broker.getvalue()})
 
@@ -224,6 +241,8 @@ class RecursiveForecastStrategy(BaseStrategy):
         symbols: List[str],
         as_of: datetime,
         current_prices: Dict[str, float],
+        *,
+        db_conn: Optional[sqlite3.Connection] = None,
     ) -> List[TargetAllocation]:
         params = parameters or {}
         threshold = max(float(params.get("prediction_threshold", 0.002)), 0.0)
@@ -245,7 +264,8 @@ class RecursiveForecastStrategy(BaseStrategy):
         db_path = app_state.get("database_path", "data/backtest.db")
 
         allocations: List[TargetAllocation] = []
-        conn = sqlite3.connect(db_path)
+        own_conn = db_conn is None
+        conn = sqlite3.connect(db_path) if own_conn else db_conn
         try:
             cur = conn.cursor()
             for symbol in symbols:
@@ -344,5 +364,6 @@ class RecursiveForecastStrategy(BaseStrategy):
                     )
                 )
         finally:
-            conn.close()
+            if own_conn:
+                conn.close()
         return allocations

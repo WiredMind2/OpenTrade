@@ -326,4 +326,11 @@ CREATE TABLE IF NOT EXISTS ml_run_log (
   finished_at TEXT
 );
 
+-- Generic key/value store (e.g. scheduler checkpoints)
+CREATE TABLE IF NOT EXISTS app_kv (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 -- End of schema

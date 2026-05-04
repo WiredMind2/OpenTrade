@@ -277,59 +277,64 @@ def _optimize_signal_strategy(
     evaluations: List[Dict[str, Any]] = []
     all_missing_model = True
     experiment_id = str(uuid.uuid4())
-    for idx, params in enumerate(candidates):
-        merged_params = {**params, "execution_mode": "signal"}
-        metrics = _run_signal_execution_backtest(
-            strategy=strategy,
-            strategy_name=strategy_name,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=initial_capital,
-            parameters=merged_params,
-            price_frames=price_frames,
-        )
-        execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
-        reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
-        no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
-        non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
-        fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
-        if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
-            all_missing_model = False
-        summary_metrics = {
-            "total_return": float(metrics.get("total_return", 0.0) or 0.0),
-            "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
-            "max_drawdown": float(metrics.get("max_drawdown", 0.0) or 0.0),
-            "volatility": float(metrics.get("volatility", 0.0) or 0.0),
-            "total_trades": int(metrics.get("total_trades", 0) or 0),
-        }
-        score = optimizer.score(summary_metrics, objective)
-        evaluations.append(
-            {
-                "params": params,
-                "metrics": summary_metrics,
-                "score": score,
+    sig_conn = sqlite3.connect(db_path)
+    try:
+        for idx, params in enumerate(candidates):
+            merged_params = {**params, "execution_mode": "signal"}
+            metrics = _run_signal_execution_backtest(
+                strategy=strategy,
+                strategy_name=strategy_name,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=initial_capital,
+                parameters=merged_params,
+                price_frames=price_frames,
+                signal_db_conn=sig_conn,
+            )
+            execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
+            reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
+            no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
+            non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
+            fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
+            if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
+                all_missing_model = False
+            summary_metrics = {
+                "total_return": float(metrics.get("total_return", 0.0) or 0.0),
+                "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
+                "max_drawdown": float(metrics.get("max_drawdown", 0.0) or 0.0),
+                "volatility": float(metrics.get("volatility", 0.0) or 0.0),
+                "total_trades": int(metrics.get("total_trades", 0) or 0),
             }
-        )
-        store_params = {
-            **merged_params,
-            "optimizer_mode": mode,
-            "experiment_id": experiment_id,
-            "ticker": ticker.upper(),
-        }
-        persist_optimizer_evaluation_run(
-            db_path,
-            strategy_name=strategy_name,
-            parameters=store_params,
-            client_backtest_id=f"opt_{experiment_id}_{idx}",
-            experiment_id=experiment_id,
-            optimizer_mode=mode,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=initial_capital,
-            execution=metrics,
-            objective=objective,
-            evaluation_score=float(score),
-        )
+            score = optimizer.score(summary_metrics, objective)
+            evaluations.append(
+                {
+                    "params": params,
+                    "metrics": summary_metrics,
+                    "score": score,
+                }
+            )
+            store_params = {
+                **merged_params,
+                "optimizer_mode": mode,
+                "experiment_id": experiment_id,
+                "ticker": ticker.upper(),
+            }
+            persist_optimizer_evaluation_run(
+                db_path,
+                strategy_name=strategy_name,
+                parameters=store_params,
+                client_backtest_id=f"opt_{experiment_id}_{idx}",
+                experiment_id=experiment_id,
+                optimizer_mode=mode,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=initial_capital,
+                execution=metrics,
+                objective=objective,
+                evaluation_score=float(score),
+            )
+    finally:
+        sig_conn.close()
 
     if not evaluations:
         raise HTTPException(status_code=500, detail="No optimization evaluations were produced")
