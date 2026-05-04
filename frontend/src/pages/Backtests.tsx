@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { getBacktests, runBacktest } from '../services/api'
+import { getBacktests } from '../services/api'
 import {
   preflightStrategy,
   trainStrategy,
@@ -15,22 +15,25 @@ import { BacktestResult } from '../types'
 import Loading from '../components/Loading'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
-import { 
+import {
   BarChart3,
-  Play,
   Calendar,
   DollarSign,
   TrendingUp,
   TrendingDown,
   Activity,
-  Target
+  Target,
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
 import StrategySelector from '../components/StrategySelector'
+import TickerSearch from '../components/TickerSearch'
+import BacktestEquityCompareChart from '../components/BacktestEquityCompareChart'
+import { buildBacktestEquitySeries } from '../utils/backtestChart'
+import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 type BacktestListItem = BacktestResult & {
   id?: string | number
+  ticker?: string | null
   status?: string
   error?: string
   chart_data?: Array<{ day: number; value: number }>
@@ -40,66 +43,38 @@ type BacktestListItem = BacktestResult & {
   order_fills?: number
 }
 
-function toChartNumber(v: unknown): number | null {
-  if (typeof v === 'number' && Number.isFinite(v)) return v
-  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
-  return null
-}
+type ServerWaitPhase = 'idle' | 'preflight' | 'training'
 
-/** Prefer chart_data; fall back to equity_curve so completed runs still plot after WS/JSON quirks. */
-function buildBacktestEquityChartData(b: BacktestListItem): Array<{ day: number; value: number }> {
-  const fromChart = Array.isArray(b.chart_data) ? b.chart_data : []
-  const fromChartPoints = fromChart
-    .map((p: Record<string, unknown>, idx: number) => {
-      const value = toChartNumber(p?.value)
-      if (value == null) return null
-      const dayRaw = p?.day
-      const day = typeof dayRaw === 'number' && Number.isFinite(dayRaw) ? dayRaw : idx
-      return { day, value }
-    })
-    .filter((p): p is { day: number; value: number } => p != null)
-
-  if (fromChartPoints.length > 0) return fromChartPoints
-
-  const eq = Array.isArray(b.equity_curve) ? b.equity_curve : []
-  return eq
-    .map((p: Record<string, unknown>, idx: number) => {
-      const value = toChartNumber(p?.value)
-      if (value == null) return null
-      return { day: idx, value }
-    })
-    .filter((p): p is { day: number; value: number } => p != null)
-}
-
-function equityChartYDomain(chartData: Array<{ value: number }>): [number, number] | undefined {
-  if (chartData.length === 0) return undefined
-  const values = chartData.map(d => d.value)
-  const minV = Math.min(...values)
-  const maxV = Math.max(...values)
-  const span = maxV - minV
-  const pad = span > 0 ? span * 0.05 : Math.max(Math.abs(minV) * 0.01, 1)
-  return [minV - pad, maxV + pad]
+function serverWaitPhaseLabel(phase: ServerWaitPhase): string {
+  switch (phase) {
+    case 'preflight':
+      return 'Contacting the server: validating data for your ticker and dates…'
+    case 'training':
+      return 'Running parameter optimization on the server (this can take several minutes)…'
+    default:
+      return ''
+  }
 }
 
 export default function Backtests() {
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
   const [strategyParams, setStrategyParams] = useState<Record<string, any>>({})
-  const [startDate, setStartDate] = useState('2023-01-01')
-  const [endDate, setEndDate] = useState('2023-12-31')
-  const [running, setRunning] = useState(false)
+  const [startDate, setStartDate] = useState(() => `${new Date().getFullYear() - 1}-01-01`)
+  const [endDate, setEndDate] = useState(() => `${new Date().getFullYear() - 1}-12-31`)
   const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [ticker, setTicker] = useState('AAPL')
+  const [ticker, setTicker] = useState(() => getStoredTicker())
   const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
-  const [maxEvals, setMaxEvals] = useState(24)
+  const [maxEvals, setMaxEvals] = useState(8)
   const [optimizerMode, setOptimizerMode] = useState<'grid' | 'random'>('grid')
   const [randomSeed, setRandomSeed] = useState<string>('')
   const [trainedParams, setTrainedParams] = useState<Record<string, any> | null>(null)
   const [trainResult, setTrainResult] = useState<StrategyTrainResponse | null>(null)
   const [trainError, setTrainError] = useState<string | null>(null)
   const [preflight, setPreflight] = useState<StrategyPreflightResponse | null>(null)
+  const [serverWaitPhase, setServerWaitPhase] = useState<ServerWaitPhase>('idle')
 
   const fetchBacktests = async () => {
     setLoading(true)
@@ -123,7 +98,11 @@ export default function Backtests() {
   useEffect(() => {
     const handleBacktestStatus = (message: any) => {
       const backtestResult = message.data as BacktestListItem
-      const chartData = buildBacktestEquityChartData(backtestResult)
+      const chartData = buildBacktestEquitySeries(backtestResult).map((p) => ({
+        day: p.day,
+        value: p.value,
+        ...(p.dateKey ? { date: p.dateKey } : {}),
+      }))
       const normalizedResult: BacktestListItem = {
         ...backtestResult,
         chart_data: chartData,
@@ -161,40 +140,6 @@ export default function Backtests() {
     return websocketService.registerListener('backtest_status', handleBacktestStatus)
   }, [])
 
-  const startBacktest = async () => {
-    if (!hasValidStrategySelection) {
-      alert('Please select a strategy')
-      return
-    }
-    setRunning(true)
-    try {
-      const check = await preflightStrategy(strategy, {
-        ticker: ticker.trim().toUpperCase(),
-        start_date: startDate,
-        end_date: endDate,
-      })
-      setPreflight(check)
-      if (!check.ready) {
-        const topError = check.issues[0]?.message || 'Preflight failed'
-        alert(topError)
-        return
-      }
-      const data = await runBacktest({
-        strategy_name: strategy,
-        start_date: startDate,
-        end_date: endDate,
-        initial_capital: 100000,
-        parameters: { ...strategyParams, ...(trainedParams ?? {}), ticker: ticker.trim().toUpperCase() },
-      })
-
-      setBacktests(prev => [{ ...data, id: data.metrics?.backtest_id, status: 'running', chart_data: [] }, ...prev])
-    } catch (e: any) {
-      alert('Failed to start backtest: ' + (e.message || 'Unknown error'))
-    } finally {
-      setRunning(false)
-    }
-  }
-
   const runTraining = async () => {
     if (!hasValidStrategySelection) {
       alert('Please select a strategy')
@@ -206,9 +151,11 @@ export default function Backtests() {
     }
     setTraining(true)
     setTrainError(null)
+    setServerWaitPhase('preflight')
     try {
+      const normalizedTicker = rememberTicker(ticker)
       const check = await preflightStrategy(strategy, {
-        ticker: ticker.trim().toUpperCase(),
+        ticker: normalizedTicker,
         start_date: startDate,
         end_date: endDate,
       })
@@ -217,9 +164,10 @@ export default function Backtests() {
         setTrainError(check.issues[0]?.message || 'Preflight failed')
         return
       }
+      setServerWaitPhase('training')
       const seedNum = randomSeed.trim() === '' ? undefined : Number(randomSeed)
       const response = await trainStrategy(strategy, {
-        ticker: ticker.trim().toUpperCase(),
+        ticker: normalizedTicker,
         start_date: startDate,
         end_date: endDate,
         initial_capital: 100000,
@@ -232,7 +180,8 @@ export default function Backtests() {
         response &&
         typeof response === 'object' &&
         'best_params' in response &&
-        (strategy === 'moving_average' || strategy === 'recursive_forecast')
+        'best_metrics' in response &&
+        'evaluations_run' in response
       ) {
         const typed = response as StrategyTrainResponse
         setTrainResult(typed)
@@ -246,6 +195,8 @@ export default function Backtests() {
       setTrainError(e.message || 'Failed to train strategy parameters')
     } finally {
       setTraining(false)
+      setServerWaitPhase('idle')
+      fetchBacktests()
     }
   }
 
@@ -276,11 +227,12 @@ export default function Backtests() {
       <Card className="border-muted shadow-md">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Play className="h-5 w-5 text-primary" />
-            Configure Backtest
+            <Target className="h-5 w-5 text-primary" />
+            Train strategy parameters
           </CardTitle>
           <CardDescription>
-            Set up a new backtest with your preferred parameters
+            Optimize parameters for your ticker and date range. Run historical backtests from the Predictions tab
+            (chart) to validate signals against past prices.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -292,6 +244,10 @@ export default function Backtests() {
                   onStrategyChange={(selectedStrategy, params) => {
                     setStrategy(selectedStrategy)
                     setStrategyParams(params)
+                    setTrainResult(null)
+                    setTrainedParams(null)
+                    setTrainError(null)
+                    setPreflight(null)
                   }}
                 />
               </div>
@@ -323,10 +279,10 @@ export default function Backtests() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Training Ticker</label>
-                <Input
+                <TickerSearch
                   value={ticker}
-                  onChange={(e) => setTicker(e.target.value.toUpperCase())}
-                  placeholder="AAPL"
+                  onChange={(t) => setTicker(rememberTicker(t))}
+                  placeholder="Search a ticker"
                 />
               </div>
               <div className="space-y-2">
@@ -347,10 +303,13 @@ export default function Backtests() {
                 <Input
                   type="number"
                   min={1}
-                  max={200}
+                  max={50}
                   value={maxEvals}
-                  onChange={(e) => setMaxEvals(Number(e.target.value || 24))}
+                  onChange={(e) => setMaxEvals(Math.max(1, Math.min(50, Number(e.target.value || 8))))}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Higher values improve search quality but can take several minutes.
+                </p>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Optimizer mode</label>
@@ -395,25 +354,26 @@ export default function Backtests() {
                   </>
                 )}
               </Button>
-              <Button
-                onClick={startBacktest}
-                disabled={running || !hasValidStrategySelection}
-                className="w-full md:w-auto"
-                size="lg"
-              >
-                {running ? (
-                  <>
-                    <Activity className="mr-2 h-4 w-4 animate-spin" />
-                    Running Backtest...
-                  </>
-                ) : (
-                  <>
-                    <Target className="mr-2 h-4 w-4" />
-                    Start Backtest
-                  </>
-                )}
-              </Button>
             </div>
+            {serverWaitPhase !== 'idle' && (
+              <div
+                className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2"
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <div className="flex items-center gap-2 text-sm text-foreground">
+                  <Activity className="h-4 w-4 shrink-0 animate-spin text-primary" aria-hidden />
+                  <span>{serverWaitPhaseLabel(serverWaitPhase)}</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-700"
+                    style={{ width: serverWaitPhase === 'preflight' ? '25%' : '70%' }}
+                  />
+                </div>
+              </div>
+            )}
             {trainError && <p className="text-sm text-destructive">{trainError}</p>}
             {preflight && !preflight.ready && (
               <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm space-y-1">
@@ -481,7 +441,7 @@ export default function Backtests() {
             <CardContent className="flex flex-col items-center justify-center py-12">
               <BarChart3 className="h-12 w-12 text-muted-foreground mb-4" />
               <p className="text-muted-foreground text-center">
-                No backtests yet. Configure and run your first backtest above!
+                No backtests yet. Run a historical strategy simulation from Predictions (Chart tab).
               </p>
             </CardContent>
           </Card>
@@ -494,9 +454,6 @@ export default function Backtests() {
               const isPositive = returnPercent > 0
               const status = b.status ?? b.metrics?.status ?? 'completed'
               const isFailed = status === 'failed'
-              const chartData = buildBacktestEquityChartData(b)
-              const yDomain = equityChartYDomain(chartData)
-              
               return (
                 <Card 
                   key={i}
@@ -509,9 +466,14 @@ export default function Backtests() {
                           <BarChart3 className="h-5 w-5 text-primary" />
                           {b.strategy_name}
                         </CardTitle>
-                        <CardDescription className="flex items-center gap-2 mt-2">
-                          <Calendar className="h-3 w-3" />
-                          {b.start_date} → {b.end_date}
+                        <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                          {b.ticker && (
+                            <span className="font-semibold text-foreground">{b.ticker}</span>
+                          )}
+                          <span className="flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {b.start_date} → {b.end_date}
+                          </span>
                         </CardDescription>
                       </div>
                       
@@ -545,39 +507,13 @@ export default function Backtests() {
                         Backtest failed: {b.error || b.metrics?.error || 'Unknown error'}
                       </p>
                     )}
-                    {/* Mini Chart */}
                     <div className="mb-4">
-                      <ResponsiveContainer width="100%" height={150}>
-                        <LineChart data={chartData}>
-                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                          <XAxis 
-                            dataKey="day" 
-                            className="text-xs"
-                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                          />
-                          <YAxis 
-                            className="text-xs"
-                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                            domain={yDomain}
-                            tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                          />
-                          <RechartsTooltip 
-                            contentStyle={{ 
-                              backgroundColor: 'hsl(var(--card))',
-                              border: '1px solid hsl(var(--border))',
-                              borderRadius: '0.5rem'
-                            }}
-                            formatter={(value: any) => [`$${value.toFixed(2)}`, 'Portfolio Value']}
-                          />
-                          <Line 
-                            type="monotone" 
-                            dataKey="value" 
-                            stroke={isPositive ? 'hsl(142, 76%, 36%)' : 'hsl(0, 84.2%, 60.2%)'} 
-                            strokeWidth={2}
-                            dot={false}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
+                      <BacktestEquityCompareChart
+                        backtest={b}
+                        isPositive={isPositive}
+                        isFailed={isFailed}
+                        height={170}
+                      />
                     </div>
 
                     {/* Metrics */}

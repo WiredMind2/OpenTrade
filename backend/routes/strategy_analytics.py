@@ -18,6 +18,9 @@ from backend.schemas import (
     StrategyDistributionResponse,
     StrategyFilterMetadataResponse,
     StrategyTimeseriesPoint,
+    TickerStrategyLeaderboard,
+    TickerStrategyLeaderboardResponse,
+    TickerStrategyRow,
     StrategyVariantRow,
     StrategyVariantSummaryResponse,
     StrategyVariantTimeseriesResponse,
@@ -166,15 +169,37 @@ def _variant_row_score(engine: StrategyOptimizerEngine, objective: str, row: pd.
     )
 
 
-def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str) -> pd.DataFrame:
+def _params_ticker(raw_params: Any) -> str:
+    if not raw_params:
+        return ""
+    try:
+        params = json.loads(raw_params) if isinstance(raw_params, str) else raw_params
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(params, dict):
+        return ""
+    return str(params.get("ticker") or "").strip().upper()
+
+
+def _filter_variant_runs_by_ticker(df: pd.DataFrame, ticker: str | None) -> pd.DataFrame:
+    t = str(ticker or "").strip().upper()
+    if not t or df.empty or "params" not in df.columns:
+        return df
+    out = df.copy()
+    out["_ticker"] = out["params"].apply(_params_ticker)
+    out = out[out["_ticker"] == t].drop(columns=["_ticker"])
+    return out
+
+
+def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str, ticker: str | None = None) -> pd.DataFrame:
     cols = _backtest_runs_columns(conn)
     if "params_hash" not in cols:
         return pd.DataFrame()
     df = pd.read_sql_query(
         """
-        SELECT id, name, params_hash, variant_label, params, sharpe_ratio, total_return,
-               max_drawdown, win_rate, total_trades, volatility, annualized_return,
-               completed_at, initial_capital, equity_curve, final_value
+        SELECT rowid AS id, name, params_hash, variant_label, params, sharpe_ratio,
+               total_return, max_drawdown, win_rate, total_trades, volatility,
+               annualized_return, completed_at, initial_capital, equity_curve, final_value
         FROM backtest_runs
         WHERE name = ?
           AND params_hash IS NOT NULL AND TRIM(params_hash) != ''
@@ -183,13 +208,157 @@ def _load_variant_runs_df(conn: sqlite3.Connection, strategy: str) -> pd.DataFra
         conn,
         params=[strategy],
     )
-    return df
+    return _filter_variant_runs_by_ticker(df, ticker)
+
+
+def _load_all_variant_runs_df(conn: sqlite3.Connection) -> pd.DataFrame:
+    cols = _backtest_runs_columns(conn)
+    if "params_hash" not in cols:
+        return pd.DataFrame()
+    return pd.read_sql_query(
+        """
+        SELECT rowid AS id, name, params_hash, variant_label, params, sharpe_ratio,
+               total_return, max_drawdown, win_rate, total_trades, volatility,
+               annualized_return, completed_at, final_value
+        FROM backtest_runs
+        WHERE params_hash IS NOT NULL
+          AND TRIM(params_hash) != ''
+          AND final_value IS NOT NULL
+          AND name IS NOT NULL
+          AND TRIM(name) != ''
+        """,
+        conn,
+    )
+
+
+def _params_dict(raw_params: Any) -> Dict[str, Any]:
+    if isinstance(raw_params, dict):
+        return raw_params
+    if isinstance(raw_params, str):
+        try:
+            parsed = json.loads(raw_params)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _run_tickers_map(conn: sqlite3.Connection) -> Dict[int, List[str]]:
+    try:
+        tickers_df = pd.read_sql_query(
+            """
+            SELECT backtest_run_id, ticker
+            FROM trades
+            WHERE ticker IS NOT NULL
+              AND TRIM(ticker) != ''
+            """,
+            conn,
+        )
+    except Exception:
+        return {}
+    out: Dict[int, List[str]] = {}
+    if tickers_df.empty:
+        return out
+    tickers_df["backtest_run_id"] = tickers_df["backtest_run_id"].astype(int)
+    tickers_df["ticker"] = tickers_df["ticker"].astype(str).str.upper()
+    for run_id, g in tickers_df.groupby("backtest_run_id"):
+        unique = sorted({t for t in g["ticker"].tolist() if t})
+        if unique:
+            out[int(run_id)] = unique
+    return out
+
+
+def _sync_ticker_strategy_leaderboard(
+    database_path: str,
+    objective: str,
+    top_n: int,
+    ticker: str | None,
+) -> TickerStrategyLeaderboardResponse:
+    obj = (objective or "balanced").lower()
+    if obj not in {"sharpe", "return", "drawdown", "balanced"}:
+        raise HTTPException(status_code=400, detail="objective must be sharpe, return, drawdown, or balanced")
+    top_n = max(1, min(int(top_n or 5), 25))
+    ticker_filter = ticker.strip().upper() if isinstance(ticker, str) and ticker.strip() else None
+
+    conn = sqlite3.connect(database_path)
+    try:
+        df = _load_all_variant_runs_df(conn)
+        if df.empty:
+            return TickerStrategyLeaderboardResponse(objective=obj, top_n=top_n, tickers=[])
+
+        engine = StrategyOptimizerEngine(database_path)
+        working = df.copy()
+        working["_score"] = working.apply(lambda r: _variant_row_score(engine, obj, r), axis=1)
+        run_tickers = _run_tickers_map(conn)
+
+        exploded: List[Dict[str, Any]] = []
+        for _, row in working.iterrows():
+            run_id = int(row["id"])
+            row_tickers = run_tickers.get(run_id, [])
+            if not row_tickers:
+                fallback = _params_dict(row.get("params")).get("ticker")
+                if isinstance(fallback, str) and fallback.strip():
+                    row_tickers = [fallback.strip().upper()]
+            for t in row_tickers:
+                if ticker_filter and t != ticker_filter:
+                    continue
+                payload = row.to_dict()
+                payload["ticker"] = t
+                exploded.append(payload)
+
+        if not exploded:
+            return TickerStrategyLeaderboardResponse(objective=obj, top_n=top_n, tickers=[])
+
+        expanded = pd.DataFrame(exploded)
+        expanded["strategy"] = expanded["name"].astype(str)
+        run_counts = expanded.groupby(["ticker", "strategy"]).size().rename("run_count")
+
+        # Keep one representative row per (ticker, strategy): best objective score.
+        best_rows = (
+            expanded.sort_values(["_score", "id"], ascending=[False, False])
+            .groupby(["ticker", "strategy"], as_index=False)
+            .head(1)
+            .copy()
+        )
+        best_rows = best_rows.sort_values(["ticker", "_score", "id"], ascending=[True, False, False])
+
+        leaderboard: List[TickerStrategyLeaderboard] = []
+        for ticker_value, g in best_rows.groupby("ticker", sort=True):
+            top_rows = g.head(top_n)
+            strategy_rows: List[TickerStrategyRow] = []
+            for _, row in top_rows.iterrows():
+                params_obj = _params_dict(row.get("params"))
+                strategy = str(row.get("strategy") or row.get("name") or "")
+                strategy_rows.append(
+                    TickerStrategyRow(
+                        ticker=str(ticker_value),
+                        strategy=strategy,
+                        params_hash=str(row.get("params_hash") or ""),
+                        variant_label=row.get("variant_label"),
+                        representative_run_id=int(row["id"]),
+                        run_count=int(run_counts.get((str(ticker_value), strategy), 1)),
+                        total_return=float(row.get("total_return") or 0.0),
+                        annualized_return=float(row.get("annualized_return") or 0.0),
+                        sharpe_ratio=float(row.get("sharpe_ratio") or 0.0),
+                        max_drawdown=float(row.get("max_drawdown") or 0.0),
+                        win_rate=float(row.get("win_rate") or 0.0),
+                        total_trades=int(row.get("total_trades") or 0),
+                        volatility=float(row.get("volatility") or 0.0),
+                        params=params_obj,
+                        last_completed_at=str(row["completed_at"]) if row.get("completed_at") is not None else None,
+                    )
+                )
+            leaderboard.append(TickerStrategyLeaderboard(ticker=str(ticker_value), strategies=strategy_rows))
+
+        return TickerStrategyLeaderboardResponse(objective=obj, top_n=top_n, tickers=leaderboard)
+    finally:
+        conn.close()
 
 
 def _representative_run_ids_by_hash(
     df: pd.DataFrame, objective: str, engine: StrategyOptimizerEngine
 ) -> Dict[str, int]:
-    """For each params_hash, pick the run id with best objective score (tie-break: higher id)."""
+    """For each params_hash, pick the run rowid with best objective score."""
     out: Dict[str, int] = {}
     if df.empty:
         return out
@@ -206,6 +375,7 @@ def _sync_variant_summary(
     strategy: str,
     objective: str,
     top_n: int,
+    ticker: str | None = None,
 ) -> StrategyVariantSummaryResponse:
     obj = (objective or "balanced").lower()
     if obj not in {"sharpe", "return", "drawdown", "balanced"}:
@@ -214,7 +384,7 @@ def _sync_variant_summary(
 
     conn = sqlite3.connect(database_path)
     try:
-        df = _load_variant_runs_df(conn, strategy)
+        df = _load_variant_runs_df(conn, strategy, ticker)
         if df.empty:
             return StrategyVariantSummaryResponse(strategy=strategy, objective=obj, top_n=top_n, variants=[])
 
@@ -270,7 +440,7 @@ def _normalized_equity_df_from_run(
     granularity: str,
 ) -> pd.DataFrame:
     row = pd.read_sql_query(
-        "SELECT initial_capital, equity_curve FROM backtest_runs WHERE id = ?",
+        "SELECT initial_capital, equity_curve FROM backtest_runs WHERE rowid = ?",
         conn,
         params=[run_id],
     )
@@ -296,6 +466,7 @@ def _sync_variant_timeseries(
     granularity: str,
     rolling_window: int,
     objective: str,
+    ticker: str | None = None,
 ) -> StrategyVariantTimeseriesResponse:
     obj = (objective or "balanced").lower()
     if obj not in {"sharpe", "return", "drawdown", "balanced"}:
@@ -307,7 +478,7 @@ def _sync_variant_timeseries(
 
     conn = sqlite3.connect(database_path)
     try:
-        df = _load_variant_runs_df(conn, strategy)
+        df = _load_variant_runs_df(conn, strategy, ticker)
         if df.empty or not params_hashes:
             benchmark_series = _build_benchmark_series(conn, benchmark_ticker, granularity, preset)
             bp = _timeseries_to_points(benchmark_series) if not benchmark_series.empty else []
@@ -376,11 +547,12 @@ def _sync_variant_distribution_for_hash(
     strategy: str,
     params_hash: str,
     objective: str,
+    ticker: str | None = None,
 ) -> StrategyDistributionResponse:
     obj = (objective or "balanced").lower()
     conn = sqlite3.connect(database_path)
     try:
-        df = _load_variant_runs_df(conn, strategy)
+        df = _load_variant_runs_df(conn, strategy, ticker)
         if df.empty:
             raise HTTPException(status_code=404, detail="No variant runs for strategy")
         subset = df[df["params_hash"].astype(str) == str(params_hash)]
@@ -435,6 +607,7 @@ async def get_strategy_variant_summary(
     strategy: str = Query(..., description="Single strategy name (backtest_runs.name)"),
     objective: str = Query("balanced", description="sharpe|return|drawdown|balanced"),
     top_n: int = Query(10, ge=1, le=50),
+    ticker: str | None = Query(None, description="Optional ticker stored in backtest params"),
 ):
     from backend.main import app_state
 
@@ -444,6 +617,7 @@ async def get_strategy_variant_summary(
         strategy,
         objective,
         top_n,
+        ticker,
     )
 
 
@@ -456,6 +630,7 @@ async def get_strategy_variant_timeseries(
     granularity: str = Query(default="daily"),
     rolling_window: int = Query(default=30, ge=5, le=252),
     objective: str = Query(default="balanced"),
+    ticker: str | None = Query(None),
 ):
     from backend.main import app_state
 
@@ -472,6 +647,7 @@ async def get_strategy_variant_timeseries(
         granularity,
         rolling_window,
         objective,
+        ticker,
     )
 
 
@@ -480,6 +656,7 @@ async def get_strategy_variant_distribution(
     strategy: str,
     params_hash: str = Query(..., min_length=8),
     objective: str = Query(default="balanced"),
+    ticker: str | None = Query(None),
 ):
     from backend.main import app_state
 
@@ -489,4 +666,22 @@ async def get_strategy_variant_distribution(
         strategy,
         params_hash,
         objective,
+        ticker,
+    )
+
+
+@router.get("/tickers/leaderboard", response_model=TickerStrategyLeaderboardResponse)
+async def get_ticker_strategy_leaderboard(
+    objective: str = Query("balanced", description="sharpe|return|drawdown|balanced"),
+    top_n: int = Query(5, ge=1, le=25),
+    ticker: str | None = Query(default=None, description="Optional ticker filter"),
+):
+    from backend.main import app_state
+
+    return await asyncio.to_thread(
+        _sync_ticker_strategy_leaderboard,
+        app_state["database_path"],
+        objective,
+        top_n,
+        ticker,
     )

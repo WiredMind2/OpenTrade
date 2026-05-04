@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, List, Optional, Type
 
 import backtrader as bt
 
@@ -19,6 +19,7 @@ from backend.logging_config import get_component_logger
 from backend.ml.forecasting import BacktestBridge
 from backend.ml.prediction_service import PredictionService
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 
 
 logger = get_component_logger(__file__)
@@ -47,7 +48,7 @@ class RecursiveForecastStrategy(BaseStrategy):
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         model_name = getattr(self, "model_name", self.name)
 
-        class RecursiveForecastBacktrader(bt.Strategy):
+        class RecursiveForecastBacktrader(DecisionRecordingStrategy):
             params = (
                 ("model_name", "sentiment_model"),
                 ("prediction_threshold", 0.002),
@@ -224,6 +225,8 @@ class RecursiveForecastStrategy(BaseStrategy):
         symbols: List[str],
         as_of: datetime,
         current_prices: Dict[str, float],
+        *,
+        db_conn: Optional[sqlite3.Connection] = None,
     ) -> List[TargetAllocation]:
         params = parameters or {}
         threshold = max(float(params.get("prediction_threshold", 0.002)), 0.0)
@@ -245,7 +248,8 @@ class RecursiveForecastStrategy(BaseStrategy):
         db_path = app_state.get("database_path", "data/backtest.db")
 
         allocations: List[TargetAllocation] = []
-        conn = sqlite3.connect(db_path)
+        own_conn = db_conn is None
+        conn = sqlite3.connect(db_path) if own_conn else db_conn
         try:
             cur = conn.cursor()
             for symbol in symbols:
@@ -344,5 +348,6 @@ class RecursiveForecastStrategy(BaseStrategy):
                     )
                 )
         finally:
-            conn.close()
+            if own_conn:
+                conn.close()
         return allocations

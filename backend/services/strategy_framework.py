@@ -2,12 +2,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, FrozenSet, List
 import itertools
 import random
 import sqlite3
 
 import pandas as pd
+
+# Strategies that support synchronous signal-engine parameter search via ``/strategies/{name}/train``.
+SIGNAL_PARAMETER_TRAINABLE_STRATEGIES: FrozenSet[str] = frozenset(
+    {
+        "moving_average",
+        "recursive_forecast",
+        "mean_reversion",
+        "ts_momentum",
+        "pairs_trading",
+        "cross_sectional_ls",
+        "rl_portfolio_allocator",
+    }
+)
+
+
+def strategy_supports_signal_parameter_training(strategy_name: str) -> bool:
+    return strategy_name in SIGNAL_PARAMETER_TRAINABLE_STRATEGIES
 
 
 @dataclass
@@ -152,6 +169,97 @@ class StrategyOptimizerEngine:
                 {"prediction_threshold": t, "forecast_horizon_days": h, "max_position_pct": p}
                 for t, h, p in itertools.product([0.0005, 0.001, 0.002, 0.003], [1, 3, 5, 7], [0.05, 0.08, 0.1])
             ]
+        if strategy_name == "mean_reversion":
+            out: List[Dict[str, Any]] = []
+            for s, l, ez, xz, p in itertools.product(
+                [5, 10, 15],
+                [25, 40, 55],
+                [1.5, 2.0, 2.5],
+                [0.25, 0.4, 0.55],
+                [0.08, 0.1],
+            ):
+                if s >= l or xz >= ez:
+                    continue
+                out.append(
+                    {
+                        "short_window": s,
+                        "long_window": l,
+                        "entry_z": float(ez),
+                        "exit_z": float(xz),
+                        "max_position_pct": float(p),
+                    }
+                )
+            return out
+        if strategy_name == "ts_momentum":
+            return [
+                {"short_window": s, "long_window": l, "max_position_pct": p}
+                for s, l, p in itertools.product([3, 8, 12], [20, 35, 50], [0.06, 0.1])
+                if s < l
+            ]
+        if strategy_name == "pairs_trading":
+            out = []
+            for s, l, ze, zx, p in itertools.product(
+                [8, 15],
+                [40, 70],
+                [1.5, 2.0, 2.5],
+                [0.35, 0.5],
+                [0.08, 0.1],
+            ):
+                if s >= l or zx >= ze:
+                    continue
+                out.append(
+                    {
+                        "short_window": s,
+                        "long_window": l,
+                        "z_entry": float(ze),
+                        "z_exit": float(zx),
+                        "max_position_pct": float(p),
+                        "hedge_mode": "ols_log",
+                    }
+                )
+            return out
+        if strategy_name == "cross_sectional_ls":
+            return [
+                {
+                    "short_window": s,
+                    "long_window": l,
+                    "top_frac": tf,
+                    "bottom_frac": bf,
+                    "max_gross_exposure": g,
+                    "max_position_pct": mp,
+                    "single_name_use_momentum": False,
+                }
+                for s, l, tf, bf, g, mp in itertools.product(
+                    [5, 10],
+                    [28, 45],
+                    [0.1, 0.2],
+                    [0.1, 0.2],
+                    [0.8, 1.0],
+                    [0.08, 0.1],
+                )
+                if s < l
+            ]
+        if strategy_name == "rl_portfolio_allocator":
+            out = []
+            for s, l, mg, temp in itertools.product(
+                [5, 10],
+                [25, 45],
+                [0.8, 1.0],
+                [0.7, 1.2],
+            ):
+                if s >= l:
+                    continue
+                lb = max(l + 5, 35)
+                out.append(
+                    {
+                        "short_window": s,
+                        "long_window": l,
+                        "lookbacks": lb,
+                        "max_gross": float(mg),
+                        "temperature": float(temp),
+                    }
+                )
+            return out
         return []
 
     def build_candidates(

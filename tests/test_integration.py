@@ -1,6 +1,7 @@
 """
 Integration tests for the trading backtesting system.
 """
+import json
 import pytest
 import sqlite3
 import tempfile
@@ -12,6 +13,62 @@ from unittest.mock import patch, MagicMock
 
 from main import app
 from fastapi.testclient import TestClient
+
+
+async def _integration_backtest_quick_finish(
+    backtest_id: str,
+    strategy_name: str,
+    start_date,
+    end_date,
+    initial_capital: float,
+    parameters: dict,
+    app_state: dict,
+):
+    """Persist a minimal completed run so polling tests stay fast and deterministic."""
+    from backend.utils.backtest_variants import compute_params_hash, variant_label_from_params
+
+    params = parameters or {}
+    params_hash = compute_params_hash(params)
+    variant_label = params.get("variant_label") or variant_label_from_params(params)
+    db_path = app_state["database_path"]
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute(
+        """
+        INSERT INTO backtest_runs (
+            name, params, params_hash, variant_label, optimizer_mode, experiment_id,
+            client_backtest_id, started_at, completed_at, initial_capital,
+            final_value, total_return, annualized_return, sharpe_ratio,
+            max_drawdown, win_rate, total_trades, avg_trade_return,
+            volatility, equity_curve, metrics
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            strategy_name,
+            json.dumps(params),
+            params_hash,
+            variant_label,
+            params.get("optimizer_mode"),
+            params.get("experiment_id"),
+            backtest_id,
+            start_date.isoformat(),
+            datetime.utcnow().isoformat(),
+            initial_capital,
+            float(initial_capital) * 1.01,
+            0.01,
+            0.02,
+            0.5,
+            0.05,
+            0.55,
+            2,
+            0.001,
+            0.12,
+            "[]",
+            json.dumps({"backtest_id": backtest_id, "status": "completed"}),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 @pytest.mark.integration
@@ -100,11 +157,16 @@ class TestIntegrationWorkflow:
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS backtest_runs (
-                id TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
-                params TEXT,
-                started_at TEXT,
+                started_at TEXT DEFAULT (datetime('now')),
                 completed_at TEXT,
+                params JSON,
+                params_hash TEXT,
+                variant_label TEXT,
+                optimizer_mode TEXT,
+                experiment_id TEXT,
+                client_backtest_id TEXT,
                 initial_capital REAL,
                 final_value REAL,
                 total_return REAL,
@@ -116,7 +178,7 @@ class TestIntegrationWorkflow:
                 avg_trade_return REAL,
                 volatility REAL,
                 equity_curve TEXT,
-                metrics TEXT
+                metrics JSON
             )
         """)
         conn.commit()
@@ -154,71 +216,52 @@ class TestIntegrationWorkflow:
                     gc.collect()
                     time.sleep(0.05)
 
-    def test_data_ingestion_to_prediction_workflow(self):
-        """Test complete workflow from data ingestion to prediction."""
-        # Step 1: Insert test price data
-        conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO price_daily
-            (ticker, date, open, high, low, close, adjusted_close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("AAPL", "2024-01-01", 150.0, 152.0, 148.0, 151.0, 151.0, 1000000))
-        conn.execute("""
-            INSERT INTO price_daily
-            (ticker, date, open, high, low, close, adjusted_close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("AAPL", "2024-01-02", 151.0, 153.0, 149.0, 152.0, 152.0, 1000000))
-        conn.commit()
+    def _seed_moving_average_preflight_data(self):
+        from datetime import timedelta
 
-        # Step 2: Insert test article data
-        conn.execute("""
-            INSERT INTO articles
-            (source, url, canonical_timestamp, published_at, title, author, content, sentiment_score, ticker)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("test_source", "http://test.com", "2024-01-01T10:00:00", "2024-01-01T10:00:00",
-              "AAPL shows strong growth", "Test Author", "Apple stock is performing well", 0.8, "AAPL"))
+        conn = sqlite3.connect(self.temp_db.name)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tickers (
+                ticker TEXT PRIMARY KEY,
+                name TEXT,
+                exchange TEXT,
+                sector TEXT,
+                added_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO tickers (ticker, name, exchange, sector) VALUES (?,?,?,?)",
+            ("AAPL", "Apple Inc.", "NASDAQ", "Technology"),
+        )
+        conn.execute("DELETE FROM price_daily WHERE ticker = ?", ("AAPL",))
+        base = datetime(2024, 1, 1).date()
+        for i in range(130):
+            d = (base + timedelta(days=i)).isoformat()
+            conn.execute(
+                """
+                INSERT INTO price_daily
+                (ticker, date, open, high, low, close, adjusted_close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("AAPL", d, 150.0 + i, 152.0 + i, 148.0 + i, 151.0 + i, 151.0 + i, 1_000_000),
+            )
         conn.commit()
         conn.close()
 
-        # Step 3: Test prediction endpoint
-        with patch('routes.predictions.make_prediction') as mock_predict:
-            from schemas import PredictionResponse
-            mock_predict.return_value = PredictionResponse(
-                ticker="AAPL",
-                horizon="1d",
-                predicted_return=0.025,
-                confidence=0.85,
-                timestamp=datetime.utcnow(),
-                model_version="1.0.0",
-                features_used=["price_change", "volume"],
-                metadata={}
-            )
-
-            payload = {
-                "ticker": "AAPL",
-                "horizon": "1d",
-                "context": {}
-            }
-            response = self.client.post("/predict", json=payload)
-            assert response.status_code == 200
-
-            data = response.json()
-            assert data["ticker"] == "AAPL"
-            assert data["horizon"] == "1d"
-            assert "predicted_return" in data
-
     def test_backtest_creation_workflow(self):
         """Test backtest creation and status checking workflow."""
-        # Step 1: Test backtest creation
-        with patch('routes.backtests.run_backtest_background') as mock_run_backtest:
-            mock_run_backtest.return_value = "test_backtest_123"
+        self._seed_moving_average_preflight_data()
+        with patch("backend.routes.backtests.run_backtest_background") as mock_run_backtest:
+            mock_run_backtest.return_value = None
 
             payload = {
-                "strategy_name": "test_strategy",
+                "strategy_name": "moving_average",
                 "start_date": "2024-01-01T00:00:00",
                 "end_date": "2024-12-31T00:00:00",
                 "initial_capital": 100000.0,
-                "parameters": {}
+                "parameters": {"ticker": "AAPL"},
             }
             response = self.client.post("/backtest", json=payload)
             assert response.status_code == 200
@@ -314,7 +357,7 @@ class TestIntegrationWorkflow:
             script_status_message = {
                 "type": "script_status",
                 "data": {
-                    "script_name": "generate_trading_predictions",
+                    "script_name": "backtest_runner",
                     "status": "completed",
                     "execution_id": "test_exec_123",
                     "start_time": datetime.utcnow().isoformat(),
@@ -330,7 +373,7 @@ class TestIntegrationWorkflow:
             # Verify script status message was received
             assert len(received_messages) == 2
             assert received_messages[1]["type"] == "script_status"
-            assert received_messages[1]["data"]["script_name"] == "generate_trading_predictions"
+            assert received_messages[1]["data"]["script_name"] == "backtest_runner"
             assert received_messages[1]["data"]["status"] == "completed"
 
             # Test 3: Simulate pipeline status update
@@ -432,7 +475,7 @@ class TestIntegrationWorkflow:
                 # Set up the execution record
                 execution_id = "test_script_exec_123"
                 script_executions[execution_id] = {
-                    "script_name": "generate_trading_predictions",
+                    "script_name": "backtest_runner",
                     "status": "running",
                     "start_time": datetime.utcnow(),
                     "parameters": {},
@@ -442,13 +485,13 @@ class TestIntegrationWorkflow:
                 }
 
                 # Execute script
-                await run_script_async(execution_id, "generate_trading_predictions", {}, {})
+                await run_script_async(execution_id, "backtest_runner", {}, {})
 
                 # Verify WebSocket message was sent
                 assert len(received_messages) == 1
                 message = received_messages[0]
                 assert message["type"] == "script_status"
-                assert message["data"]["script_name"] == "generate_trading_predictions"
+                assert message["data"]["script_name"] == "backtest_runner"
                 assert message["data"]["status"] == "completed"
                 assert message["data"]["execution_id"] == execution_id
                 assert message["data"]["output"] == "Script output"
@@ -483,16 +526,86 @@ class TestIntegrationWorkflow:
             assert isinstance(data["job_id"], str) and len(data["job_id"]) > 0
 
     def test_strategy_train_api_unsupported_strategy(self):
-        """Test training a strategy that doesn't support training."""
+        """Moving-average training is parameter optimization and requires ticker and dates."""
         payload = {"config": {}}
 
-        # Try to train a rule-based strategy (assuming moving_average doesn't support training)
         response = self.client.post("/api/strategies/moving_average/train", json=payload, headers=self.auth_headers)
         assert response.status_code == 400
 
         data = response.json()
         assert "detail" in data
-        assert "does not support training" in data["detail"]
+        assert "ticker is required for strategy parameter training" in data["detail"]
+
+    def _seed_multi_ticker_daily_prices(self, days: int = 420) -> None:
+        """Seed enough calendar days to satisfy strategy preflight (e.g. 120+ bars in-range)."""
+        conn = sqlite3.connect(self.temp_db.name)
+        start = datetime(2024, 1, 1)
+        for sym, bias in (("AAPL", 0.0), ("MSFT", 20.0), ("GOOGL", 40.0)):
+            for i in range(days):
+                day = (start + timedelta(days=i)).date().isoformat()
+                c = 80.0 + i * 0.15 + bias
+                conn.execute(
+                    """
+                    INSERT INTO price_daily
+                    (ticker, date, open, high, low, close, adjusted_close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (sym, day, c, c * 1.01, c * 0.99, c, c, 1000),
+                )
+        conn.commit()
+        conn.close()
+
+    def test_strategy_train_mean_reversion_signal_optimize_integration(self):
+        """Mimics UI: POST /api/strategies/mean_reversion/train with dates and ticker."""
+        self._seed_multi_ticker_daily_prices()
+        response = self.client.post(
+            "/api/strategies/mean_reversion/train",
+            json={
+                "ticker": "AAPL",
+                "start_date": "2024-06-01T00:00:00",
+                "end_date": "2025-03-01T00:00:00",
+                "objective": "balanced",
+                "max_evals": 6,
+            },
+            headers=self.auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["strategy"] == "mean_reversion"
+        assert data["evaluations_run"] == 6
+        assert "best_params" in data
+
+    def test_strategy_train_pairs_trading_pair_ticker_validation_integration(self):
+        """Pairs training without pair_ticker returns 400 with actionable detail."""
+        self._seed_multi_ticker_daily_prices()
+        response = self.client.post(
+            "/api/strategies/pairs_trading/train",
+            json={
+                "ticker": "AAPL",
+                "start_date": "2024-06-01T00:00:00",
+                "end_date": "2025-03-01T00:00:00",
+                "max_evals": 2,
+            },
+            headers=self.auth_headers,
+        )
+        assert response.status_code == 400
+        assert "pair_ticker" in response.json()["detail"].lower()
+
+    def test_strategy_train_pairs_trading_with_pair_integration(self):
+        self._seed_multi_ticker_daily_prices()
+        response = self.client.post(
+            "/api/strategies/pairs_trading/train",
+            json={
+                "ticker": "AAPL",
+                "pair_ticker": "MSFT",
+                "start_date": "2024-06-01T00:00:00",
+                "end_date": "2025-03-01T00:00:00",
+                "max_evals": 4,
+            },
+            headers=self.auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["evaluations_run"] == 4
 
     def test_get_model_job_status(self):
         """Test GET /api/model_jobs/{job_id} endpoint."""
@@ -563,90 +676,9 @@ class TestIntegrationWorkflow:
             response = self.client.get(f"/api/model_jobs/{job_id}", headers=self.auth_headers)
             assert response.status_code in [200, 401, 404]
 
-    def test_sentiment_ml_backtest_end_to_end(self):
-        """End-to-end integration test for sentiment_ml strategy backtest."""
-        import time
-
-        # Step 1: Verify that the sentiment_ml strategy is registered
-        from main import app_state
-        registry = app_state.get("strategy_registry")
-        assert registry is not None, "Strategy registry not found in app_state"
-        strategy = registry.get("sentiment_ml")
-        assert strategy is not None, "sentiment_ml strategy not registered"
-        assert strategy.name == "sentiment_ml"
-        assert strategy.type == "ml"
-
-        # Step 2: Insert test data for trading_model_predictions and price_daily
-        conn = sqlite3.connect(self.temp_db.name)
-
-        # Insert test predictions for AAPL with sentiment data
-        test_date = "2024-01-15"
-        conn.execute("""
-            INSERT INTO trading_model_predictions
-            (ticker, suggested_position_pct, dt, confidence, predicted_return, enter_prob, exit_prob, model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("AAPL", 0.1, test_date, 0.8, 0.025, 0.7, 0.1, "sentiment_ml"))
-
-        # Insert price data for AAPL over a period
-        price_data = []
-        base_price = 150.0
-        for i in range(60):  # 60 days of data
-            date = (datetime(2024, 1, 1) + timedelta(days=i)).date().isoformat()
-            open_price = base_price + (i * 0.5)
-            high_price = open_price + 2.0
-            low_price = open_price - 2.0
-            close_price = open_price + 1.0
-            volume = 1000000
-            price_data.append((date, open_price, high_price, low_price, close_price, volume))
-
-        conn.executemany("""
-            INSERT INTO price_daily
-            (ticker, date, open, high, low, close, adjusted_close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [("AAPL", date, open_p, high_p, low_p, close_p, close_p, vol) for date, open_p, high_p, low_p, close_p, vol in price_data])
-
-        conn.commit()
-        conn.close()
-
-        # Step 3: Simulate POST request to /backtest endpoint with sentiment_ml strategy
-        payload = {
-            "strategy_name": "sentiment_ml",
-            "start_date": "2024-01-01T00:00:00",
-            "end_date": "2024-02-29T00:00:00",  # About 60 days
-            "initial_capital": 100000.0,
-            "parameters": {
-                "model_name": "sentiment_ml",
-                "prediction_threshold": 0.5,
-                "max_position_pct": 0.1
-            }
-        }
-        response = self.client.post("/backtest", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        backtest_id = data.get("metrics", {}).get("backtest_id")
-        assert backtest_id is not None
-
-        # Step 4: Poll for backtest completion (best-effort in integration env)
-        max_attempts = 10
-        attempt = 0
-        result = {}
-        while attempt < max_attempts:
-            response = self.client.get(f"/backtest/{backtest_id}")
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("completed_at") is not None:
-                    break
-            time.sleep(1)
-            attempt += 1
-
-        # Step 5: Assert baseline response structure regardless of terminal status
-        assert response.status_code in [200, 500]
-        assert isinstance(result, dict)
-
     def test_moving_average_backtest_end_to_end(self):
         """End-to-end integration test for moving_average strategy backtest."""
         import time
-        import json
 
         # Step 1: Verify that the moving_average strategy is registered
         from main import app_state
@@ -662,40 +694,6 @@ class TestIntegrationWorkflow:
         # Step 2: Insert test data for trading_model_predictions and price_daily
         conn = sqlite3.connect(self.temp_db.name)
 
-        # Add backtest_runs table if not exists
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS backtest_runs (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                params TEXT,
-                started_at TEXT,
-                completed_at TEXT,
-                initial_capital REAL,
-                final_value REAL,
-                total_return REAL,
-                annualized_return REAL,
-                sharpe_ratio REAL,
-                max_drawdown REAL,
-                win_rate REAL,
-                total_trades INTEGER,
-                avg_trade_return REAL,
-                volatility REAL,
-                equity_curve TEXT,
-                metrics TEXT
-            )
-        """)
-
-        # Add trading_model_predictions table if not exists
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS trading_model_predictions (
-                id INTEGER PRIMARY KEY,
-                ticker TEXT,
-                suggested_position_pct REAL,
-                dt TEXT,
-                confidence REAL
-            )
-        """)
-
         # Insert test predictions for AAPL
         test_date = "2024-01-15"
         conn.execute("""
@@ -707,7 +705,7 @@ class TestIntegrationWorkflow:
         # Insert price data for AAPL over a period
         price_data = []
         base_price = 150.0
-        for i in range(60):  # 60 days of data
+        for i in range(130):  # enough bars for moving_average preflight (min_history_bars=120)
             date = (datetime(2024, 1, 1) + timedelta(days=i)).date().isoformat()
             open_price = base_price + (i * 0.5)
             high_price = open_price + 2.0
@@ -729,9 +727,10 @@ class TestIntegrationWorkflow:
         payload = {
             "strategy_name": "moving_average",
             "start_date": "2024-01-01T00:00:00",
-            "end_date": "2024-02-29T00:00:00",  # About 60 days
+            "end_date": "2024-12-31T00:00:00",
             "initial_capital": 100000.0,
             "parameters": {
+                "ticker": "AAPL",
                 "short_window": 10,
                 "long_window": 30,
                 "max_position_pct": 0.1

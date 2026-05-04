@@ -6,11 +6,12 @@ This module implements a simple moving average crossover trading strategy.
 
 import sqlite3
 from datetime import datetime
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 import backtrader as bt
 import numpy as np
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int
 from backend.domain.trading import TargetAllocation
 
@@ -52,7 +53,7 @@ class MovingAverageStrategy(BaseStrategy):
         """Create and return a Backtrader strategy class with MA crossover logic."""
         normalized = self._normalize_parameters(parameters)
 
-        class MovingAverageCrossover(bt.Strategy):
+        class MovingAverageCrossover(DecisionRecordingStrategy):
             params = (
                 ("short_window", normalized["short_window"]),
                 ("long_window", normalized["long_window"]),
@@ -154,6 +155,8 @@ class MovingAverageStrategy(BaseStrategy):
         symbols: List[str],
         as_of: datetime,
         current_prices: Dict[str, float],
+        *,
+        db_conn: Optional[sqlite3.Connection] = None,
     ) -> List[TargetAllocation]:
         from backend.main import app_state
 
@@ -164,7 +167,8 @@ class MovingAverageStrategy(BaseStrategy):
         db_path = app_state.get("database_path") or "data/backtest.db"
 
         allocations: List[TargetAllocation] = []
-        conn = sqlite3.connect(db_path)
+        own_conn = db_conn is None
+        conn = sqlite3.connect(db_path) if own_conn else db_conn
         try:
             cur = conn.cursor()
             for symbol in symbols:
@@ -230,7 +234,8 @@ class MovingAverageStrategy(BaseStrategy):
                     )
                 )
         finally:
-            conn.close()
+            if own_conn:
+                conn.close()
         return allocations
 
     def train(self, config: Dict[str, Any]) -> Any:

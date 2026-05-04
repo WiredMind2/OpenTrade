@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -20,11 +20,13 @@ import { Activity, BarChart3, Gauge, Layers3, Target, TrendingUp } from 'lucide-
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { Input } from '../components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import {
   getStrategyAnalyticsFilters,
+  getTickerStrategyLeaderboard,
   getStrategyVariantDistribution,
   getStrategyVariantSummary,
   getStrategyVariantTimeseries,
@@ -32,11 +34,13 @@ import {
 import type {
   StrategyAnalyticsFilters,
   StrategyDistributionResponse,
+  TickerStrategyLeaderboardResponse,
   StrategyTimeseriesPoint,
   StrategyVariantRow,
   StrategyVariantSummary,
   StrategyVariantTimeseriesResponse,
 } from '../types'
+import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 const COLOR_PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4']
 
@@ -44,6 +48,26 @@ const fmtPct = (value: number) => `${(value * 100).toFixed(2)}%`
 const fmtNum = (value: number) => value.toFixed(2)
 const safeNumber = (value: unknown, fallback: number = 0) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback
+
+/** Tight Y domain so normalized equity curves (often near 1.0) stay visually separated. */
+function normalizedEquityComparisonYDomain(
+  rows: Array<Record<string, unknown>>,
+  seriesKeys: string[],
+): [number, number] | undefined {
+  const values: number[] = []
+  for (const row of rows) {
+    for (const k of seriesKeys) {
+      const v = row[k]
+      if (typeof v === 'number' && Number.isFinite(v)) values.push(v)
+    }
+  }
+  if (values.length === 0) return undefined
+  const minV = Math.min(...values)
+  const maxV = Math.max(...values)
+  const span = maxV - minV
+  const pad = span > 0 ? span * 0.1 : Math.max(Math.abs(minV) * 0.01, 0.01)
+  return [minV - pad, maxV + pad]
+}
 
 function shortHash(h: string) {
   return h.length > 10 ? `${h.slice(0, 6)}…` : h
@@ -74,59 +98,127 @@ function monthlyReturnsFromPoints(points: StrategyTimeseriesPoint[]): Record<str
 export default function StrategyPerformance() {
   const [filters, setFilters] = useState<StrategyAnalyticsFilters | null>(null)
   const [strategy, setStrategy] = useState('')
+  const [ticker, setTicker] = useState(() => getStoredTicker())
   const [variantSummary, setVariantSummary] = useState<StrategyVariantSummary | null>(null)
   const [variantTs, setVariantTs] = useState<StrategyVariantTimeseriesResponse | null>(null)
   const [dist, setDist] = useState<StrategyDistributionResponse | null>(null)
-  const [selectedBenchmark, setSelectedBenchmark] = useState('SPY')
   const [selectedPreset, setSelectedPreset] = useState('MAX')
   const [selectedGranularity, setSelectedGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily')
   const [selectedRolling, setSelectedRolling] = useState(30)
   const [objective, setObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [topN, setTopN] = useState(8)
+  const [selectedTicker, setSelectedTicker] = useState('ALL')
   const [activeParamsHash, setActiveParamsHash] = useState<string | null>(null)
   const [analyticsTab, setAnalyticsTab] = useState<'overview' | 'risk' | 'distributions' | 'monthly'>('overview')
+  const [tickerLeaderboard, setTickerLeaderboard] = useState<TickerStrategyLeaderboardResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const strategyRef = useRef(strategy)
+  strategyRef.current = strategy
+  const activeParamsHashRef = useRef<string | null>(null)
+  activeParamsHashRef.current = activeParamsHash
+
+  const effectiveBenchmark = useMemo(() => {
+    const list = filters?.benchmarks ?? []
+    if (list.includes('SPY')) return 'SPY'
+    return list[0] ?? 'SPY'
+  }, [filters])
 
   const loadDashboard = useCallback(async () => {
-    if (!strategy) return
     setLoading(true)
     setError(null)
     try {
-      const summary = await getStrategyVariantSummary({
-        strategy,
+      const tickerSummary = await getTickerStrategyLeaderboard({
         objective,
         top_n: topN,
+        ...(selectedTicker !== 'ALL' ? { ticker: selectedTicker } : {}),
+      })
+      setTickerLeaderboard(tickerSummary)
+
+      const flatRows = tickerSummary.tickers.flatMap((bucket) => bucket.strategies)
+      const hashNow = activeParamsHashRef.current
+      const strategyNow = strategyRef.current
+
+      let strategyToLoad = ''
+      let preferredHash: string | null = null
+
+      if (flatRows.length === 0) {
+        strategyToLoad = ''
+        preferredHash = null
+      } else {
+        const exact = flatRows.find((r) => r.strategy === strategyNow && r.params_hash === hashNow)
+        if (exact) {
+          strategyToLoad = exact.strategy
+          preferredHash = exact.params_hash
+        } else if (strategyNow && hashNow && flatRows.some((r) => r.strategy === strategyNow)) {
+          strategyToLoad = strategyNow
+          preferredHash = hashNow
+        } else {
+          strategyToLoad = flatRows[0].strategy
+          preferredHash = flatRows[0].params_hash
+        }
+      }
+
+      if (!strategyToLoad) {
+        setStrategy('')
+        setVariantSummary(null)
+        setVariantTs(null)
+        setActiveParamsHash(null)
+        setDist(null)
+        return
+      }
+
+      const summary = await getStrategyVariantSummary({
+        strategy: strategyToLoad,
+        objective,
+        top_n: topN,
+        ticker,
       })
       setVariantSummary(summary)
       const hashes = summary.variants.map((v) => v.params_hash).join(',')
       if (!hashes) {
         setVariantTs(null)
         setActiveParamsHash(null)
+        setStrategy(strategyToLoad)
         return
       }
       const ts = await getStrategyVariantTimeseries({
-        strategy,
+        strategy: strategyToLoad,
         params_hashes: hashes,
-        benchmark_ticker: selectedBenchmark,
+        benchmark_ticker: effectiveBenchmark,
         preset: selectedPreset,
         granularity: selectedGranularity,
         rolling_window: selectedRolling,
         objective,
+        ticker,
       })
       setVariantTs(ts)
       setActiveParamsHash((prev) => {
+        if (preferredHash && summary.variants.some((v) => v.params_hash === preferredHash)) {
+          return preferredHash
+        }
         if (prev && summary.variants.some((v) => v.params_hash === prev)) return prev
         return summary.variants[0]?.params_hash ?? null
       })
+      setStrategy(strategyToLoad)
     } catch (e: any) {
       setError(e.message || 'Failed to load variant analytics')
       setVariantSummary(null)
       setVariantTs(null)
+      setTickerLeaderboard(null)
     } finally {
       setLoading(false)
     }
-  }, [strategy, objective, topN, selectedBenchmark, selectedPreset, selectedGranularity, selectedRolling])
+  }, [
+    objective,
+    topN,
+    selectedTicker,
+    effectiveBenchmark,
+    selectedPreset,
+    selectedGranularity,
+    selectedRolling,
+    ticker,
+  ])
 
   useEffect(() => {
     let mounted = true
@@ -135,39 +227,6 @@ export default function StrategyPerformance() {
         const f = await getStrategyAnalyticsFilters()
         if (!mounted) return
         setFilters(f)
-        const first = f.strategies[0] ?? ''
-        setStrategy(first)
-        if (f.benchmarks.includes('SPY')) setSelectedBenchmark('SPY')
-        else if (f.benchmarks.length > 0) setSelectedBenchmark(f.benchmarks[0])
-        if (first) {
-          setLoading(true)
-          const summary = await getStrategyVariantSummary({
-            strategy: first,
-            objective: 'balanced',
-            top_n: 8,
-          })
-          if (!mounted) return
-          setVariantSummary(summary)
-          const hashes = summary.variants.map((v) => v.params_hash).join(',')
-          if (hashes) {
-            const ts = await getStrategyVariantTimeseries({
-              strategy: first,
-              params_hashes: hashes,
-              benchmark_ticker: f.benchmarks.includes('SPY') ? 'SPY' : f.benchmarks[0],
-              preset: 'MAX',
-              granularity: 'daily',
-              rolling_window: 30,
-              objective: 'balanced',
-            })
-            if (mounted) {
-              setVariantTs(ts)
-              setActiveParamsHash(summary.variants[0]?.params_hash ?? null)
-            }
-          } else if (mounted) {
-            setVariantTs(null)
-            setActiveParamsHash(null)
-          }
-        }
       } catch (e: any) {
         if (mounted) setError(e.message || 'Failed to initialize')
       } finally {
@@ -180,16 +239,26 @@ export default function StrategyPerformance() {
   }, [])
 
   useEffect(() => {
-    if (!strategy) return
+    if (!filters) return
     void loadDashboard()
-  }, [strategy, objective, topN, selectedBenchmark, selectedPreset, selectedGranularity, selectedRolling, loadDashboard])
+  }, [
+    filters,
+    objective,
+    topN,
+    selectedTicker,
+    selectedPreset,
+    selectedGranularity,
+    selectedRolling,
+    loadDashboard,
+    ticker,
+  ])
 
   useEffect(() => {
     if (analyticsTab !== 'distributions' || !strategy || !activeParamsHash) return
     let cancelled = false
     ;(async () => {
       try {
-        const d = await getStrategyVariantDistribution(strategy, activeParamsHash, objective)
+        const d = await getStrategyVariantDistribution(strategy, activeParamsHash, objective, ticker)
         if (!cancelled) setDist(d)
       } catch {
         if (!cancelled) setDist(null)
@@ -198,7 +267,7 @@ export default function StrategyPerformance() {
     return () => {
       cancelled = true
     }
-  }, [analyticsTab, strategy, activeParamsHash, objective])
+  }, [analyticsTab, strategy, activeParamsHash, objective, ticker])
 
   const activeVariant: StrategyVariantRow | undefined = useMemo(
     () => variantSummary?.variants.find((v) => v.params_hash === activeParamsHash),
@@ -221,19 +290,26 @@ export default function StrategyPerformance() {
       }
     })
     if (variantTs.benchmark_points?.length) {
-      const bmKey = `${selectedBenchmark}_benchmark`
+      const bmKey = `${effectiveBenchmark}_benchmark`
       for (const bp of variantTs.benchmark_points) {
-        if (!byDate[bp.date]) byDate[bp.date] = { date: bp.date }
-        byDate[bp.date][bmKey] = safeNumber(bp.normalized_equity, 0)
+        if (byDate[bp.date]) {
+          byDate[bp.date][bmKey] = safeNumber(bp.normalized_equity, 0)
+        }
       }
     }
     return Object.values(byDate).sort((a: any, b: any) => a.date.localeCompare(b.date))
-  }, [variantTs, selectedBenchmark])
+  }, [variantTs, effectiveBenchmark])
 
   const lineKeys = useMemo(() => {
     if (!variantTs?.variant_series?.length) return [] as string[]
     return variantTs.variant_series.map((_, idx) => `v_${idx}_${shortHash(variantTs.variant_series[idx].params_hash)}`)
   }, [variantTs])
+
+  const variantEquityYDomain = useMemo(() => {
+    const bmKey = `${effectiveBenchmark}_benchmark`
+    const keys = lineKeys.length ? [...lineKeys, bmKey] : []
+    return normalizedEquityComparisonYDomain(variantComparisonData, keys)
+  }, [variantComparisonData, lineKeys, effectiveBenchmark])
 
   const riskReturnScatter = useMemo(
     () =>
@@ -269,13 +345,30 @@ export default function StrategyPerformance() {
 
   const monthlyMatrix = useMemo(() => monthlyReturnsFromPoints(activeSeries?.points ?? []), [activeSeries])
 
+  const tickerOptions = useMemo(() => {
+    const discovered = [...new Set((tickerLeaderboard?.tickers ?? []).map((row) => row.ticker))]
+    if (selectedTicker !== 'ALL' && !discovered.includes(selectedTicker)) discovered.unshift(selectedTicker)
+    return ['ALL', ...discovered]
+  }, [tickerLeaderboard, selectedTicker])
+
+  const tickerStrategyRows = useMemo(
+    () =>
+      (tickerLeaderboard?.tickers ?? []).flatMap((bucket) =>
+        bucket.strategies.map((row, idx) => ({
+          ...row,
+          rank: idx + 1,
+        }))
+      ),
+    [tickerLeaderboard]
+  )
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Strategy Performance</h2>
         <p className="text-muted-foreground">
-          Compare the best parameter variants for one strategy at a time (ranked by objective). Run backtests or train
-          with optimization to populate variants.
+          Each leaderboard row is a model: a strategy script plus one fixed parameter set. Compare models per ticker
+          across strategy families, then open variants to inspect other saved settings for the same strategy.
         </p>
       </div>
 
@@ -286,22 +379,32 @@ export default function StrategyPerformance() {
             Variant comparison controls
           </CardTitle>
           <CardDescription>
-            Pick a strategy, objective used for ranking, how many top variants to show, benchmark, preset, granularity,
-            and rolling window for charts.
+            Pick ticker scope, ranking objective, how many top models to list per ticker, plus chart preset, granularity,
+            and rolling window. Benchmark defaults to SPY when available. The active strategy family comes from the
+            leaderboard row you select (or the current top row).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">Strategy</label>
-              <Select value={strategy} onValueChange={setStrategy}>
+              <label className="text-xs font-medium text-muted-foreground">Ticker (variant filter)</label>
+              <Input
+                value={ticker}
+                onChange={(event) => setTicker(rememberTicker(event.target.value))}
+                className="font-mono uppercase"
+                placeholder="AMZN"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Ticker scope</label>
+              <Select value={selectedTicker} onValueChange={setSelectedTicker}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Strategy" />
+                  <SelectValue placeholder="Ticker scope" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(filters?.strategies ?? []).map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s}
+                  {tickerOptions.map((ticker) => (
+                    <SelectItem key={ticker} value={ticker}>
+                      {ticker === 'ALL' ? 'All tickers' : ticker}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -331,21 +434,6 @@ export default function StrategyPerformance() {
                   {[3, 5, 8, 10, 15].map((n) => (
                     <SelectItem key={n} value={String(n)}>
                       {n}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">Benchmark</label>
-              <Select value={selectedBenchmark} onValueChange={setSelectedBenchmark}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Benchmark" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(filters?.benchmarks ?? []).map((b) => (
-                    <SelectItem key={b} value={b}>
-                      {b}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -418,8 +506,8 @@ export default function StrategyPerformance() {
             <CardContent className="flex flex-wrap gap-2">
               {(variantSummary?.variants ?? []).length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No parameter variants found yet. Run optimization (Train) or backtests with different parameters so
-                  rows get a params_hash.
+                  No parameter variants found for {ticker || 'this ticker'} yet. Train that ticker on the Backtests
+                  page, or run historical backtests with different parameters so rows get a params_hash.
                 </p>
               ) : (
                 (variantSummary?.variants ?? []).map((v) => (
@@ -471,15 +559,21 @@ export default function StrategyPerformance() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Variant leaderboard</CardTitle>
-              <CardDescription>Top parameter sets for {strategy || '—'} using objective {objective}.</CardDescription>
+              <CardTitle>Ticker model leaderboard</CardTitle>
+              <CardDescription>
+                Best models per ticker using objective {objective}. Click any row to drill into that strategy family and
+                parameter variant.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="overflow-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border">
-                      <th className="text-left py-2 pr-3">Variant</th>
+                      <th className="text-left py-2 pr-3">Ticker</th>
+                      <th className="text-right py-2 px-2">Rank</th>
+                      <th className="text-left py-2 px-2">Strategy</th>
+                      <th className="text-left py-2 px-2">Variant</th>
                       <th className="text-right py-2 px-2">Runs</th>
                       <th className="text-right py-2 px-2">Trades</th>
                       <th className="text-right py-2 px-2">Return</th>
@@ -491,22 +585,32 @@ export default function StrategyPerformance() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(variantSummary?.variants ?? []).map((v) => (
+                    {tickerStrategyRows.map((row) => (
                       <tr
-                        key={v.params_hash}
+                        key={`${row.ticker}-${row.strategy}-${row.params_hash}`}
                         className={`border-b border-border/50 ${
-                          activeParamsHash === v.params_hash ? 'bg-muted/30' : ''
+                          strategy === row.strategy && activeParamsHash === row.params_hash ? 'bg-muted/30' : ''
                         }`}
+                        onClick={() => {
+                          strategyRef.current = row.strategy
+                          activeParamsHashRef.current = row.params_hash
+                          setStrategy(row.strategy)
+                          setActiveParamsHash(row.params_hash)
+                          void loadDashboard()
+                        }}
                       >
-                        <td className="py-2 pr-3 font-mono text-xs">{shortHash(v.params_hash)}</td>
-                        <td className="text-right py-2 px-2">{v.run_count}</td>
-                        <td className="text-right py-2 px-2">{v.total_trades}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(v.total_return)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(v.annualized_return)}</td>
-                        <td className="text-right py-2 px-2">{fmtNum(v.sharpe_ratio)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(v.volatility)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(v.max_drawdown)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(v.win_rate)}</td>
+                        <td className="py-2 pr-3 font-medium">{row.ticker}</td>
+                        <td className="text-right py-2 px-2">{row.rank}</td>
+                        <td className="py-2 px-2">{row.strategy}</td>
+                        <td className="py-2 px-2 font-mono text-xs">{shortHash(row.params_hash)}</td>
+                        <td className="text-right py-2 px-2">{row.run_count}</td>
+                        <td className="text-right py-2 px-2">{row.total_trades}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(row.total_return)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(row.annualized_return)}</td>
+                        <td className="text-right py-2 px-2">{fmtNum(row.sharpe_ratio)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(row.volatility)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(row.max_drawdown)}</td>
+                        <td className="text-right py-2 px-2">{fmtPct(row.win_rate)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -538,7 +642,15 @@ export default function StrategyPerformance() {
                         <LineChart data={variantComparisonData}>
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="date" hide />
-                          <YAxis />
+                          <YAxis
+                            domain={variantEquityYDomain}
+                            tickFormatter={(v: number | string) => {
+                              const n = Number(v)
+                              if (!Number.isFinite(n)) return ''
+                              return n.toFixed(Number.isInteger(n) ? 0 : 3)
+                            }}
+                            width={52}
+                          />
                           <Tooltip />
                           <Legend />
                           {lineKeys.map((k, idx) => (
@@ -551,7 +663,7 @@ export default function StrategyPerformance() {
                             />
                           ))}
                           <Line
-                            dataKey={`${selectedBenchmark}_benchmark`}
+                            dataKey={`${effectiveBenchmark}_benchmark`}
                             stroke="#94a3b8"
                             strokeDasharray="6 3"
                             dot={false}

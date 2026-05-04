@@ -306,8 +306,8 @@ print(f"Predicted return: {prediction['predicted_return']:.4f}")
 ```python
 response = requests.post('http://localhost:8000/backtest', json={
     'strategy_name': 'sentiment_momentum',
-    'start_date': '2023-01-01',
-    'end_date': '2023-12-31',
+    'start_date': '2025-01-01',
+    'end_date': '2025-12-31',
     'initial_capital': 100000,
     'parameters': {'sentiment_threshold': 0.02}
 })

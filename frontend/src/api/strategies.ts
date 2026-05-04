@@ -1,12 +1,13 @@
 import instance from '../services/api'
 
+const TRAINING_REQUEST_TIMEOUT_MS = 5 * 60 * 1000
+
 export interface StrategyMetadata {
   name: string
   description: string
   type: string
   can_train: boolean
   parameters_schema: any
-  model_info?: any
 }
 
 export interface StrategyTrainRequest {
@@ -107,7 +108,11 @@ export const trainStrategy = async (
   strategyName: string,
   config: StrategyTrainRequest | Record<string, any>
 ): Promise<StrategyTrainResponse | Record<string, any>> => {
-  const response = await instance.post(`/api/strategies/${strategyName}/train`, config)
+  const response = await instance.post(`/api/strategies/${strategyName}/train`, config, {
+    timeout: TRAINING_REQUEST_TIMEOUT_MS,
+    timeoutErrorMessage:
+      'Training is still running after 5 minutes. Try fewer max evaluations or a shorter date range.',
+  })
   return response.data
 }
 

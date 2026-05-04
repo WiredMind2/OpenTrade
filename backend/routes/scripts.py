@@ -2,6 +2,7 @@
 Scripts endpoints for running data processing and ML pipeline scripts.
 """
 import asyncio
+import json
 import subprocess
 import sys
 import os
@@ -16,7 +17,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 from backend.logging_config import get_component_logger
-from backend.schemas import ScriptExecutionRequest, ScriptExecutionResponse, PipelineStatus, PipelineRequest, MAPredictionRequest, MAPredictionResponse
+from backend.schemas import (
+    BatchStrategyTrainingRequest,
+    ScriptExecutionRequest,
+    ScriptExecutionResponse,
+    PipelineStatus,
+    PipelineRequest,
+)
 from backend.config import get_config
 from .websocket import broadcast_websocket_message
 
@@ -31,6 +38,115 @@ def _safe_decode(b: bytes | None) -> str:
     if not b:
         return ""
     return b.decode(errors="replace")
+
+
+def _batch_train_progress_line(line: str) -> bool:
+    """True if this stdout line should trigger a WebSocket update (plan or per-strategy result)."""
+    s = line.strip()
+    if not s.startswith("{"):
+        return False
+    try:
+        obj = json.loads(s)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(obj, dict):
+        return False
+    if obj.get("batch_plan") is True:
+        return True
+    return bool(obj.get("strategy")) and obj.get("status") in ("ok", "error")
+
+
+async def _broadcast_script_running_output(execution_id: str, execution: Dict[str, Any]) -> None:
+    await broadcast_websocket_message(
+        {
+            "type": "script_status",
+            "data": {
+                "script_name": execution["script_name"],
+                "status": "running",
+                "execution_id": execution_id,
+                "start_time": execution["start_time"].isoformat(),
+                "output": execution.get("output") or None,
+                "error": None,
+                "duration_seconds": None,
+            },
+        }
+    )
+
+
+async def _run_train_all_strategies_streaming(
+    execution_id: str,
+    cmd: List[str],
+    project_root: str,
+    execution: Dict[str, Any],
+) -> None:
+    """Read stdout line-by-line so JSON result rows can be pushed while the batch is still running."""
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=project_root,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    execution["process"] = process
+    out_parts: List[str] = []
+    err_parts: List[str] = []
+
+    async def drain_stdout() -> None:
+        assert process.stdout is not None
+        while True:
+            line_b = await process.stdout.readline()
+            if not line_b:
+                break
+            s = _safe_decode(line_b)
+            out_parts.append(s)
+            execution["output"] = "".join(out_parts)
+            if _batch_train_progress_line(s):
+                await _broadcast_script_running_output(execution_id, execution)
+
+    async def drain_stderr() -> None:
+        assert process.stderr is not None
+        while True:
+            line_b = await process.stderr.readline()
+            if not line_b:
+                break
+            err_parts.append(_safe_decode(line_b))
+
+    await asyncio.gather(drain_stdout(), drain_stderr())
+    await process.wait()
+    execution["end_time"] = datetime.utcnow()
+    execution["error"] = "".join(err_parts)
+    if process.returncode == 0:
+        execution["status"] = "completed"
+        logger.info(
+            "Script train_all_strategies completed successfully",
+            extra={"execution_id": execution_id},
+        )
+    else:
+        execution["status"] = "failed"
+        logger.error(
+            "Script train_all_strategies failed with return code %s",
+            process.returncode,
+            extra={
+                "execution_id": execution_id,
+                "returncode": process.returncode,
+                "stderr_tail": _tail(execution["error"]),
+                "stdout_tail": _tail(execution["output"]),
+            },
+        )
+    await broadcast_websocket_message(
+        {
+            "type": "script_status",
+            "data": {
+                "script_name": execution["script_name"],
+                "status": execution["status"],
+                "execution_id": execution_id,
+                "start_time": execution["start_time"].isoformat(),
+                "end_time": execution["end_time"].isoformat(),
+                "output": execution["output"] if execution["output"] else None,
+                "error": execution["error"] if execution["error"] else None,
+                "duration_seconds": (execution["end_time"] - execution["start_time"]).total_seconds(),
+            },
+        }
+    )
 
 
 def _tail(text: str, max_chars: int = 8000) -> str:
@@ -226,75 +342,58 @@ async def get_pipeline_status(execution_id: str):
     )
 
 
-@router.post("/scripts/generate-ma-predictions", response_model=MAPredictionResponse, tags=["Scripts"])
-async def generate_ma_predictions(
-    request: MAPredictionRequest,
-    background_tasks: BackgroundTasks
+@router.post("/scripts/batch-strategy-training", response_model=ScriptExecutionResponse, tags=["Scripts"])
+async def batch_strategy_training(
+    request: BatchStrategyTrainingRequest,
+    background_tasks: BackgroundTasks,
 ):
-    """Generate MA crossover trading predictions."""
+    """Run signal-parameter optimization for every trainable strategy on one ticker and date range."""
     try:
         config = get_config()
+        execution_id = f"btrain_{uuid.uuid4().hex[:8]}"
+        params = request.model_dump()
+        params["db"] = os.path.abspath(config.database.path)
 
-        # Generate execution ID
-        execution_id = f"ma_{uuid.uuid4().hex[:8]}"
-
-        # Initialize execution record
         script_executions[execution_id] = {
-            "script_name": "generate_ma_predictions",
+            "script_name": "train_all_strategies",
             "status": "running",
             "start_time": datetime.utcnow(),
-            "parameters": request.model_dump(),
+            "parameters": params,
             "output": "",
             "error": "",
-            "process": None
+            "process": None,
         }
 
-        # Start script execution in background
-        background_tasks.add_task(run_script_async, execution_id, "generate_ma_predictions", request.model_dump(), config)
+        background_tasks.add_task(
+            run_script_async,
+            execution_id,
+            "train_all_strategies",
+            params,
+            config,
+        )
 
-        logger.info(f"Started MA prediction generation: {request.start_date} to {request.end_date}", extra={
-            "execution_id": execution_id,
-            "start_date": request.start_date,
-            "end_date": request.end_date,
-            "skip_optimization": request.skip_optimization
-        })
+        logger.info(
+            "Started batch strategy training",
+            extra={
+                "execution_id": execution_id,
+                "ticker": params.get("ticker"),
+                "start_date": params.get("start_date"),
+                "end_date": params.get("end_date"),
+            },
+        )
 
-        return MAPredictionResponse(
+        return ScriptExecutionResponse(
+            script_name="train_all_strategies",
             status="running",
             execution_id=execution_id,
             start_time=script_executions[execution_id]["start_time"],
             output=None,
             error=None,
-            duration_seconds=None
+            duration_seconds=None,
         )
-
     except Exception as e:
-        logger.exception("Failed to start MA prediction generation")
-        raise HTTPException(status_code=500, detail=f"Failed to generate MA predictions: {str(e)}")
-
-
-@router.get("/scripts/generate-ma-predictions/status/{execution_id}", response_model=MAPredictionResponse, tags=["Scripts"])
-async def get_ma_prediction_status(execution_id: str):
-    """Get the status of MA prediction generation."""
-    if execution_id not in script_executions:
-        raise HTTPException(status_code=404, detail="Execution not found")
-
-    execution = script_executions[execution_id]
-    end_time = execution.get("end_time")
-    duration = None
-
-    if end_time:
-        duration = (end_time - execution["start_time"]).total_seconds()
-
-    return MAPredictionResponse(
-        status=execution["status"],
-        execution_id=execution_id,
-        start_time=execution["start_time"],
-        end_time=end_time,
-        output=execution["output"] if execution["output"] else None,
-        error=execution["error"] if execution["error"] else None,
-        duration_seconds=duration
-    )
+        logger.exception("Failed to start batch strategy training")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 async def run_script_async(execution_id: str, script_name: str, parameters: Dict[str, Any], config):
@@ -324,18 +423,6 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
                 cmd.extend(["--csv", parameters["csv"]])
             if "outdir" in parameters:
                 cmd.extend(["--outdir", parameters["outdir"]])
-        elif script_name == "generate_sentiment_predictions":
-            if "db" in parameters:
-                cmd.extend(["--db", parameters["db"]])
-            if "horizon" in parameters:
-                cmd.extend(["--horizon", str(parameters["horizon"])])
-        elif script_name == "generate_trading_predictions":
-            if "db" in parameters:
-                cmd.extend(["--db", parameters["db"]])
-            if "start" in parameters:
-                cmd.extend(["--start", parameters["start"]])
-            if "end" in parameters:
-                cmd.extend(["--end", parameters["end"]])
         elif script_name == "backtest_runner":
             if "db" in parameters:
                 cmd.extend(["--db", parameters["db"]])
@@ -343,26 +430,24 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
                 cmd.extend(["--start", parameters["start"]])
             if "end" in parameters:
                 cmd.extend(["--end", parameters["end"]])
-        elif script_name == "generate_ma_predictions":
-            if "start_date" in parameters:
-                cmd.extend(["--start", parameters["start_date"]])
-            if "end_date" in parameters:
-                cmd.extend(["--end", parameters["end_date"]])
-            if "short_ma_range" in parameters:
-                cmd.extend(["--short-ma"] + [str(x) for x in parameters["short_ma_range"]])
-            if "medium_ma_range" in parameters:
-                cmd.extend(["--medium-ma"] + [str(x) for x in parameters["medium_ma_range"]])
-            if "long_ma_range" in parameters:
-                cmd.extend(["--long-ma"] + [str(x) for x in parameters["long_ma_range"]])
-            if parameters.get("skip_optimization", False):
-                cmd.append("--skip-optimization")
-                if "fixed_short" in parameters:
-                    cmd.extend(["--fixed-short", str(parameters["fixed_short"])])
-                if "fixed_medium" in parameters:
-                    cmd.extend(["--fixed-medium", str(parameters["fixed_medium"])])
-                if "fixed_long" in parameters:
-                    cmd.extend(["--fixed-long", str(parameters["fixed_long"])])
-
+        elif script_name == "train_all_strategies":
+            db = parameters.get("db") or config.database.path
+            cmd.extend(["--db", str(db)])
+            cmd.extend(["--ticker", str(parameters["ticker"])])
+            cmd.extend(["--start-date", str(parameters["start_date"])])
+            cmd.extend(["--end-date", str(parameters["end_date"])])
+            cmd.extend(["--initial-capital", str(parameters.get("initial_capital", 100000.0))])
+            cmd.extend(["--objective", str(parameters.get("objective", "balanced"))])
+            cmd.extend(["--max-evals", str(parameters.get("max_evals", 8))])
+            cmd.extend(["--optimizer-mode", str(parameters.get("optimizer_mode", "grid"))])
+            if parameters.get("random_seed") is not None:
+                cmd.extend(["--random-seed", str(parameters["random_seed"])])
+            pt = parameters.get("pair_ticker")
+            if isinstance(pt, str) and pt.strip():
+                cmd.extend(["--pair-ticker", pt.strip().upper()])
+            cmd.extend(["--universe-limit", str(parameters.get("universe_limit", 8))])
+            if parameters.get("stop_on_error"):
+                cmd.append("--stop-on-error")
         # Set working directory to project root
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -370,6 +455,10 @@ async def run_script_async(execution_id: str, script_name: str, parameters: Dict
             f"Running command: {' '.join(cmd)}",
             extra={"execution_id": execution_id, "script": script_name},
         )
+
+        if script_name == "train_all_strategies":
+            await _run_train_all_strategies_streaming(execution_id, cmd, project_root, execution)
+            return
 
         # Run the script
         process = await asyncio.create_subprocess_exec(
@@ -578,10 +667,8 @@ def get_script_path(script_name: str) -> Optional[str]:
     script_map = {
         "run_pipeline": "run_pipeline.py",
         "train_sentiment_model": "train_sentiment_model.py",
-        "generate_sentiment_predictions": "predictions/generate_sentiment_predictions.py",
-        "generate_trading_predictions": "predictions/generate_trading_predictions.py",
         "backtest_runner": "backtest_runner.py",
-        "generate_ma_predictions": "predictions/generate_ma_predictions.py",
+        "train_all_strategies": "train_all_strategies.py",
     }
 
     if script_name in script_map:

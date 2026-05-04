@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field
 from typing import List
 
 from backend.logging_config import get_component_logger
-from backend.services.strategy_framework import StrategyPreflightService, StrategyOptimizerEngine
+from backend.services.strategy_framework import (
+    StrategyOptimizerEngine,
+    StrategyPreflightService,
+    strategy_supports_signal_parameter_training,
+)
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
@@ -34,9 +38,19 @@ class TrainRequest(BaseModel):
     end_date: Optional[datetime] = Field(default=None, description="Optimization end date")
     initial_capital: float = Field(default=100000.0, gt=0)
     objective: str = Field(default="balanced", description="sharpe|return|drawdown|balanced")
-    max_evals: int = Field(default=24, ge=1, le=200, description="Maximum parameter sets to evaluate")
+    max_evals: int = Field(default=8, ge=1, le=50, description="Maximum parameter sets to evaluate")
     optimizer_mode: str = Field(default="grid", description="grid|random")
     random_seed: Optional[int] = Field(default=None, description="Seed for random optimizer mode")
+    pair_ticker: Optional[str] = Field(
+        default=None,
+        description="Second leg (required for pairs_trading signal-parameter training)",
+    )
+    universe_limit: int = Field(
+        default=8,
+        ge=2,
+        le=15,
+        description="Max symbols to load for multi-name strategies (cross_sectional_ls, rl_portfolio_allocator)",
+    )
 
 
 class ProjectionRequest(BaseModel):
@@ -228,6 +242,104 @@ def _rank_key(metrics: Dict[str, float]) -> Tuple[float, float, float]:
     )
 
 
+def _signal_opt_universe_tickers(
+    db_path: str, start_date: datetime, end_date: datetime, limit: int, min_bars: int = 60
+) -> List[str]:
+    """Tickers with at least ``min_bars`` daily rows in [start_date, end_date], sorted A–Z."""
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT ticker
+            FROM (
+                SELECT ticker, COUNT(*) AS c
+                FROM price_daily
+                WHERE date >= ? AND date <= ?
+                GROUP BY ticker
+                HAVING c >= ?
+                ORDER BY ticker ASC
+            )
+            LIMIT ?
+            """,
+            (start_date.date().isoformat(), end_date.date().isoformat(), min_bars, limit),
+        )
+        return [str(r[0]).upper() for r in cur.fetchall() if r[0]]
+    finally:
+        conn.close()
+
+
+def _build_signal_opt_price_frames(
+    optimizer: StrategyOptimizerEngine,
+    strategy_name: str,
+    ticker: str,
+    start_date: datetime,
+    end_date: datetime,
+    lookback_days: int,
+    *,
+    pair_ticker: Optional[str],
+    universe_limit: int,
+) -> Dict[str, Any]:
+    """OHLCV frames keyed by upper symbol for signal-engine grid search."""
+    primary = ticker.strip().upper()
+    if strategy_name == "pairs_trading":
+        pt = (pair_ticker or "").strip().upper()
+        if not pt:
+            raise HTTPException(
+                status_code=400,
+                detail="pair_ticker is required for pairs_trading parameter training",
+            )
+        d1 = optimizer.load_price_frame(
+            ticker=primary, start_date=start_date, end_date=end_date, lookback_days=lookback_days
+        )
+        d2 = optimizer.load_price_frame(
+            ticker=pt, start_date=start_date, end_date=end_date, lookback_days=lookback_days
+        )
+        if d1.empty:
+            raise HTTPException(status_code=400, detail=f"No price data found for ticker '{primary}'")
+        if d2.empty:
+            raise HTTPException(status_code=400, detail=f"No price data found for pair_ticker '{pt}'")
+        return {primary: d1, pt: d2}
+
+    if strategy_name in ("cross_sectional_ls", "rl_portfolio_allocator"):
+        rows = _signal_opt_universe_tickers(
+            optimizer.db_path, start_date, end_date, max(int(universe_limit), 8)
+        )
+        ordered: List[str] = []
+        if primary in rows:
+            ordered.append(primary)
+        for r in rows:
+            if r != primary and r not in ordered:
+                ordered.append(r)
+        if primary not in ordered:
+            ordered.insert(0, primary)
+        frames: Dict[str, Any] = {}
+        for tk in ordered[:universe_limit]:
+            df = optimizer.load_price_frame(
+                ticker=tk, start_date=start_date, end_date=end_date, lookback_days=lookback_days
+            )
+            if not df.empty:
+                frames[tk] = df
+        if len(frames) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Need at least two tickers with overlapping daily prices for this strategy. "
+                    "Load more symbols or widen the date range."
+                ),
+            )
+        return frames
+
+    df = optimizer.load_price_frame(
+        ticker=primary, start_date=start_date, end_date=end_date, lookback_days=lookback_days
+    )
+    if df.empty:
+        raise HTTPException(
+            status_code=400, detail=f"No price data found for ticker '{primary}' in requested period"
+        )
+    return {primary: df}
+
+
 def _optimize_signal_strategy(
     strategy: Any,
     strategy_name: str,
@@ -240,6 +352,9 @@ def _optimize_signal_strategy(
     max_evals: int,
     optimizer_mode: str = "grid",
     random_seed: Optional[int] = None,
+    *,
+    pair_ticker: Optional[str] = None,
+    universe_limit: int = 8,
 ) -> Dict[str, Any]:
     import uuid
 
@@ -269,67 +384,82 @@ def _optimize_signal_strategy(
     )
     if not candidates:
         raise HTTPException(status_code=400, detail=f"Optimization not supported for strategy '{strategy_name}'")
-    price_df = optimizer.load_price_frame(ticker=ticker, start_date=start_date, end_date=end_date, lookback_days=365)
-    if price_df.empty:
-        raise HTTPException(status_code=400, detail=f"No price data found for ticker '{ticker}' in requested period")
-
-    price_frames = {ticker.upper(): price_df}
+    price_frames = _build_signal_opt_price_frames(
+        optimizer,
+        strategy_name,
+        ticker,
+        start_date,
+        end_date,
+        365,
+        pair_ticker=pair_ticker,
+        universe_limit=int(universe_limit),
+    )
     evaluations: List[Dict[str, Any]] = []
     all_missing_model = True
     experiment_id = str(uuid.uuid4())
-    for idx, params in enumerate(candidates):
-        merged_params = {**params, "execution_mode": "signal"}
-        metrics = _run_signal_execution_backtest(
-            strategy=strategy,
-            strategy_name=strategy_name,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=initial_capital,
-            parameters=merged_params,
-            price_frames=price_frames,
-        )
-        execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
-        reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
-        no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
-        non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
-        fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
-        if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
-            all_missing_model = False
-        summary_metrics = {
-            "total_return": float(metrics.get("total_return", 0.0) or 0.0),
-            "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
-            "max_drawdown": float(metrics.get("max_drawdown", 0.0) or 0.0),
-            "volatility": float(metrics.get("volatility", 0.0) or 0.0),
-            "total_trades": int(metrics.get("total_trades", 0) or 0),
-        }
-        score = optimizer.score(summary_metrics, objective)
-        evaluations.append(
-            {
-                "params": params,
-                "metrics": summary_metrics,
-                "score": score,
+    sig_conn = sqlite3.connect(db_path)
+    try:
+        for idx, params in enumerate(candidates):
+            merged_params = {
+                **params,
+                "execution_mode": "signal",
+                "ticker": ticker.strip().upper(),
             }
-        )
-        store_params = {
-            **merged_params,
-            "optimizer_mode": mode,
-            "experiment_id": experiment_id,
-            "ticker": ticker.upper(),
-        }
-        persist_optimizer_evaluation_run(
-            db_path,
-            strategy_name=strategy_name,
-            parameters=store_params,
-            client_backtest_id=f"opt_{experiment_id}_{idx}",
-            experiment_id=experiment_id,
-            optimizer_mode=mode,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=initial_capital,
-            execution=metrics,
-            objective=objective,
-            evaluation_score=float(score),
-        )
+            if strategy_name == "pairs_trading" and (pair_ticker or "").strip():
+                merged_params["pair_ticker"] = str(pair_ticker).strip().upper()
+            metrics = _run_signal_execution_backtest(
+                strategy=strategy,
+                strategy_name=strategy_name,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=initial_capital,
+                parameters=merged_params,
+                price_frames=price_frames,
+                signal_db_conn=sig_conn,
+            )
+            execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
+            reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
+            no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
+            non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
+            fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
+            if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
+                all_missing_model = False
+            summary_metrics = {
+                "total_return": float(metrics.get("total_return", 0.0) or 0.0),
+                "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
+                "max_drawdown": float(metrics.get("max_drawdown", 0.0) or 0.0),
+                "volatility": float(metrics.get("volatility", 0.0) or 0.0),
+                "total_trades": int(metrics.get("total_trades", 0) or 0),
+            }
+            score = optimizer.score(summary_metrics, objective)
+            evaluations.append(
+                {
+                    "params": params,
+                    "metrics": summary_metrics,
+                    "score": score,
+                }
+            )
+            store_params = {
+                **merged_params,
+                "optimizer_mode": mode,
+                "experiment_id": experiment_id,
+            }
+            persist_optimizer_evaluation_run(
+                db_path,
+                strategy_name=strategy_name,
+                parameters=store_params,
+                client_backtest_id=f"opt_{experiment_id}_{idx}",
+                experiment_id=experiment_id,
+                optimizer_mode=mode,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=initial_capital,
+                execution=metrics,
+                objective=objective,
+                evaluation_score=float(score),
+            )
+    finally:
+        sig_conn.close()
 
     if not evaluations:
         raise HTTPException(status_code=500, detail="No optimization evaluations were produced")
@@ -408,10 +538,6 @@ async def get_strategy(name: str):
         'can_train': strategy.can_train
     }
 
-    # For ML strategies, include model info (None for Phase 1)
-    if strategy.type == 'ml':
-        metadata['model_info'] = None  # Placeholder for future ML model info
-
     return metadata
 
 
@@ -443,7 +569,7 @@ async def preflight_strategy(name: str, req: StrategyPreflightRequest):
 
 @router.post("/strategies/{name}/train", response_model=Dict[str, Any], tags=["Strategies"])
 async def train_strategy(name: str, request: TrainRequest):
-    """Train a strategy's model with the provided configuration."""
+    """Train a strategy using either parameter optimization or strategy-specific training."""
     from backend.main import app_state  # Import here to avoid circular imports
 
     registry = app_state.get("strategy_registry")
@@ -455,13 +581,18 @@ async def train_strategy(name: str, request: TrainRequest):
     if not strategy:
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
 
-    if name in {"moving_average", "recursive_forecast"}:
+    if strategy_supports_signal_parameter_training(name):
         if not request.ticker:
             raise HTTPException(status_code=400, detail="ticker is required for strategy parameter training")
         if not request.start_date or not request.end_date:
             raise HTTPException(status_code=400, detail="start_date and end_date are required for training")
         if request.end_date <= request.start_date:
             raise HTTPException(status_code=400, detail="end_date must be after start_date")
+        if name == "pairs_trading" and not (request.pair_ticker or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="pair_ticker is required for pairs_trading parameter training",
+            )
         objective = (request.objective or "balanced").lower()
         if objective not in {"sharpe", "return", "drawdown", "balanced"}:
             raise HTTPException(status_code=400, detail="objective must be one of: sharpe, return, drawdown, balanced")
@@ -481,6 +612,8 @@ async def train_strategy(name: str, request: TrainRequest):
                 max_evals=int(request.max_evals),
                 optimizer_mode=str(request.optimizer_mode or "grid"),
                 random_seed=request.random_seed,
+                pair_ticker=request.pair_ticker,
+                universe_limit=int(request.universe_limit),
             )
         except HTTPException:
             raise

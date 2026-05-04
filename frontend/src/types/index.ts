@@ -14,6 +14,8 @@ export interface PredictionRequest {
   ticker: string;
   horizon: string;
   context?: Record<string, any>;
+  strategy_name?: string;
+  strategy_params?: Record<string, any>;
   /** ISO datetime: use features only through this instant (walk-forward simulation). */
   as_of?: string;
   /** When false with as_of, skips writing to sentiment_predictions (default false if as_of set). */
@@ -28,7 +30,8 @@ export interface PredictionResponse {
   predicted_return: number;
   confidence: number;
   timestamp: string;
-  model_version: string;
+  strategy_name?: string | null;
+  model_id?: string | null;
   features_used: string[];
   feature_schema_version?: string;
   interval_lower?: number | null;
@@ -318,7 +321,7 @@ export interface PredictionProjectionPoint {
 export interface PredictionProjection {
   id: string;
   ticker: string;
-  modelName: string;
+  strategy_name: string;
   horizon: number; // in days
   points: PredictionProjectionPoint[];
   confidence: number;
@@ -426,7 +429,6 @@ export interface StrategyVariantTimeseriesResponse {
   granularity: 'daily' | 'weekly' | 'monthly';
   benchmark_points: StrategyTimeseriesPoint[];
   variant_series: VariantSeriesPayload[];
-=======
   avg_trade_return: number;
   volatility: number;
   equity_curve: Array<Record<string, any>>;
@@ -450,4 +452,64 @@ export interface MonteCarloResult {
   simulations: SimulationResult[];
   distribution_summary: Record<string, any>;
 >>>>>>> Stashed changes
+}
+
+/** One strategy row within a ticker's leaderboard slice (matches backend TickerStrategyRow). */
+export interface TickerStrategyRow {
+  ticker: string;
+  strategy: string;
+  params_hash: string;
+  variant_label?: string | null;
+  representative_run_id: number;
+  run_count: number;
+  total_return: number;
+  annualized_return: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  win_rate: number;
+  total_trades: number;
+  volatility: number;
+  params: Record<string, any>;
+  last_completed_at?: string | null;
+}
+
+export interface TickerStrategyLeaderboard {
+  ticker: string;
+  strategies: TickerStrategyRow[];
+}
+
+export interface TickerStrategyLeaderboardResponse {
+  objective: string;
+  top_n: number;
+  tickers: TickerStrategyLeaderboard[];
+}
+
+/** One strategy row within a ticker's leaderboard slice (matches backend TickerStrategyRow). */
+export interface TickerStrategyRow {
+  ticker: string;
+  strategy: string;
+  params_hash: string;
+  variant_label?: string | null;
+  representative_run_id: number;
+  run_count: number;
+  total_return: number;
+  annualized_return: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  win_rate: number;
+  total_trades: number;
+  volatility: number;
+  params: Record<string, any>;
+  last_completed_at?: string | null;
+}
+
+export interface TickerStrategyLeaderboard {
+  ticker: string;
+  strategies: TickerStrategyRow[];
+}
+
+export interface TickerStrategyLeaderboardResponse {
+  objective: string;
+  top_n: number;
+  tickers: TickerStrategyLeaderboard[];
 }

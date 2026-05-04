@@ -42,8 +42,12 @@ logger = get_component_logger(__file__)
 router = APIRouter()
 
 # Yahoo Finance rejects 1m requests spanning more than ~8 calendar days ("Only 8 days worth
-# of 1m granularity data are allowed to be fetched per request."). Chunk smaller than that.
-YAHOO_1M_MAX_CHUNK_DAYS = 7
+# of 1m granularity data are allowed to be fetched per request."). A timedelta of 7 days spans
+# eight calendar dates inclusive, so chunk by six calendar days to stay under the cap.
+YAHOO_1M_MAX_CHUNK_DAYS = 6
+
+# Yahoo only serves 1-minute bars for a rolling recent window (~30 days from "now").
+YAHOO_1M_RETENTION_DAYS = 29
 
 
 def invalidate_symbol_cache(symbol: str) -> None:
@@ -110,6 +114,37 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
                 f"{from_date.date()} to {to_date.date()}"
             )
 
+        # Minute data: Yahoo only allows ~30 days of 1m history ending at "now", regardless of
+        # the chart's requested `to_date` (which may be months in the past when panning).
+        if table == "price_minute":
+            yahoo_1m_earliest = current_time - timedelta(days=YAHOO_1M_RETENTION_DAYS)
+            if to_date < yahoo_1m_earliest:
+                logger.info(
+                    "Skipping Yahoo 1m fetch for %s: requested window ends before Yahoo retention "
+                    "(%s < %s)",
+                    symbol,
+                    to_date.isoformat(),
+                    yahoo_1m_earliest.isoformat(),
+                )
+                return False
+            if from_date < yahoo_1m_earliest:
+                logger.info(
+                    "Clamping Yahoo 1m fetch start for %s from %s to %s (Yahoo ~%sd retention)",
+                    symbol,
+                    from_date.isoformat(),
+                    yahoo_1m_earliest.isoformat(),
+                    YAHOO_1M_RETENTION_DAYS,
+                )
+                from_date = yahoo_1m_earliest
+            if from_date >= to_date:
+                logger.info(
+                    "No Yahoo 1m window left for %s after retention clamp (%s >= %s)",
+                    symbol,
+                    from_date.isoformat(),
+                    to_date.isoformat(),
+                )
+                return False
+
         logger.info(f"Fetching external data for {symbol} from {from_date.date()} to {to_date.date()}")
 
         # Determine interval based on table
@@ -125,11 +160,14 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
             df = stock.history(start=from_date, end=to_date, interval=interval)
         else:
             # Minute: Yahoo caps 1m range per request — walk the window in chunks.
+            # prepost=True: without it, windows that fall only in extended hours (common when
+            # naive UTC bounds line up with post-market) return empty and look "delisted".
+            yf_kw: Dict[str, Any] = {"interval": interval, "prepost": True}
             parts: List[pd.DataFrame] = []
             chunk_start = from_date
             while chunk_start < to_date:
                 chunk_end = min(chunk_start + timedelta(days=YAHOO_1M_MAX_CHUNK_DAYS), to_date)
-                part = stock.history(start=chunk_start, end=chunk_end, interval=interval)
+                part = stock.history(start=chunk_start, end=chunk_end, **yf_kw)
                 if not part.empty:
                     parts.append(part)
                 if chunk_end >= to_date:
@@ -1126,9 +1164,19 @@ async def get_historical_data(
                     }
             else:
                 logger.error(f"UDF history: external fetch failed for {symbol}")
+                # Yahoo does not serve 1m for arbitrary history; return no_data so TradingView
+                # can back off instead of surfacing a hard datafeed error on every pan.
+                if table == "price_minute":
+                    return {
+                        "s": "no_data",
+                        "errmsg": (
+                            "No intraday data for this range (Yahoo ~30d of 1m). "
+                            "Zoom to recent dates, use a coarser resolution, or load minute data locally."
+                        ),
+                    }
                 return {
                     "s": "error",
-                    "errmsg": "Failed to fetch data from external sources"
+                    "errmsg": "Failed to fetch data from external sources",
                 }
 
         # Convert resolution to timeframe for consistent resampling

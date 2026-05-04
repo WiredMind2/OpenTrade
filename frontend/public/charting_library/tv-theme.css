@@ -1,0 +1,59 @@
+/* Override TradingView dark theme blue-tinted colors to match app neutral dark theme */
+
+html.theme-dark {
+  --tv-color-platform-background: #1a1a1a;
+  --tv-color-pane-background: #171717;
+  --tv-color-popup-background: #1f1f1f;
+  --tv-color-toolbar-button-background-hover: #2a2a2a;
+  --tv-color-toolbar-button-background-expanded: #2a2a2a;
+  --tv-color-toolbar-button-background-clicked: #2a2a2a;
+  --tv-color-toolbar-divider-background: #2a2a2a;
+  --tv-color-popup-element-background-hover: #2a2a2a;
+  --tv-color-popup-element-divider-background: #2a2a2a;
+}
+
+/* Dialogs: Symbol Search, Indicators, and other modal windows */
+html.theme-dark .dialog-aRAWUDhF,
+html.theme-dark .wrap-C8ln3wvp.dialog-C8ln3wvp,
+html.theme-dark .container-IxKZEhmO,
+html.theme-dark .container-TCHLKPuQ,
+html.theme-dark .container-TCHLKPuQ.container-danger-TCHLKPuQ,
+html.theme-dark .container-TCHLKPuQ.container-warning-TCHLKPuQ,
+html.theme-dark .container-TCHLKPuQ.container-success-TCHLKPuQ,
+html.theme-dark .container-TCHLKPuQ.container-default-TCHLKPuQ,
+html.theme-dark .header-kJ5smAAE,
+html.theme-dark .generalContent-tm3FiOQl > div,
+html.theme-dark .card-xBKhVqal {
+  background-color: #1f1f1f !important;
+  background: #1f1f1f !important;
+}
+
+/* Symbol search suggestions dropdown */
+html.theme-dark .suggestions-uszkUMOz,
+html.theme-dark .suggestions-uszkUMOz .suggestion-uszkUMOz:hover {
+  background-color: #1f1f1f !important;
+}
+
+/* List items */
+html.theme-dark .item-gjrLBBL3,
+html.theme-dark .wrap-gjrLBBL3.small-gjrLBBL3 {
+  background-color: #1f1f1f !important;
+}
+
+/* Tooltips */
+html.theme-dark .tooltip-eSLcXvvL,
+html.theme-dark .common-tooltip-EJBD96zX.theme-chart .common-tooltip__body-EJBD96zX,
+html.theme-dark .common-tooltip-EJBD96zX.theme-round-shadow .common-tooltip__body-EJBD96zX,
+html.theme-dark .common-tooltip-EJBD96zX.theme-white .common-tooltip__body-EJBD96zX {
+  background-color: #1f1f1f !important;
+  background: #1f1f1f !important;
+}
+
+/* Scrollbar borders */
+html.theme-dark .scrollable-EI7Qsb2Q::-webkit-scrollbar-thumb,
+html.theme-dark .content-P_IVoUsZ::-webkit-scrollbar-thumb,
+html.theme-dark .scrollable-uT4IUFMG::-webkit-scrollbar-thumb,
+html.theme-dark .scrollWrap-wXGVFOC9::-webkit-scrollbar-thumb,
+html.theme-dark .suggestions-uszkUMOz::-webkit-scrollbar-thumb {
+  border-color: #1f1f1f !important;
+}

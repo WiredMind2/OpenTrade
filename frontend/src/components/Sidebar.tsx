@@ -8,7 +8,8 @@ import {
   Activity,
   Settings,
   LineChart,
-  BookOpen
+  BookOpen,
+  Newspaper
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
@@ -19,9 +20,10 @@ interface SidebarProps {
 }
 
 const navigation = [
+  { name: 'Market Brief', href: '/brief', icon: Newspaper },
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
-  { name: 'Performance', href: '/strategy-performance', icon: LineChart },
+  { name: 'Strategy Performance', href: '/strategy-performance', icon: LineChart },
   { name: 'Scripts', href: '/scripts', icon: Settings },
   { name: 'Recommendations', href: '/recommendations', icon: BookOpen },
 ]
@@ -46,7 +48,7 @@ export function Sidebar({ className }: SidebarProps) {
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-tv-text-primary">
-                TradeBot
+                OpenTrade
               </span>
             </div>
           )}
@@ -148,7 +150,7 @@ export function MobileSidebar() {
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-primary" />
               <span className="font-semibold text-sm text-tv-text-primary">
-                TradeBot
+                OpenTrade
               </span>
             </div>
             <Button variant="ghost" size="icon" onClick={() => setOpen(false)} className="h-7 w-7">
