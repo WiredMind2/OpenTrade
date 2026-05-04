@@ -65,7 +65,7 @@ export default function Backtests() {
   const [error, setError] = useState<string | null>(null)
   const [ticker, setTicker] = useState('AAPL')
   const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
-  const [maxEvals, setMaxEvals] = useState(24)
+  const [maxEvals, setMaxEvals] = useState(8)
   const [optimizerMode, setOptimizerMode] = useState<'grid' | 'random'>('grid')
   const [randomSeed, setRandomSeed] = useState<string>('')
   const [trainedParams, setTrainedParams] = useState<Record<string, any> | null>(null)
@@ -294,10 +294,13 @@ export default function Backtests() {
                 <Input
                   type="number"
                   min={1}
-                  max={200}
+                  max={50}
                   value={maxEvals}
-                  onChange={(e) => setMaxEvals(Number(e.target.value || 24))}
+                  onChange={(e) => setMaxEvals(Math.max(1, Math.min(50, Number(e.target.value || 8))))}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Higher values improve search quality but can take several minutes.
+                </p>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Optimizer mode</label>

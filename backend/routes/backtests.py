@@ -19,6 +19,16 @@ logger = get_component_logger(__file__)
 router = APIRouter()
 
 
+def _json_object(value: str | None) -> Dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        loaded = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 @router.post("/backtest", response_model=BacktestResult, tags=["Backtests"])
 async def run_backtest(
     request: BacktestRequest,
@@ -203,7 +213,7 @@ async def list_backtests(
         offset = (page - 1) * limit
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, name, started_at, completed_at, initial_capital, final_value,
+            SELECT id, name, params, started_at, completed_at, initial_capital, final_value,
                    total_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
                    metrics, equity_curve, params
             FROM backtest_runs
@@ -213,21 +223,17 @@ async def list_backtests(
 
         backtests = []
         for row in cur.fetchall():
-            (bt_id, name, started_at, completed_at, initial_capital, final_value,
+            (bt_id, name, params_json, started_at, completed_at, initial_capital, final_value,
              total_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
              metrics_json, equity_curve_json, params_json) = row
 
-            metrics = json.loads(metrics_json) if metrics_json else {}
+            params = _json_object(params_json)
+            metrics = _json_object(metrics_json)
+            execution_summary = metrics.get("execution_summary", {})
             run_ticker = None
-            try:
-                params_obj = json.loads(params_json) if params_json else {}
-                if isinstance(params_obj, dict):
-                    t = params_obj.get("ticker")
-                    if isinstance(t, str) and t.strip():
-                        run_ticker = t.strip().upper()
-            except (json.JSONDecodeError, TypeError):
-                run_ticker = None
-            execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
+            t = params.get("ticker")
+            if isinstance(t, str) and t.strip():
+                run_ticker = t.strip().upper()
             equity_curve = json.loads(equity_curve_json) if equity_curve_json else []
             chart_data = []
             for idx, point in enumerate(equity_curve):
@@ -243,8 +249,9 @@ async def list_backtests(
 
             backtests.append({
                 "id": bt_id,
-                "ticker": run_ticker,
                 "strategy_name": name,
+                "params": params,
+                "ticker": run_ticker,
                 "start_date": started_at,
                 "end_date": completed_at,
                 "initial_capital": initial_capital,

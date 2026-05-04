@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -7,6 +7,7 @@ import {
   Gauge,
   Newspaper,
   RefreshCw,
+  Search,
   Sparkles,
 } from 'lucide-react'
 import { getBacktests, getPredictions, getPriceHistory, type PriceHistoryRow } from '../services/api'
@@ -15,6 +16,7 @@ import type { BacktestResult, PredictionResponse } from '../types'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
 
@@ -22,6 +24,8 @@ type BriefBacktest = BacktestResult & {
   id?: string | number
   status?: string
   error?: string
+  ticker?: string | null
+  params?: Record<string, any>
 }
 
 type RankedPrediction = {
@@ -42,6 +46,8 @@ type MarketMove = {
   volume: number
   risk: 'lower' | 'moderate' | 'elevated'
 }
+
+const MARKET_RISK_BASKET = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'TSLA', 'AMZN', 'META']
 
 function pct(value: number) {
   return `${(value * 100).toFixed(2)}%`
@@ -145,11 +151,31 @@ function riskDecision(move: MarketMove) {
   return 'No clear edge'
 }
 
+function backtestTicker(run: BriefBacktest | undefined | null): string {
+  return String(run?.ticker || run?.params?.ticker || '').trim().toUpperCase()
+}
+
+function predictionTime(prediction: PredictionResponse | undefined | null) {
+  const time = Date.parse(String(prediction?.timestamp || ''))
+  return Number.isFinite(time) ? time : 0
+}
+
+function latestPredictionTicker(predictions: PredictionResponse[]) {
+  return predictions
+    .filter((item) => item.ticker)
+    .slice()
+    .sort((a, b) => predictionTime(b) - predictionTime(a))[0]?.ticker?.toUpperCase() || ''
+}
+
 export default function MarketBrief() {
   const [predictions, setPredictions] = useState<PredictionResponse[]>([])
   const [backtests, setBacktests] = useState<BriefBacktest[]>([])
   const [news, setNews] = useState<NewsArticle[]>([])
   const [marketMoves, setMarketMoves] = useState<MarketMove[]>([])
+  const [searchedMove, setSearchedMove] = useState<MarketMove | null>(null)
+  const [searchTicker, setSearchTicker] = useState('')
+  const [searchingTicker, setSearchingTicker] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -157,30 +183,36 @@ export default function MarketBrief() {
     setLoading(true)
     setError(null)
     try {
-      const [predictionData, backtestData, newsData] = await Promise.all([
+      const [predictionData, backtestData] = await Promise.all([
         getPredictions(),
         getBacktests(),
-        getNews(''),
       ])
       const safePredictions = Array.isArray(predictionData) ? predictionData : []
       setPredictions(safePredictions)
-      setBacktests(Array.isArray(backtestData) ? backtestData : [])
-      setNews(Array.isArray(newsData) ? newsData.slice(0, 8) : [])
+      const safeBacktests = Array.isArray(backtestData) ? backtestData : []
+      setBacktests(safeBacktests)
 
+      const lastBacktestTicker = backtestTicker(safeBacktests.find((item: BriefBacktest) => item.ticker || item.params?.ticker))
+      const newsTicker = lastBacktestTicker || latestPredictionTicker(safePredictions) || MARKET_RISK_BASKET[0]
       const symbols = Array.from(
         new Set([
+          ...(lastBacktestTicker ? [lastBacktestTicker] : []),
+          ...MARKET_RISK_BASKET,
           ...safePredictions.slice(0, 10).map((item: PredictionResponse) => item.ticker?.toUpperCase()).filter(Boolean),
-          'AAPL',
-          'MSFT',
-          'NVDA',
-          'GOOGL',
-          'TSLA',
         ])
       ).slice(0, 8) as string[]
-      const moveRows = await Promise.all(
+      const moveResults = await Promise.allSettled(
         symbols.map(async (symbol) => buildMarketMove(symbol, await getPriceHistory(symbol, 2)))
       )
-      setMarketMoves(moveRows.filter((move): move is MarketMove => move != null))
+      setMarketMoves(
+        moveResults
+          .map((result) => (result.status === 'fulfilled' ? result.value : null))
+          .filter((move): move is MarketMove => move != null)
+      )
+      const newsData = await getNews(newsTicker)
+      setNews(Array.isArray(newsData) ? newsData.slice(0, 8) : [])
+      setSearchedMove(null)
+      setSearchError(null)
     } catch (e: any) {
       setError(e.message || 'Failed to load market brief')
     } finally {
@@ -205,6 +237,20 @@ export default function MarketBrief() {
     () => backtests.filter((item) => (item.status ?? item.metrics?.status ?? 'completed') === 'completed'),
     [backtests]
   )
+  const lastRelevantBacktest = useMemo(
+    () =>
+      backtests
+        .filter((item) => item.ticker || item.params?.ticker)
+        .slice()
+        .sort((a, b) => new Date(b.timestamp || b.completed_at || b.end_date).getTime() - new Date(a.timestamp || a.completed_at || a.end_date).getTime())[0],
+    [backtests]
+  )
+  const lastRelevantTicker = backtestTicker(lastRelevantBacktest)
+  const lastTrainedTicker = useMemo(
+    () => latestPredictionTicker(predictions),
+    [predictions]
+  )
+  const targetTicker = searchedMove?.ticker || lastRelevantTicker || lastTrainedTicker
   const bestBacktest = useMemo(
     () => completedBacktests.slice().sort((a, b) => Number(b.total_return || 0) - Number(a.total_return || 0))[0],
     [completedBacktests]
@@ -212,13 +258,62 @@ export default function MarketBrief() {
   const failedBacktests = backtests.filter((item) => (item.status ?? item.metrics?.status) === 'failed').length
   const newsSummary = summarizeNews(news)
   const leadMove = useMemo(
-    () => marketMoves.slice().sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))[0],
-    [marketMoves]
+    () =>
+      searchedMove ||
+      marketMoves.find((move) => lastRelevantTicker && move.ticker === lastRelevantTicker) ||
+      marketMoves.find((move) => lastTrainedTicker && move.ticker === lastTrainedTicker) ||
+      marketMoves.slice().sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))[0],
+    [lastRelevantTicker, lastTrainedTicker, marketMoves, searchedMove]
   )
   const sortedMarketMoves = useMemo(
     () => marketMoves.slice().sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)),
     [marketMoves]
   )
+  const displayMarketMoves = useMemo(() => {
+    if (!leadMove) return sortedMarketMoves.slice(0, 5)
+    return [
+      leadMove,
+      ...sortedMarketMoves.filter((move) => move.ticker !== leadMove.ticker),
+    ].slice(0, 5)
+  }, [leadMove, sortedMarketMoves])
+  const leadMoveSource = searchedMove
+    ? 'searched ticker'
+    : lastRelevantTicker && leadMove?.ticker === lastRelevantTicker
+    ? 'last backtest'
+    : lastTrainedTicker && leadMove?.ticker === lastTrainedTicker
+    ? 'latest trained prediction'
+    : 'tracked market basket'
+  const upMoves = marketMoves.filter((move) => move.changePct > 0).length
+  const downMoves = marketMoves.filter((move) => move.changePct < 0).length
+
+  const searchMarketTicker = async (event?: FormEvent) => {
+    event?.preventDefault()
+    const symbol = searchTicker.trim().toUpperCase()
+    if (!symbol) return
+    setSearchingTicker(true)
+    setSearchError(null)
+    try {
+      const move = buildMarketMove(symbol, await getPriceHistory(symbol, 2))
+      if (!move) {
+        setSearchedMove(null)
+        setSearchError(`No recent price history found for ${symbol}.`)
+        return
+      }
+      setSearchedMove(move)
+      setMarketMoves((current) => [move, ...current.filter((item) => item.ticker !== move.ticker)])
+      try {
+        const newsData = await getNews(symbol)
+        setNews(Array.isArray(newsData) ? newsData.slice(0, 8) : [])
+      } catch {
+        setNews([])
+        setSearchError(`Loaded ${symbol} direction, but no related headlines could be fetched.`)
+      }
+    } catch (e: any) {
+      setSearchError(e.message || `Failed to load ${symbol}.`)
+    } finally {
+      setSearchingTicker(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -245,7 +340,7 @@ export default function MarketBrief() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-tv-text-primary">Market Brief</h1>
           <p className="mt-1 text-sm text-tv-text-secondary">
-            A plain-English view of signals, headlines, and strategy evidence.
+            A plain-English view of direction, risk, signals, headlines, and strategy evidence.
           </p>
         </div>
         <Button type="button" variant="outline" onClick={loadBrief}>
@@ -274,7 +369,7 @@ export default function MarketBrief() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               <Newspaper className="h-4 w-4 text-primary" />
-              News Tone
+              {targetTicker ? `${targetTicker} News Tone` : 'News Tone'}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -292,12 +387,18 @@ export default function MarketBrief() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-semibold">
-              {leadMove ? (leadMove.changePct >= 0 ? 'Price Up' : 'Price Down') : 'No Price Data'}
+              {leadMove
+                ? leadMove.changePct > 0
+                  ? `${leadMove.ticker} Moving Up`
+                  : leadMove.changePct < 0
+                  ? `${leadMove.ticker} Moving Down`
+                  : `${leadMove.ticker} Flat`
+                : 'No Price Data'}
             </p>
             <p className="mt-2 text-sm text-muted-foreground">
               {leadMove
-                ? `${leadMove.ticker} moved ${pct(leadMove.changePct)} on ${leadMove.date}.`
-                : 'Load price data to read today’s market direction.'}
+                ? `${pct(leadMove.changePct)} on ${leadMove.date}, based on the ${leadMoveSource}. Basket: ${upMoves} up, ${downMoves} down.`
+                : "Load price data to read today's market direction."}
             </p>
           </CardContent>
         </Card>
@@ -386,13 +487,17 @@ export default function MarketBrief() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Newspaper className="h-5 w-5 text-primary" />
-              Headlines To Read
+              {targetTicker ? `${targetTicker} Headlines` : 'Headlines To Read'}
             </CardTitle>
-            <CardDescription>Recent market context behind the numbers.</CardDescription>
+            <CardDescription>
+              News is filtered to the market direction ticker or the searched ticker.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {news.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No headlines loaded yet.</p>
+              <p className="text-sm text-muted-foreground">
+                {targetTicker ? `No related headlines loaded for ${targetTicker} yet.` : 'No headlines loaded yet.'}
+              </p>
             ) : news.slice(0, 5).map((article) => (
               <a
                 key={article.url || article.title}
@@ -418,20 +523,51 @@ export default function MarketBrief() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Gauge className="h-5 w-5 text-primary" />
-              Today's Market Risk
-            </CardTitle>
-            <CardDescription>Latest available daily move and practical risk read.</CardDescription>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Gauge className="h-5 w-5 text-primary" />
+                  Today's Market Risk
+                </CardTitle>
+                <CardDescription>
+                  {targetTicker
+                    ? `Focused on ${targetTicker}; search any ticker to replace it.`
+                    : 'Search any ticker or use the tracked market basket.'}
+                </CardDescription>
+              </div>
+              <form onSubmit={searchMarketTicker} className="flex w-full gap-2 sm:w-64">
+                <Input
+                  value={searchTicker}
+                  onChange={(event) => setSearchTicker(event.target.value.toUpperCase())}
+                  placeholder="Search ticker"
+                  className="font-mono uppercase"
+                  aria-label="Search ticker market direction"
+                />
+                <Button type="submit" size="sm" disabled={searchingTicker || !searchTicker.trim()}>
+                  <Search className="mr-2 h-4 w-4" />
+                  {searchingTicker ? 'Loading' : 'Search'}
+                </Button>
+              </form>
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {marketMoves.length === 0 ? (
+            {searchError && (
+              <div className="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+                {searchError}
+              </div>
+            )}
+            {displayMarketMoves.length === 0 ? (
               <p className="text-sm text-muted-foreground">No recent price movement is available yet.</p>
-            ) : sortedMarketMoves.slice(0, 5).map((move) => (
+            ) : displayMarketMoves.map((move) => (
               <div key={`${move.ticker}-${move.date}`} className="rounded bg-tv-bg-tertiary p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="font-mono text-base font-semibold">{move.ticker}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-mono text-base font-semibold">{move.ticker}</p>
+                      {leadMove?.ticker === move.ticker && (
+                        <Badge variant="outline">{leadMoveSource}</Badge>
+                      )}
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       {move.date} close ${move.close.toFixed(2)} vs ${move.previousClose.toFixed(2)}
                     </p>
@@ -455,7 +591,7 @@ export default function MarketBrief() {
               </div>
             ))}
             <p className="text-xs text-muted-foreground">
-              This is a risk read, not financial advice. Use position sizing and stops before taking exposure.
+              Source: latest two daily candles from /data/prices. This is a risk read, not financial advice.
             </p>
             {bestBacktest && (
               <div className="rounded border border-border/70 p-3 text-xs text-muted-foreground">
