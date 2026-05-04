@@ -2,10 +2,9 @@ import React from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Predictions from './pages/Predictions'
 import Backtests from './pages/Backtests'
-import Portfolio from './pages/Portfolio'
 import Scripts from './pages/Scripts'
-import Strategies from './pages/Strategies'
 import StrategyPerformance from './pages/StrategyPerformance'
+import Recommendations from './pages/Recommendations'
 import { ThemeProvider } from './components/ThemeProvider'
 import { Sidebar, MobileSidebar } from './components/Sidebar'
 
@@ -36,10 +35,9 @@ export default function App() {
               <Route path="/" element={<Navigate to="/predictions" replace />} />
               <Route path="/predictions" element={<Predictions />} />
               <Route path="/backtests" element={<Backtests />} />
-              <Route path="/portfolio" element={<Portfolio />} />
               <Route path="/scripts" element={<Scripts />} />
-              <Route path="/strategies" element={<Strategies />} />
               <Route path="/strategy-performance" element={<StrategyPerformance />} />
+              <Route path="/recommendations" element={<Recommendations />} />
             </Routes>
           </main>
         </div>
