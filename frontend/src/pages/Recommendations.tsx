@@ -1,146 +1,165 @@
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
-import {
-  ShieldAlert,
-  Scale,
-  PieChart,
-  Brain,
-  FlaskConical,
-  TrendingUp,
-  AlertTriangle,
-  CheckCircle2,
-} from 'lucide-react'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { Separator } from '../components/ui/separator'
+import { ShieldAlert, PieChart, Brain, FlaskConical, TrendingUp } from 'lucide-react'
 
-interface Recommendation {
+interface Rule {
   text: string
-  level: 'critical' | 'important' | 'tip'
+  detail?: string
+  level: 'critical' | 'important' | 'note'
 }
 
 interface Category {
+  id: string
   title: string
   description: string
   icon: React.ElementType
-  recommendations: Recommendation[]
+  rules: Rule[]
 }
 
 const categories: Category[] = [
   {
+    id: 'risk',
     title: 'Risk Management',
-    description: 'Fundamental rules to preserve capital',
+    description: 'Capital preservation rules that must be respected on every trade.',
     icon: ShieldAlert,
-    recommendations: [
+    rules: [
       { text: 'Never risk more than 1–2% of total capital on a single position.', level: 'critical' },
-      { text: 'Always define a stop-loss before entering a position.', level: 'critical' },
-      { text: 'Keep total portfolio exposure below 20–30% across all open positions simultaneously.', level: 'important' },
-      { text: 'If drawdown exceeds 10%, cut position sizes in half until recovery.', level: 'important' },
-      { text: 'Never average down on a losing position without a confirmed reversal signal.', level: 'tip' },
+      { text: 'Define your stop-loss before entering any trade.', level: 'critical' },
+      { text: 'Keep total open exposure below 20–30% of the portfolio at all times.', level: 'important' },
+      { text: 'If drawdown exceeds 10%, reduce position sizes by 50% until recovery.', level: 'important' },
+      { text: 'Do not average down on a losing position without a confirmed reversal signal.', level: 'note' },
     ],
   },
   {
-    title: 'Position Sizing',
-    description: 'Calculate the optimal size for each trade',
-    icon: Scale,
-    recommendations: [
-      { text: 'Use the Kelly Criterion or a fractional Kelly (0.25–0.5) to calibrate position sizes.', level: 'important' },
-      { text: 'Reduce position sizes during high-volatility periods (elevated VIX or abnormally high ATR).', level: 'important' },
-      { text: 'Adjust size based on liquidity: avoid representing more than 1% of average daily volume.', level: 'tip' },
-    ],
-  },
-  {
+    id: 'diversification',
     title: 'Diversification',
-    description: 'Spread risk effectively across assets',
+    description: 'Spreading exposure to reduce variance without sacrificing returns.',
     icon: PieChart,
-    recommendations: [
-      { text: 'Do not concentrate more than 20% of the portfolio in a single sector or asset.', level: 'critical' },
-      { text: 'Combine uncorrelated strategies (momentum, mean-reversion, MA crossover) to reduce overall variance.', level: 'important' },
-      { text: 'Avoid positions with correlation above 0.8: they amplify drawdowns without adding real diversification.', level: 'important' },
-      { text: 'Keep 10–20% in cash to seize opportunities during market corrections.', level: 'tip' },
+    rules: [
+      { text: 'No single sector or asset should represent more than 20% of the portfolio.', level: 'critical' },
+      { text: 'Combine strategies with low correlation — momentum, mean-reversion, MA crossover.', level: 'important' },
+      { text: 'Positions with a correlation above 0.8 compound drawdowns without adding diversification.', level: 'important' },
+      { text: 'Maintain 10–20% in cash to deploy during market corrections.', level: 'note' },
     ],
   },
   {
-    title: 'Backtesting & Validation',
-    description: 'Ensure strategies are robust before deployment',
+    id: 'backtesting',
+    title: 'Backtesting',
+    description: 'Validating a strategy before committing real capital.',
     icon: FlaskConical,
-    recommendations: [
-      { text: 'Always perform walk-forward testing: do not optimize over the full historical period.', level: 'critical' },
-      { text: 'Beware of overfitting: a strategy with too many parameters rarely generalises out-of-sample.', level: 'critical' },
-      { text: 'Ensure backtest results account for transaction fees and slippage.', level: 'important' },
-      { text: 'Test the strategy across at least 2 full market cycles (bull + bear).', level: 'important' },
-      { text: 'A Sharpe Ratio > 1.5 out-of-sample is a reasonable minimum confidence threshold before deployment.', level: 'tip' },
+    rules: [
+      { text: 'Always use walk-forward testing — never optimize over the full historical dataset.', level: 'critical' },
+      {
+        text: 'Excessive parameters lead to overfitting. A strategy that only works in-sample is not a strategy.',
+        level: 'critical',
+      },
+      {
+        text: 'Account for transaction costs and slippage. Omitting them systematically overstates performance.',
+        level: 'important',
+      },
+      { text: 'Validate across at least one full bull and one full bear market cycle.', level: 'important' },
+      { text: 'A Sharpe Ratio above 1.5 out-of-sample is a reasonable threshold before live deployment.', level: 'note' },
     ],
   },
   {
-    title: 'Signals & Entries',
-    description: 'Maximise the quality of entry points',
+    id: 'entries',
+    title: 'Entries & Signals',
+    description: 'Improving entry quality and timing to maximise risk-adjusted returns.',
     icon: TrendingUp,
-    recommendations: [
-      { text: 'Confirm a signal on at least two independent indicators before entering.', level: 'important' },
-      { text: 'Avoid trading in the 30 minutes before and after major macroeconomic releases.', level: 'important' },
-      { text: 'A minimum risk/reward ratio of 1:2 must be visible before every entry.', level: 'important' },
-      { text: 'Prefer entering at the London/New York session open: liquidity is higher and slippage is reduced.', level: 'tip' },
+    rules: [
+      { text: 'Require confirmation from at least two independent indicators before entering.', level: 'important' },
+      {
+        text: 'Avoid trading in the 30-minute window surrounding major macro releases (CPI, NFP, FOMC).',
+        level: 'important',
+      },
+      { text: 'Require a minimum risk/reward ratio of 1:2 before every entry.', level: 'important' },
+      {
+        text: 'The London and New York session opens offer the highest liquidity and tightest spreads.',
+        level: 'note',
+      },
     ],
   },
   {
-    title: 'Discipline & Psychology',
-    description: 'Maintain operational rigour at all times',
+    id: 'discipline',
+    title: 'Discipline',
+    description: 'Maintaining operational consistency regardless of market conditions.',
     icon: Brain,
-    recommendations: [
-      { text: 'Strictly follow the defined trading plan — never move a stop-loss once in a position.', level: 'critical' },
-      { text: 'After 3 consecutive losses, stop and review before resuming.', level: 'important' },
-      { text: 'Keep a trading journal: record entry/exit reasons and emotional state.', level: 'important' },
-      { text: 'Do not oversize after a winning streak: overconfidence bias is one of the most common causes of ruin.', level: 'tip' },
+    rules: [
+      { text: 'Execute the trading plan without deviation. Never adjust a stop-loss once a position is open.', level: 'critical' },
+      { text: 'After three consecutive losses, halt trading and conduct a review session before resuming.', level: 'important' },
+      {
+        text: 'Maintain a trading journal documenting entry rationale, exit rationale, and emotional state.',
+        level: 'important',
+      },
+      {
+        text: 'Do not increase position sizes following a winning streak. Overconfidence bias is a leading cause of account drawdown.',
+        level: 'note',
+      },
     ],
   },
 ]
 
-const levelConfig = {
-  critical: { label: 'Critical', variant: 'destructive' as const, icon: AlertTriangle },
-  important: { label: 'Important', variant: 'default' as const, icon: CheckCircle2 },
-  tip: { label: 'Tip', variant: 'secondary' as const, icon: CheckCircle2 },
+const levelConfig: Record<string, { label: string; variant: 'destructive' | 'default' | 'secondary' }> = {
+  critical:  { label: 'Critical',  variant: 'destructive' },
+  important: { label: 'Important', variant: 'default' },
+  note:      { label: 'Note',      variant: 'secondary' },
 }
 
 export default function Recommendations() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-tv-text-primary">Recommendations</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-tv-text-primary">Best Practices</h1>
         <p className="text-sm text-tv-text-secondary mt-1">
-          Best practices for disciplined and sustainable trading
+          Core guidelines for disciplined, risk-aware trading.
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {categories.map((category) => {
-          const Icon = category.icon
-          return (
-            <Card key={category.title}>
+      <Tabs defaultValue="risk">
+        <TabsList>
+          {categories.map((cat) => {
+            const Icon = cat.icon
+            return (
+              <TabsTrigger key={cat.id} value={cat.id} className="flex items-center gap-1.5">
+                <Icon className="h-3.5 w-3.5" />
+                {cat.title}
+              </TabsTrigger>
+            )
+          })}
+        </TabsList>
+
+        {categories.map((cat) => (
+          <TabsContent key={cat.id} value={cat.id} className="mt-4">
+            <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Icon className="h-5 w-5 text-primary shrink-0" />
-                  {category.title}
-                </CardTitle>
-                <CardDescription>{category.description}</CardDescription>
+                <CardTitle className="text-base">{cat.title}</CardTitle>
+                <CardDescription>{cat.description}</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2">
-                {category.recommendations.map((rec, i) => {
-                  const config = levelConfig[rec.level]
+              <Separator />
+              <CardContent className="pt-0 divide-y divide-border">
+                {cat.rules.map((rule, i) => {
+                  const cfg = levelConfig[rule.level]
                   return (
-                    <div
-                      key={i}
-                      className="flex items-start gap-3 p-2 rounded bg-tv-bg-tertiary"
-                    >
-                      <Badge variant={config.variant} className="mt-0.5 shrink-0 text-xs">
-                        {config.label}
+                    <div key={i} className="flex items-start gap-4 py-3">
+                      <Badge variant={cfg.variant} className="mt-0.5 shrink-0 w-20 justify-center">
+                        {cfg.label}
                       </Badge>
-                      <p className="text-sm text-tv-text-primary leading-snug">{rec.text}</p>
+                      <div>
+                        <p className="text-sm text-tv-text-primary leading-relaxed">{rule.text}</p>
+                        {rule.detail && (
+                          <p className="text-xs text-tv-text-secondary mt-0.5">{rule.detail}</p>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
               </CardContent>
             </Card>
-          )
-        })}
-      </div>
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   )
 }
