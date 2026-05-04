@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import StrategySelector from '../components/StrategySelector'
+import TickerSearch from '../components/TickerSearch'
 import BacktestEquityCompareChart from '../components/BacktestEquityCompareChart'
 import { buildBacktestEquitySeries } from '../utils/backtestChart'
 import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
@@ -273,9 +274,9 @@ export default function Backtests() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Training Ticker</label>
-                <Input
+                <TickerSearch
                   value={ticker}
-                  onChange={(e) => setTicker(rememberTicker(e.target.value))}
+                  onChange={(t) => setTicker(rememberTicker(t))}
                   placeholder="AAPL"
                 />
               </div>

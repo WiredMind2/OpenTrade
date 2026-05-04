@@ -25,7 +25,7 @@ export default function App() {
             <MobileSidebar />
             <div className="flex items-center gap-2">
               <span className="font-semibold text-sm text-tv-text-primary">
-                TradeBot
+                OpenTrade
               </span>
             </div>
           </header>
