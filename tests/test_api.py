@@ -3,7 +3,7 @@ Unit tests for API endpoints.
 """
 import pytest
 import json
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
+from unittest.mock import Mock, patch, MagicMock
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta
 import sqlite3
@@ -265,56 +265,9 @@ class TestAPIEndpoints:
         # Should return at least one model from our mock
         assert len(data) >= 0
 
-    @patch("backend.routes.backtests.run_backtest_background")
-    def test_backtest_endpoint_success(self, mock_run_backtest):
-        """Test successful backtest creation."""
-        mock_run_backtest.return_value = None
-        self._seed_moving_average_preflight_data()
-
-        payload = {
-            "strategy_name": "moving_average",
-            "start_date": "2024-01-01T00:00:00",
-            "end_date": "2024-12-31T00:00:00",
-            "initial_capital": 100000.0,
-            "parameters": {"ticker": "AAPL"},
-        }
-        response = self.client.post("/backtest", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert "strategy_name" in data
-        assert "start_date" in data
-        assert "end_date" in data
-        assert "initial_capital" in data
-
-    def test_backtest_endpoint_invalid_date_range(self):
-        """Test backtest endpoint with invalid date range."""
-        payload = {
-            "strategy_name": "test_strategy",
-            "start_date": datetime.utcnow().isoformat(),
-            "end_date": (datetime.utcnow() - timedelta(days=1)).isoformat(),  # End before start
-            "initial_capital": 100000.0,
-            "parameters": {}
-        }
-        response = self.client.post("/backtest", json=payload)
-        assert response.status_code == 422  # Validation error
-
-    @patch("backend.routes.backtests.run_backtest_background")
-    def test_backtest_endpoint_large_date_range(self, mock_run_backtest):
-        """Test backtest endpoint with too large date range."""
-        payload = {
-            "strategy_name": "test_strategy",
-            "start_date": datetime(2019, 1, 1).isoformat(),
-            "end_date": datetime(2025, 1, 1).isoformat(),  # More than 5 years
-            "initial_capital": 100000.0,
-            "parameters": {}
-        }
-        response = self.client.post("/backtest", json=payload)
-        # Validation now correctly returns 400 for oversized date ranges.
-        assert response.status_code == 400
-
-    def test_get_backtest_result_not_found(self):
-        """Test getting backtest result for non-existent ID."""
-        response = self.client.get("/backtest/nonexistent_id")
+    def test_trading_backtest_by_id_not_found(self):
+        """Resolved single-run lookup returns 404 when missing."""
+        response = self.client.get("/trading/backtest", params={"backtest_id": "nonexistent_id"})
         assert response.status_code == 404
 
     def test_list_backtests_endpoint(self):

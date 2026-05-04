@@ -70,50 +70,6 @@ class PredictionResponse(BaseModel):
     metadata: Dict[str, Any] = {}
 
 
-class BacktestRequest(BaseModel):
-    """Request model for running backtests."""
-    strategy_name: str = Field(..., description="Name of the trading strategy")
-    start_date: datetime = Field(..., description="Backtest start date")
-    end_date: datetime = Field(..., description="Backtest end date")
-    initial_capital: float = Field(default=100000.0, description="Initial capital amount")
-    parameters: Optional[Dict[str, Any]] = Field(default={}, description="Strategy parameters")
-
-    @field_validator('initial_capital')
-    @classmethod
-    def validate_initial_capital(cls, v):
-        if v <= 0:
-            raise ValueError('initial_capital must be positive')
-        return v
-
-    @field_validator('end_date')
-    @classmethod
-    def validate_end_date(cls, v, info):
-        if 'start_date' in info.data and v <= info.data['start_date']:
-            raise ValueError('end_date must be after start_date')
-        return v
-
-
-class BacktestResult(BaseModel):
-    """Response model for backtest results."""
-    strategy_name: str
-    start_date: datetime
-    end_date: datetime
-    completed_at: Optional[datetime] = None
-    initial_capital: float
-    final_value: float
-    total_return: float
-    annualized_return: float
-    sharpe_ratio: float
-    max_drawdown: float
-    win_rate: float
-    total_trades: int
-    avg_trade_return: float
-    volatility: float
-    timestamp: datetime
-    metrics: Dict[str, Any]
-    equity_curve: List[Dict[str, Any]]
-
-
 class ModelInfo(BaseModel):
     """Information about available models."""
     name: str

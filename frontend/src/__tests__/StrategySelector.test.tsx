@@ -105,11 +105,14 @@ describe('StrategySelector', () => {
   })
 
   it('renders parameters for the selected strategy', async () => {
+    const user = userEvent.setup()
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
     await waitFor(() => {
-      expect(screen.getByText('Parameters')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /parameters/i })).toBeInTheDocument()
     })
+
+    await user.click(screen.getByRole('button', { name: /parameters/i }))
 
     expect(screen.getByText('window')).toBeInTheDocument()
     expect(screen.getByText('threshold')).toBeInTheDocument()
@@ -117,8 +120,11 @@ describe('StrategySelector', () => {
   })
 
   it('renders appropriate controls for parameter types', async () => {
+    const user = userEvent.setup()
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
+    await waitFor(() => expect(screen.getByRole('button', { name: /parameters/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /parameters/i }))
     await waitFor(() => expect(screen.getByDisplayValue('20')).toBeInTheDocument())
 
     const windowInput = screen.getByDisplayValue('20')
@@ -155,6 +161,8 @@ describe('StrategySelector', () => {
     await user.click(screen.getByRole('combobox'))
     await user.click(screen.getByRole('option', { name: /custom/i }))
 
+    await user.click(screen.getByRole('button', { name: /parameters/i }))
+
     await waitFor(() => {
       const input = screen.getByDisplayValue('default_value')
       expect(input).toHaveAttribute('type', 'text')
@@ -162,6 +170,7 @@ describe('StrategySelector', () => {
   })
 
   it('updates parameters and calls onStrategyChange when values change', async () => {
+    const user = userEvent.setup()
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
 
     await waitFor(() => {
@@ -171,6 +180,9 @@ describe('StrategySelector', () => {
         use_short: true,
       })
     })
+
+    await user.click(screen.getByRole('button', { name: /parameters/i }))
+    await waitFor(() => expect(screen.getByDisplayValue('20')).toBeInTheDocument())
 
     mockOnStrategyChange.mockClear()
 
@@ -187,7 +199,11 @@ describe('StrategySelector', () => {
   })
 
   it('shows parameter descriptions', async () => {
+    const user = userEvent.setup()
     render(<StrategySelector onStrategyChange={mockOnStrategyChange} />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /parameters/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /parameters/i }))
 
     await waitFor(() => {
       expect(screen.getByText('Moving average window')).toBeInTheDocument()

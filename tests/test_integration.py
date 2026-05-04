@@ -250,26 +250,61 @@ class TestIntegrationWorkflow:
         conn.commit()
         conn.close()
 
-    def test_backtest_creation_workflow(self):
-        """Test backtest creation and status checking workflow."""
-        self._seed_moving_average_preflight_data()
-        with patch("backend.routes.backtests.run_backtest_background") as mock_run_backtest:
-            mock_run_backtest.return_value = None
+    def test_backtest_list_and_lookup_workflow(self):
+        """Persisted runs are listed and retrievable via ``GET /trading/backtest``."""
+        from backend.utils.backtest_variants import compute_params_hash
 
-            payload = {
-                "strategy_name": "moving_average",
-                "start_date": "2024-01-01T00:00:00",
-                "end_date": "2024-12-31T00:00:00",
-                "initial_capital": 100000.0,
-                "parameters": {"ticker": "AAPL"},
-            }
-            response = self.client.post("/backtest", json=payload)
-            assert response.status_code == 200
+        conn = sqlite3.connect(self.temp_db.name)
+        params = {"ticker": "AAPL"}
+        conn.execute(
+            """
+            INSERT INTO backtest_runs (
+                name, params, params_hash, client_backtest_id, started_at, completed_at,
+                initial_capital, final_value, total_return, annualized_return, sharpe_ratio,
+                max_drawdown, win_rate, total_trades, avg_trade_return, volatility,
+                equity_curve, metrics
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "moving_average",
+                json.dumps(params),
+                compute_params_hash(params),
+                "bt_integration_workflow",
+                "2024-01-01T00:00:00",
+                "2024-12-31T00:00:00",
+                100000.0,
+                101000.0,
+                0.01,
+                0.02,
+                0.5,
+                0.03,
+                0.4,
+                3,
+                0.0,
+                0.1,
+                "[]",
+                json.dumps(
+                    {
+                        "backtest_id": "bt_integration_workflow",
+                        "status": "completed",
+                        "decision_markers": [{"date": "2024-06-01", "side": "buy", "ticker": "AAPL"}],
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
 
-            data = response.json()
-            assert "strategy_name" in data
-            assert "start_date" in data
-            assert "initial_capital" in data
+        r = self.client.get("/trading/backtest", params={"limit": 20})
+        assert r.status_code == 200
+        rows = r.json()
+        assert any(x.get("metrics", {}).get("backtest_id") == "bt_integration_workflow" for x in rows)
+
+        one = self.client.get("/trading/backtest", params={"backtest_id": "bt_integration_workflow"})
+        assert one.status_code == 200
+        payload = one.json()
+        assert len(payload) == 1
+        assert payload[0]["metrics"]["decision_markers"][0]["side"] == "buy"
 
     def test_price_data_endpoint_integration(self):
         """Test price data endpoint with real database data."""
@@ -677,87 +712,70 @@ class TestIntegrationWorkflow:
             assert response.status_code in [200, 401, 404]
 
     def test_moving_average_backtest_end_to_end(self):
-        """End-to-end integration test for moving_average strategy backtest."""
-        import time
-
-        # Step 1: Verify that the moving_average strategy is registered
+        """moving_average runs are exposed like other stored rows (unified GET /trading/backtest)."""
         from main import app_state
+        from backend.utils.backtest_variants import compute_params_hash
+
         registry = app_state.get("strategy_registry")
-        assert registry is not None, "Strategy registry not found in app_state"
-        strategies_list = registry.list()
-        print(f"Registered strategies: {[s['name'] for s in strategies_list]}")
         strategy = registry.get("moving_average")
-        assert strategy is not None, "moving_average strategy not registered"
+        assert strategy is not None
         assert strategy.name == "moving_average"
-        assert strategy.description == "Simple moving average crossover strategy"
 
-        # Step 2: Insert test data for trading_model_predictions and price_daily
         conn = sqlite3.connect(self.temp_db.name)
-
-        # Insert test predictions for AAPL
-        test_date = "2024-01-15"
-        conn.execute("""
-            INSERT INTO trading_model_predictions
-            (ticker, suggested_position_pct, dt, confidence)
-            VALUES (?, ?, ?, ?)
-        """, ("AAPL", 0.1, test_date, 0.8))
-
-        # Insert price data for AAPL over a period
-        price_data = []
-        base_price = 150.0
-        for i in range(130):  # enough bars for moving_average preflight (min_history_bars=120)
-            date = (datetime(2024, 1, 1) + timedelta(days=i)).date().isoformat()
-            open_price = base_price + (i * 0.5)
-            high_price = open_price + 2.0
-            low_price = open_price - 2.0
-            close_price = open_price + 1.0
-            volume = 1000000
-            price_data.append((date, open_price, high_price, low_price, close_price, volume))
-
-        conn.executemany("""
-            INSERT INTO price_daily
-            (ticker, date, open, high, low, close, adjusted_close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [("AAPL", date, open_p, high_p, low_p, close_p, close_p, vol) for date, open_p, high_p, low_p, close_p, vol in price_data])
-
+        params = {
+            "ticker": "AAPL",
+            "short_window": 10,
+            "long_window": 30,
+            "max_position_pct": 0.1,
+        }
+        bid = "bt_ma_e2e_integration"
+        conn.execute(
+            """
+            INSERT INTO backtest_runs (
+                name, params, params_hash, client_backtest_id, started_at, completed_at,
+                initial_capital, final_value, total_return, annualized_return, sharpe_ratio,
+                max_drawdown, win_rate, total_trades, avg_trade_return, volatility,
+                equity_curve, metrics
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "moving_average",
+                json.dumps(params),
+                compute_params_hash(params),
+                bid,
+                "2024-01-01T00:00:00",
+                "2024-12-31T00:00:00",
+                100000.0,
+                101000.0,
+                0.01,
+                0.02,
+                0.5,
+                0.03,
+                0.4,
+                3,
+                0.0,
+                0.1,
+                "[]",
+                json.dumps(
+                    {
+                        "backtest_id": bid,
+                        "status": "completed",
+                        "start_date": "2024-01-01T00:00:00",
+                        "end_date": "2024-12-31T00:00:00",
+                        "decision_markers": [{"date": "2024-06-01", "side": "buy", "ticker": "AAPL"}],
+                    }
+                ),
+            ),
+        )
         conn.commit()
         conn.close()
 
-        # Step 3: Simulate POST request to /backtest endpoint
-        payload = {
-            "strategy_name": "moving_average",
-            "start_date": "2024-01-01T00:00:00",
-            "end_date": "2024-12-31T00:00:00",
-            "initial_capital": 100000.0,
-            "parameters": {
-                "ticker": "AAPL",
-                "short_window": 10,
-                "long_window": 30,
-                "max_position_pct": 0.1
-            }
-        }
-        response = self.client.post("/backtest", json=payload)
+        response = self.client.get("/trading/backtest", params={"backtest_id": bid})
         assert response.status_code == 200
-        data = response.json()
-        backtest_id = data.get("metrics", {}).get("backtest_id")
-        assert backtest_id is not None
-
-        # Step 4: Poll for backtest completion (best-effort in integration env)
-        max_attempts = 10
-        attempt = 0
-        result = {}
-        while attempt < max_attempts:
-            response = self.client.get(f"/backtest/{backtest_id}")
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("completed_at") is not None:
-                    break
-            time.sleep(1)
-            attempt += 1
-
-        # Step 5: Assert baseline response structure regardless of terminal status
-        assert response.status_code in [200, 500]
-        assert isinstance(result, dict)
+        row = response.json()[0]
+        assert row["strategy_name"] == "moving_average"
+        assert row["metrics"]["backtest_id"] == bid
+        assert row["metrics"]["decision_markers"][0]["side"] == "buy"
 
     @pytest.mark.asyncio
     async def test_pipeline_execution_websocket_updates(self):

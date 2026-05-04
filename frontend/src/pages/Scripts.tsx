@@ -1,7 +1,18 @@
-import { useEffect, useState, useRef, useMemo } from 'react'
-import { listScriptExecutions, runPipeline, runBatchStrategyTraining } from '../services/api'
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import {
+  listScriptExecutions,
+  runPipeline,
+  runBatchStrategyTraining,
+  getScriptStatus,
+  getPipelineStatus,
+} from '../services/api'
 import websocketService from '../services/websocket'
-import { PipelineStatusMessage, ScriptStatusMessage, ScriptExecutionResponse } from '../types'
+import {
+  PipelineStatusMessage,
+  ScriptStatusMessage,
+  ScriptExecutionResponse,
+  PipelineStatus,
+} from '../types'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -25,7 +36,9 @@ import {
   XCircle,
   Clock,
   Zap,
-  BarChart3
+  BarChart3,
+  ChevronRight,
+  X,
 } from 'lucide-react'
 interface ScriptExecution {
   execution_id: string
@@ -148,6 +161,29 @@ export default function Scripts() {
   const [batchStopOnError, setBatchStopOnError] = useState(false)
   const [batchTrainExecution, setBatchTrainExecution] = useState<ScriptExecutionResponse | null>(null)
 
+  const [executionDetailOpen, setExecutionDetailOpen] = useState(false)
+  const [executionDetailListRow, setExecutionDetailListRow] = useState<ScriptExecution | null>(null)
+  const [executionDetailScript, setExecutionDetailScript] = useState<ScriptExecutionResponse | null>(null)
+  const [executionDetailPipeline, setExecutionDetailPipeline] = useState<PipelineStatus | null>(null)
+  const [executionDetailLoading, setExecutionDetailLoading] = useState(false)
+  const [executionDetailError, setExecutionDetailError] = useState<string | null>(null)
+
+  const openExecutionDetail = (row: ScriptExecution) => {
+    setExecutionDetailListRow(row)
+    setExecutionDetailOpen(true)
+    setExecutionDetailError(null)
+    setExecutionDetailScript(null)
+    setExecutionDetailPipeline(null)
+  }
+
+  const closeExecutionDetail = useCallback(() => {
+    setExecutionDetailOpen(false)
+    setExecutionDetailListRow(null)
+    setExecutionDetailScript(null)
+    setExecutionDetailPipeline(null)
+    setExecutionDetailError(null)
+  }, [])
+
   const fetchExecutions = async () => {
     setLoading(true)
     setError(null)
@@ -164,6 +200,55 @@ export default function Scripts() {
   useEffect(() => {
     fetchExecutions()
   }, [])
+
+  useEffect(() => {
+    if (!executionDetailOpen || !executionDetailListRow) return
+
+    const id = executionDetailListRow.execution_id
+    let cancelled = false
+
+    const load = async (isInitial: boolean) => {
+      if (isInitial) setExecutionDetailLoading(true)
+      try {
+        const script = await getScriptStatus(id)
+        if (cancelled) return
+        setExecutionDetailScript(script)
+        if (script.script_name === 'run_pipeline') {
+          const pipe = await getPipelineStatus(id)
+          if (!cancelled) setExecutionDetailPipeline(pipe)
+        } else {
+          setExecutionDetailPipeline(null)
+        }
+        setExecutionDetailError(null)
+      } catch (e: unknown) {
+        if (!cancelled) {
+          const msg = e instanceof Error ? e.message : 'Failed to load execution'
+          setExecutionDetailError(msg)
+        }
+      } finally {
+        if (!cancelled && isInitial) setExecutionDetailLoading(false)
+      }
+    }
+
+    void load(true)
+    const interval = setInterval(() => {
+      void load(false)
+    }, 2000)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [executionDetailOpen, executionDetailListRow])
+
+  useEffect(() => {
+    if (!executionDetailOpen) return
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') closeExecutionDetail()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [executionDetailOpen, closeExecutionDetail])
 
   // Cleanup WebSocket listeners on unmount
   useEffect(() => {
@@ -278,6 +363,22 @@ export default function Scripts() {
   const batchProgressPct =
     batchParsed.total > 0
       ? Math.min(100, Math.round((batchParsed.completedCount / batchParsed.total) * 100))
+      : 0
+
+  const detailBatchParsed = useMemo(
+    () =>
+      executionDetailScript?.script_name === 'train_all_strategies'
+        ? parseBatchTrainOutput(
+            executionDetailScript.output,
+            executionDetailScript.status === 'running'
+          )
+        : { planStrategies: [], total: 0, rows: [], completedCount: 0 },
+    [executionDetailScript?.output, executionDetailScript?.script_name, executionDetailScript?.status]
+  )
+
+  const detailBatchProgressPct =
+    detailBatchParsed.total > 0
+      ? Math.min(100, Math.round((detailBatchParsed.completedCount / detailBatchParsed.total) * 100))
       : 0
 
   const getStatusBadge = (status: string) => {
@@ -664,13 +765,25 @@ export default function Scripts() {
         <CardHeader>
           <CardTitle>Script Executions</CardTitle>
           <CardDescription>
-            History of all script executions and their status
+            History of all script executions. Click a row to open full logs, stderr, and live progress while a job runs.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="max-h-96 space-y-3 overflow-y-auto">
             {executions.map((execution) => (
-              <Card key={execution.execution_id} className="shadow-none">
+              <Card
+                key={execution.execution_id}
+                className="shadow-none cursor-pointer transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                role="button"
+                tabIndex={0}
+                onClick={() => openExecutionDetail(execution)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openExecutionDetail(execution)
+                  }
+                }}
+              >
                 <CardContent className="space-y-3 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -678,7 +791,10 @@ export default function Scripts() {
                       <span className="font-medium">{execution.script_name}</span>
                       <Badge variant="outline">{execution.execution_id.slice(-8)}</Badge>
                     </div>
-                    {getStatusBadge(execution.status)}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {getStatusBadge(execution.status)}
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground md:grid-cols-4">
                     <div>Started: {new Date(execution.start_time).toLocaleString()}</div>
@@ -700,6 +816,218 @@ export default function Scripts() {
           </div>
         </CardContent>
       </Card>
+
+      {executionDetailOpen && executionDetailListRow ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center p-4 pb-8 sm:items-center sm:pb-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="execution-detail-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+            aria-label="Close execution details"
+            onClick={closeExecutionDetail}
+          />
+          <div
+            className="relative flex max-h-[min(85vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border p-4">
+              <div className="min-w-0 space-y-1">
+                <h2 id="execution-detail-title" className="truncate text-lg font-semibold">
+                  {executionDetailScript?.script_name ?? executionDetailListRow.script_name}
+                </h2>
+                <p className="font-mono text-xs text-muted-foreground break-all">
+                  {executionDetailListRow.execution_id}
+                </p>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {getStatusIcon(executionDetailScript?.status ?? executionDetailListRow.status)}
+                  {getStatusBadge(executionDetailScript?.status ?? executionDetailListRow.status)}
+                  {executionDetailScript?.status === 'running' ? (
+                    <span className="text-xs text-muted-foreground">Refreshing every 2s</span>
+                  ) : null}
+                </div>
+              </div>
+              <Button type="button" variant="ghost" size="icon" onClick={closeExecutionDetail} aria-label="Close">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+              {executionDetailLoading && !executionDetailScript ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Loading details…
+                </div>
+              ) : null}
+              {executionDetailError ? (
+                <p className="text-sm text-destructive">{executionDetailError}</p>
+              ) : null}
+
+              {executionDetailScript ? (
+                <>
+                  <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                    <div>
+                      <p className="font-medium text-foreground">Started</p>
+                      <p className="text-muted-foreground">
+                        {new Date(executionDetailScript.start_time).toLocaleString()}
+                      </p>
+                    </div>
+                    {executionDetailScript.end_time ? (
+                      <div>
+                        <p className="font-medium text-foreground">Ended</p>
+                        <p className="text-muted-foreground">
+                          {new Date(executionDetailScript.end_time).toLocaleString()}
+                        </p>
+                      </div>
+                    ) : null}
+                    {typeof executionDetailScript.duration_seconds === 'number' ? (
+                      <div>
+                        <p className="font-medium text-foreground">Duration</p>
+                        <p className="text-muted-foreground">
+                          {executionDetailScript.duration_seconds.toFixed(1)}s
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {executionDetailPipeline ? (
+                    <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-sm font-medium">Pipeline progress</p>
+                      <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                        <div>
+                          <span className="text-muted-foreground">Current step</span>
+                          <p className="font-medium">{executionDetailPipeline.current_step ?? '—'}</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Steps</span>
+                          <p className="font-medium">
+                            {executionDetailPipeline.completed_steps.length} done
+                            {executionDetailPipeline.failed_steps.length
+                              ? ` · ${executionDetailPipeline.failed_steps.length} failed`
+                              : ''}
+                          </p>
+                        </div>
+                      </div>
+                      {executionDetailPipeline.completed_steps.length > 0 ? (
+                        <div>
+                          <p className="mb-1 text-xs text-muted-foreground">Completed</p>
+                          <div className="flex flex-wrap gap-1">
+                            {executionDetailPipeline.completed_steps.map((step) => (
+                              <Badge key={step} variant="secondary">
+                                {step}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {executionDetailPipeline.failed_steps.length > 0 ? (
+                        <div>
+                          <p className="mb-1 text-xs text-muted-foreground">Failed</p>
+                          <div className="flex flex-wrap gap-1">
+                            {executionDetailPipeline.failed_steps.map((step) => (
+                              <Badge key={step} variant="destructive">
+                                {step}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {executionDetailScript.script_name === 'train_all_strategies' ? (
+                    <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-sm font-medium">Batch training progress</p>
+                      {executionDetailScript.status === 'running' && detailBatchParsed.total > 0 ? (
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span>Strategies</span>
+                            <span>
+                              {detailBatchParsed.completedCount} / {detailBatchParsed.total} finished
+                            </span>
+                          </div>
+                          <Progress value={detailBatchProgressPct} />
+                        </div>
+                      ) : detailBatchParsed.total > 0 ? (
+                        <div className="space-y-2">
+                          <Progress value={detailBatchProgressPct} />
+                          <p className="text-xs text-muted-foreground">
+                            {detailBatchParsed.completedCount} / {detailBatchParsed.total} strategies
+                          </p>
+                        </div>
+                      ) : executionDetailScript.status === 'running' ? (
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                          <div className="h-full w-1/3 animate-pulse rounded-full bg-primary/70" />
+                        </div>
+                      ) : null}
+                      {detailBatchParsed.rows.length > 0 ? (
+                        <ul className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                          {detailBatchParsed.rows.map((row) => (
+                            <li
+                              key={row.strategy}
+                              className="rounded-lg border border-border bg-card px-3 py-2 text-sm"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-medium capitalize">
+                                  {formatStrategyLabel(row.strategy)}
+                                </span>
+                                <span className="shrink-0">
+                                  {row.status === 'ok' ? (
+                                    <Badge variant="secondary" className="gap-1">
+                                      <CheckCircle className="h-3 w-3" /> Done
+                                    </Badge>
+                                  ) : row.status === 'error' ? (
+                                    <Badge variant="destructive" className="gap-1">
+                                      <XCircle className="h-3 w-3" /> Failed
+                                    </Badge>
+                                  ) : row.status === 'running' ? (
+                                    <Badge variant="default" className="gap-1">
+                                      <RefreshCw className="h-3 w-3 animate-spin" /> Running
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline">Waiting</Badge>
+                                  )}
+                                </span>
+                              </div>
+                              {row.status === 'error' && row.detail ? (
+                                <p className="mt-1 text-xs text-destructive whitespace-pre-wrap">{row.detail}</p>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {executionDetailScript.error ? (
+                    <div>
+                      <p className="mb-2 text-sm font-medium text-destructive">Stderr</p>
+                      <pre className="max-h-48 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs whitespace-pre-wrap">
+                        {executionDetailScript.error}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {executionDetailScript.output ? (
+                    <div>
+                      <p className="mb-2 text-sm font-medium">Stdout / logs</p>
+                      <pre className="max-h-64 overflow-auto rounded-md border border-border bg-muted/50 p-3 text-xs whitespace-pre-wrap">
+                        {executionDetailScript.output}
+                      </pre>
+                    </div>
+                  ) : executionDetailScript.status !== 'running' ? (
+                    <p className="text-sm text-muted-foreground">No output captured.</p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Waiting for output…</p>
+                  )}
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -462,6 +462,7 @@ def persist_optimizer_evaluation_run(
     volatility = float(execution.get("volatility", 0.0) or 0.0)
     annualized_return = float(execution.get("annualized_return", 0.0) or 0.0)
     execution_summary = execution.get("execution_summary") or {}
+    decision_markers = _decision_markers_from_signal_execution(execution)
 
     conn = sqlite3.connect(database_path)
     try:
@@ -508,6 +509,8 @@ def persist_optimizer_evaluation_run(
                         "objective": objective,
                         "evaluation_score": evaluation_score,
                         "params_hash": params_hash,
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
                         "sharpe_ratio": sharpe_ratio,
                         "max_drawdown": max_drawdown,
                         "win_rate": win_rate,
@@ -515,6 +518,7 @@ def persist_optimizer_evaluation_run(
                         "avg_trade_return": avg_trade_return,
                         "volatility": volatility,
                         "execution_summary": execution_summary,
+                        "decision_markers": decision_markers,
                     }
                 ),
             ),
@@ -536,7 +540,7 @@ def insert_pending_backtest_run(
     parameters: Dict[str, Any],
     backtest_id: str,
 ) -> int:
-    """Insert a queued row so clients can poll ``GET /backtest/{id}`` before work finishes."""
+    """Insert a queued row for a background run (used when ``pending_run_id`` is passed to ``run_backtest_background``)."""
     parameters = parameters or {}
     ph = compute_params_hash(parameters)
     vl = (parameters or {}).get("variant_label") or variant_label_from_params(parameters)
@@ -1127,3 +1131,90 @@ async def run_backtest_background(
                 metrics_conn.close()
             except Exception:
                 pass
+
+
+async def evaluate_strategy_runtime_once(
+    *,
+    strategy_name: str,
+    ticker: str,
+    parameters: Dict[str, Any],
+    start_date: datetime,
+    end_date: datetime,
+    initial_capital: float,
+    app_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Execute one fresh strategy run and return metrics/curve.
+
+    This reuses run_backtest_background() for execution parity, then removes the
+    temporary persisted run to avoid relying on stale historical backtest rows.
+    """
+    evaluation_id = f"runtime_eval_{compute_params_hash({**parameters, 'ticker': ticker})[:12]}_{int(datetime.utcnow().timestamp())}"
+    runtime_params = {**(parameters or {}), "ticker": ticker.upper()}
+    await run_backtest_background(
+        backtest_id=evaluation_id,
+        strategy_name=strategy_name,
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=initial_capital,
+        parameters=runtime_params,
+        app_state=app_state,
+        pending_run_id=None,
+    )
+
+    db_path = app_state["database_path"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, name, params_hash, metrics, equity_curve, final_value, total_return, annualized_return,
+                   sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility
+            FROM backtest_runs
+            WHERE client_backtest_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (evaluation_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {
+                "status": "failed",
+                "error": "Runtime evaluation did not produce a backtest row",
+                "strategy_name": strategy_name,
+                "ticker": ticker.upper(),
+                "params_hash": compute_params_hash(runtime_params),
+                "metrics": {},
+                "equity_curve": [],
+            }
+
+        metrics = json.loads(row["metrics"] or "{}") if row["metrics"] else {}
+        equity_curve = json.loads(row["equity_curve"] or "[]") if row["equity_curve"] else []
+        result = {
+            "status": str(metrics.get("status", "completed")),
+            "error": metrics.get("error"),
+            "strategy_name": row["name"],
+            "ticker": ticker.upper(),
+            "params_hash": row["params_hash"] or compute_params_hash(runtime_params),
+            "metrics": {
+                "final_value": row["final_value"],
+                "total_return": row["total_return"],
+                "annualized_return": row["annualized_return"],
+                "sharpe_ratio": row["sharpe_ratio"],
+                "max_drawdown": row["max_drawdown"],
+                "win_rate": row["win_rate"],
+                "total_trades": row["total_trades"],
+                "avg_trade_return": row["avg_trade_return"],
+                "volatility": row["volatility"],
+                **metrics,
+            },
+            "equity_curve": equity_curve if isinstance(equity_curve, list) else [],
+        }
+
+        cur.execute("DELETE FROM backtest_runs WHERE id = ?", (row["id"],))
+        conn.commit()
+        return result
+    finally:
+        conn.close()

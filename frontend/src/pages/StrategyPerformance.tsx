@@ -15,12 +15,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { Activity, BarChart3, Gauge, Layers3, Target, TrendingUp } from 'lucide-react'
+import { Activity, BarChart3, BookmarkPlus, Gauge, Layers3, Target, TrendingUp } from 'lucide-react'
 
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
-import { Input } from '../components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
@@ -30,11 +29,13 @@ import {
   getStrategyVariantDistribution,
   getStrategyVariantSummary,
   getStrategyVariantTimeseries,
+  createSavedModel,
 } from '../services/api'
 import type {
   StrategyAnalyticsFilters,
   StrategyDistributionResponse,
   TickerStrategyLeaderboardResponse,
+  TickerStrategyRow,
   StrategyTimeseriesPoint,
   StrategyVariantRow,
   StrategyVariantSummary,
@@ -73,6 +74,14 @@ function shortHash(h: string) {
   return h.length > 10 ? `${h.slice(0, 6)}…` : h
 }
 
+function leaderboardRowKey(row: Pick<TickerStrategyRow, 'ticker' | 'strategy' | 'params_hash'>) {
+  return `${row.ticker}|${row.strategy}|${row.params_hash}`
+}
+
+function defaultSavedModelName(row: Pick<TickerStrategyRow, 'strategy' | 'ticker' | 'params_hash'>) {
+  return `Perf ${row.strategy} ${shortHash(row.params_hash)} @ ${row.ticker}`
+}
+
 function monthlyReturnsFromPoints(points: StrategyTimeseriesPoint[]): Record<string, Record<string, number>> {
   if (!points?.length) return {}
   const byYm = new Map<string, number>()
@@ -98,7 +107,6 @@ function monthlyReturnsFromPoints(points: StrategyTimeseriesPoint[]): Record<str
 export default function StrategyPerformance() {
   const [filters, setFilters] = useState<StrategyAnalyticsFilters | null>(null)
   const [strategy, setStrategy] = useState('')
-  const [ticker, setTicker] = useState(() => getStoredTicker())
   const [variantSummary, setVariantSummary] = useState<StrategyVariantSummary | null>(null)
   const [variantTs, setVariantTs] = useState<StrategyVariantTimeseriesResponse | null>(null)
   const [dist, setDist] = useState<StrategyDistributionResponse | null>(null)
@@ -107,12 +115,18 @@ export default function StrategyPerformance() {
   const [selectedRolling, setSelectedRolling] = useState(30)
   const [objective, setObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [topN, setTopN] = useState(8)
-  const [selectedTicker, setSelectedTicker] = useState('ALL')
+  const [selectedTicker, setSelectedTicker] = useState(() => {
+    const t = getStoredTicker()?.trim().toUpperCase()
+    return t || 'ALL'
+  })
   const [activeParamsHash, setActiveParamsHash] = useState<string | null>(null)
   const [analyticsTab, setAnalyticsTab] = useState<'overview' | 'risk' | 'distributions' | 'monthly'>('overview')
   const [tickerLeaderboard, setTickerLeaderboard] = useState<TickerStrategyLeaderboardResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [selectedLeaderboardKeys, setSelectedLeaderboardKeys] = useState<Set<string>>(() => new Set())
+  const [saveBusy, setSaveBusy] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const strategyRef = useRef(strategy)
   strategyRef.current = strategy
   const activeParamsHashRef = useRef<string | null>(null)
@@ -123,6 +137,12 @@ export default function StrategyPerformance() {
     if (list.includes('SPY')) return 'SPY'
     return list[0] ?? 'SPY'
   }, [filters])
+
+  /** Omit ticker on variant APIs when leaderboard scope is all symbols. */
+  const variantTickerApi = useMemo(
+    () => (selectedTicker !== 'ALL' ? selectedTicker : undefined),
+    [selectedTicker],
+  )
 
   const loadDashboard = useCallback(async () => {
     setLoading(true)
@@ -172,7 +192,7 @@ export default function StrategyPerformance() {
         strategy: strategyToLoad,
         objective,
         top_n: topN,
-        ticker,
+        ...(variantTickerApi ? { ticker: variantTickerApi } : {}),
       })
       setVariantSummary(summary)
       const hashes = summary.variants.map((v) => v.params_hash).join(',')
@@ -190,7 +210,7 @@ export default function StrategyPerformance() {
         granularity: selectedGranularity,
         rolling_window: selectedRolling,
         objective,
-        ticker,
+        ...(variantTickerApi ? { ticker: variantTickerApi } : {}),
       })
       setVariantTs(ts)
       setActiveParamsHash((prev) => {
@@ -213,11 +233,11 @@ export default function StrategyPerformance() {
     objective,
     topN,
     selectedTicker,
+    variantTickerApi,
     effectiveBenchmark,
     selectedPreset,
     selectedGranularity,
     selectedRolling,
-    ticker,
   ])
 
   useEffect(() => {
@@ -246,11 +266,11 @@ export default function StrategyPerformance() {
     objective,
     topN,
     selectedTicker,
+    variantTickerApi,
     selectedPreset,
     selectedGranularity,
     selectedRolling,
     loadDashboard,
-    ticker,
   ])
 
   useEffect(() => {
@@ -258,7 +278,12 @@ export default function StrategyPerformance() {
     let cancelled = false
     ;(async () => {
       try {
-        const d = await getStrategyVariantDistribution(strategy, activeParamsHash, objective, ticker)
+        const d = await getStrategyVariantDistribution(
+          strategy,
+          activeParamsHash,
+          objective,
+          variantTickerApi,
+        )
         if (!cancelled) setDist(d)
       } catch {
         if (!cancelled) setDist(null)
@@ -267,7 +292,7 @@ export default function StrategyPerformance() {
     return () => {
       cancelled = true
     }
-  }, [analyticsTab, strategy, activeParamsHash, objective, ticker])
+  }, [analyticsTab, strategy, activeParamsHash, objective, variantTickerApi])
 
   const activeVariant: StrategyVariantRow | undefined = useMemo(
     () => variantSummary?.variants.find((v) => v.params_hash === activeParamsHash),
@@ -362,13 +387,76 @@ export default function StrategyPerformance() {
     [tickerLeaderboard]
   )
 
+  const allLeaderboardSelected = useMemo(() => {
+    if (!tickerStrategyRows.length) return false
+    return tickerStrategyRows.every((r) => selectedLeaderboardKeys.has(leaderboardRowKey(r)))
+  }, [tickerStrategyRows, selectedLeaderboardKeys])
+
+  const toggleSelectAllLeaderboard = useCallback(() => {
+    setSelectedLeaderboardKeys((prev) => {
+      const keys = tickerStrategyRows.map(leaderboardRowKey)
+      if (!keys.length) return new Set()
+      const allOn = keys.every((k) => prev.has(k))
+      if (allOn) return new Set()
+      return new Set(keys)
+    })
+  }, [tickerStrategyRows])
+
+  const toggleLeaderboardRowSelected = useCallback((row: TickerStrategyRow) => {
+    const k = leaderboardRowKey(row)
+    setSelectedLeaderboardKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
+  }, [])
+
+  const formatSaveError = (e: unknown) => {
+    const err = e as { response?: { data?: { detail?: unknown } }; message?: string }
+    const d = err.response?.data?.detail
+    if (typeof d === 'string') return d
+    if (Array.isArray(d)) return d.map((x) => JSON.stringify(x)).join('; ')
+    return err.message || 'Request failed'
+  }
+
+  const saveSelectedLeaderboardModels = useCallback(async () => {
+    const rows = tickerStrategyRows.filter((r) => selectedLeaderboardKeys.has(leaderboardRowKey(r)))
+    if (!rows.length) return
+    setSaveBusy(true)
+    setSaveMessage(null)
+    let ok = 0
+    const failures: string[] = []
+    for (const row of rows) {
+      try {
+        await createSavedModel({
+          name: defaultSavedModelName(row),
+          strategy_name: row.strategy,
+          ticker: row.ticker.trim().toUpperCase(),
+          params: row.params ?? {},
+          objective,
+        })
+        ok += 1
+      } catch (e: unknown) {
+        failures.push(`${row.ticker} ${row.strategy}: ${formatSaveError(e)}`)
+      }
+    }
+    setSaveMessage(
+      failures.length
+        ? `Saved ${ok} of ${rows.length}. ${failures.slice(0, 3).join(' · ')}${failures.length > 3 ? '…' : ''}`
+        : `Saved ${ok} model(s) to Predictions / saved models.`,
+    )
+    if (!failures.length) setSelectedLeaderboardKeys(new Set())
+    setSaveBusy(false)
+  }, [tickerStrategyRows, selectedLeaderboardKeys, objective])
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Strategy Performance</h2>
         <p className="text-muted-foreground">
           Each leaderboard row is a model: a strategy script plus one fixed parameter set. Compare models per ticker
-          across strategy families, then open variants to inspect other saved settings for the same strategy.
+          across strategy families and drill in from the table.
         </p>
       </div>
 
@@ -379,32 +467,30 @@ export default function StrategyPerformance() {
             Variant comparison controls
           </CardTitle>
           <CardDescription>
-            Pick ticker scope, ranking objective, how many top models to list per ticker, plus chart preset, granularity,
-            and rolling window. Benchmark defaults to SPY when available. The active strategy family comes from the
-            leaderboard row you select (or the current top row).
+            One ticker control: filtering the leaderboard to a symbol, and driving variant charts for that symbol. Choose
+            &quot;All tickers&quot; to list every symbol&apos;s leaders; charts then use pooled backtest rows with no ticker
+            filter. Set ranking objective, top-N, preset, granularity, and rolling window. Benchmark defaults to SPY. Pick a
+            leaderboard row (or use the default top row) to choose the strategy family.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">Ticker (variant filter)</label>
-              <Input
-                value={ticker}
-                onChange={(event) => setTicker(rememberTicker(event.target.value))}
-                className="font-mono uppercase"
-                placeholder="AMZN"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">Ticker scope</label>
-              <Select value={selectedTicker} onValueChange={setSelectedTicker}>
+              <label className="text-xs font-medium text-muted-foreground">Ticker</label>
+              <Select
+                value={selectedTicker}
+                onValueChange={(v) => {
+                  setSelectedTicker(v)
+                  if (v !== 'ALL') rememberTicker(v)
+                }}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Ticker scope" />
+                  <SelectValue placeholder="Ticker" />
                 </SelectTrigger>
                 <SelectContent>
-                  {tickerOptions.map((ticker) => (
-                    <SelectItem key={ticker} value={ticker}>
-                      {ticker === 'ALL' ? 'All tickers' : ticker}
+                  {tickerOptions.map((sym) => (
+                    <SelectItem key={sym} value={sym}>
+                      {sym === 'ALL' ? 'All tickers' : sym}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -500,76 +586,52 @@ export default function StrategyPerformance() {
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Active variant</CardTitle>
-              <CardDescription>Used for rolling Sharpe/Sortino, monthly view, and distributions.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              {(variantSummary?.variants ?? []).length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No parameter variants found for {ticker || 'this ticker'} yet. Train that ticker on the Backtests
-                  page, or run historical backtests with different parameters so rows get a params_hash.
-                </p>
-              ) : (
-                (variantSummary?.variants ?? []).map((v) => (
-                  <Button
-                    key={v.params_hash}
-                    size="sm"
-                    variant={activeParamsHash === v.params_hash ? 'default' : 'outline'}
-                    onClick={() => setActiveParamsHash(v.params_hash)}
-                  >
-                    {shortHash(v.params_hash)}
-                  </Button>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card>
-              <CardHeader>
-                <CardDescription>Total return</CardDescription>
-                <CardTitle className="text-2xl">
-                  {activeVariant ? fmtPct(activeVariant.total_return) : '-'}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardDescription>Sharpe (variant)</CardDescription>
-                <CardTitle className="text-2xl">
-                  {activeVariant ? fmtNum(activeVariant.sharpe_ratio) : '-'}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardDescription>Max drawdown</CardDescription>
-                <CardTitle className="text-2xl">
-                  {activeVariant ? fmtPct(activeVariant.max_drawdown) : '-'}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardDescription>Win rate</CardDescription>
-                <CardTitle className="text-2xl">{activeVariant ? fmtPct(activeVariant.win_rate) : '-'}</CardTitle>
-              </CardHeader>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader>
               <CardTitle>Ticker model leaderboard</CardTitle>
               <CardDescription>
                 Best models per ticker using objective {objective}. Click any row to drill into that strategy family and
-                parameter variant.
+                parameter variant. Select rows and save them as persisted models for the Predictions page and runtime
+                evaluation.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={selectedLeaderboardKeys.size === 0 || saveBusy}
+                  onClick={() => void saveSelectedLeaderboardModels()}
+                >
+                  <BookmarkPlus className="mr-2 h-4 w-4" />
+                  Save selected ({selectedLeaderboardKeys.size})
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={selectedLeaderboardKeys.size === 0 || saveBusy}
+                  onClick={() => setSelectedLeaderboardKeys(new Set())}
+                >
+                  Clear selection
+                </Button>
+                {saveMessage && (
+                  <span className={`text-sm ${saveMessage.startsWith('Saved ') && !saveMessage.includes('of') ? 'text-emerald-600' : 'text-muted-foreground'}`}>
+                    {saveMessage}
+                  </span>
+                )}
+              </div>
               <div className="overflow-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border">
+                      <th className="text-center py-2 px-1 w-10">
+                        <input
+                          type="checkbox"
+                          checked={allLeaderboardSelected}
+                          onChange={() => toggleSelectAllLeaderboard()}
+                          disabled={!tickerStrategyRows.length || saveBusy}
+                          aria-label="Select all leaderboard rows"
+                        />
+                      </th>
                       <th className="text-left py-2 pr-3">Ticker</th>
                       <th className="text-right py-2 px-2">Rank</th>
                       <th className="text-left py-2 px-2">Strategy</th>
@@ -599,6 +661,19 @@ export default function StrategyPerformance() {
                           void loadDashboard()
                         }}
                       >
+                        <td
+                          className="text-center py-2 px-1"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedLeaderboardKeys.has(leaderboardRowKey(row))}
+                            onChange={() => toggleLeaderboardRowSelected(row)}
+                            disabled={saveBusy}
+                            aria-label={`Select ${row.ticker} ${row.strategy}`}
+                          />
+                        </td>
                         <td className="py-2 pr-3 font-medium">{row.ticker}</td>
                         <td className="text-right py-2 px-2">{row.rank}</td>
                         <td className="py-2 px-2">{row.strategy}</td>

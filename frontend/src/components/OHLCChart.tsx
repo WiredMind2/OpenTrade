@@ -7,7 +7,7 @@ import type {
 import TradingViewUDFDatafeed from "../services/tradingViewUDF";
 import { attachProjectionManager, detachProjectionManager } from "../lib/ChartProjectionManager";
 import { projectStrategy } from "../api/strategies";
-import type { ProjectionPoint, PredictionProjection } from "../types";
+import type { ProjectionPoint } from "../types";
 import type { NewsArticle } from "@/api/news";
 
 /**
@@ -47,10 +47,6 @@ interface OHLCChartProps {
    horizon?: number;
    /** Projection mode */
    mode?: string;
-   /** Show prediction projections */
-   showPredictionProjections?: boolean;
-   /** Prediction projection data */
-   predictionProjections?: PredictionProjection[];
    /** Callback when symbol changes in TradingView */
    onSymbolChange?: (symbol: string) => void;
    /** News articles to display as markers on chart */
@@ -98,8 +94,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      params = {},
      horizon = 30,
      mode = "price",
-     showPredictionProjections = false,
-     predictionProjections = [],
      onSymbolChange,
    }, ref) => {
        const { theme } = useTheme();
@@ -111,7 +105,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
          `tradingview_${Math.random().toString(36).substr(2, 9)}`
        );
        const projectionEntitiesRef = useRef<any[]>([]);
-       const predictionEntitiesRef = useRef<any[]>([]);
       const normalizeTimeToSeconds = (value: unknown): number | null => {
         const ts = Number(value)
         if (!Number.isFinite(ts)) return null
@@ -125,120 +118,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
          horizon,
          mode,
        });
-
-       // State for prediction projections
-       const [predictionSettings, setPredictionSettings] = useState({
-         showPredictionProjections,
-         predictionProjections,
-       });
-
-       /**
-        * Render prediction projections on the chart
-        */
-       const renderPredictionProjections = () => {
-         if (!widgetRef.current) return;
-
-          
-
-        let chart;
-        try {
-          chart = widgetRef.current.chart();
-        } catch (error) {
-          console.warn("[OHLCChart] Chart not ready or already removed");
-          return;
-        }
-        if (!chart) return;
-
-         // Clear existing prediction entities
-         predictionEntitiesRef.current.forEach(entityId => {
-           try {
-             chart.removeEntity(entityId);
-           } catch (e) {
-             console.warn("[OHLCChart] Failed to remove existing prediction entity:", e);
-           }
-         });
-         predictionEntitiesRef.current = [];
-
-         if (!predictionSettings.showPredictionProjections) return;
-
-         // Filter projections for current symbol
-         const relevantProjections = predictionSettings.predictionProjections.filter(
-           p => p.ticker === symbol
-         );
-
-         relevantProjections.forEach(projection => {
-          const drawProjectionLine = (
-            valueKey: 'price' | 'upperBound' | 'lowerBound',
-            style: { linestyle: number; linewidth: number; linecolor: string; transparency: number }
-          ) => {
-            for (let i = 1; i < projection.points.length; i++) {
-              const start = projection.points[i - 1];
-              const end = projection.points[i];
-              const startValue = start[valueKey];
-              const endValue = end[valueKey];
-              if (typeof startValue !== 'number' || typeof endValue !== 'number') continue;
-
-              const segmentId = chart.createMultipointShape([
-                { time: start.time, price: startValue },
-                { time: end.time, price: endValue },
-              ], {
-                shape: 'trend_line',
-                lock: true,
-                disableSelection: true,
-                disableSave: true,
-                overrides: style,
-              });
-
-              if (segmentId) {
-                predictionEntitiesRef.current.push(segmentId);
-              }
-            }
-          };
-
-          // Draw explicit line segments to avoid any closed polygon behavior.
-          drawProjectionLine('price', {
-            linestyle: 0, // SOLID
-            linewidth: 2,
-            linecolor: projection.color,
-            transparency: 0
-          });
-          drawProjectionLine('upperBound', {
-            linestyle: 2, // DASHED
-            linewidth: 1,
-            linecolor: projection.color,
-            transparency: 35
-          });
-          drawProjectionLine('lowerBound', {
-            linestyle: 2, // DASHED
-            linewidth: 1,
-            linecolor: projection.color,
-            transparency: 35
-          });
-
-           // Add start marker for each projection
-           if (projection.points.length > 0) {
-             const startPoint = projection.points[0];
-             const startMarkerId = chart.createShape({
-               time: startPoint.time,
-               price: startPoint.price
-             }, {
-               shape: 'arrow_right',
-               lock: true,
-               disableSelection: true,
-               disableSave: true,
-               overrides: {
-                 color: projection.color,
-                 transparency: 0,
-                 size: 1
-               }
-             });
-
-             if (startMarkerId) {
-               predictionEntitiesRef.current.push(startMarkerId);
-             }
-           }
-         });
-       };
 
      useEffect(() => {
       if (!containerRef.current) return;
@@ -473,9 +352,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
             };
 
             attachProjectionManager(widgetRef.current, projectionOptions);
-
-            // Render prediction projections if enabled
-            renderPredictionProjections();
           });
 
         } catch (error) {
@@ -527,24 +403,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
       }
     }, [isDark])
 
-    // Update prediction settings when props change
-    useEffect(() => {
-      setPredictionSettings({
-        showPredictionProjections,
-        predictionProjections,
-      });
-    }, [showPredictionProjections, predictionProjections]);
-
-    // Re-render prediction projections when settings change
-    useEffect(() => {
-     if (!widgetRef.current) return;
-
-  const timeout = setTimeout(() => {
-    renderPredictionProjections();
-    }, 300);
-    return () => clearTimeout(timeout);
-    }, [predictionSettings, symbol]);
-
     // Expose public API via ref
     useImperativeHandle(ref, () => ({
       setProjectionStrategy: (strategyName: string, params?: Record<string, any>, horizon?: number, mode?: string) => {
@@ -568,21 +426,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
               }
             });
             projectionEntitiesRef.current = [];
-          }
-        }
-
-        // Clear prediction projections
-        if (predictionEntitiesRef.current.length > 0 && widgetRef.current) {
-          const chart = widgetRef.current.chart();
-          if (chart) {
-            predictionEntitiesRef.current.forEach(entityId => {
-              try {
-                chart.removeEntity(entityId);
-              } catch (e) {
-                console.warn("[OHLCChart] Failed to remove prediction entity:", e);
-              }
-            });
-            predictionEntitiesRef.current = [];
           }
         }
       },

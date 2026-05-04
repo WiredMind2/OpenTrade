@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
-from backend.routes.backtest_engine import run_backtest_background
+from backend.routes.backtest_engine import persist_optimizer_evaluation_run, run_backtest_background
 
 
 def _init_backtest_tables(conn: sqlite3.Connection) -> None:
@@ -625,3 +625,63 @@ def test_run_backtest_background_live_recursive_forecast_horizon_fallback(tmp_pa
     assert metrics["backtest_id"] == "bt_live_recursive_fallback"
     assert "7d" in call_horizons
     assert "3d" in call_horizons or "1d" in call_horizons
+
+
+def test_persist_optimizer_evaluation_run_includes_decision_markers(tmp_path):
+    db_path = tmp_path / "opt_decision_markers.db"
+    conn = sqlite3.connect(db_path)
+    _init_backtest_tables(conn)
+    conn.close()
+
+    execution = {
+        "total_return": 0.01,
+        "final_value": 101000.0,
+        "equity_curve": [{"date": "2025-01-03", "value": 101000.0}],
+        "sharpe_ratio": 0.5,
+        "max_drawdown": 0.01,
+        "win_rate": 0.0,
+        "total_trades": 1,
+        "avg_trade_return": -1.0,
+        "volatility": 0.02,
+        "annualized_return": 0.1,
+        "execution_summary": {"engine": "signal"},
+        "trades": [
+            {
+                "date": "2025-01-03",
+                "side": "buy",
+                "ticker": "AAPL",
+                "size": 10,
+                "price": 100.0,
+                "pnl": 0.0,
+                "pnlcomm": -0.1,
+            },
+        ],
+        "order_fills": [{"metadata": {"reason": "cross_sectional_ls"}}],
+    }
+
+    rid = persist_optimizer_evaluation_run(
+        str(db_path),
+        strategy_name="cross_sectional_ls",
+        parameters={"ticker": "AAPL", "execution_mode": "signal"},
+        client_backtest_id="opt_exp_0",
+        experiment_id="exp-1",
+        optimizer_mode="grid",
+        start_date=datetime(2025, 1, 1),
+        end_date=datetime(2025, 1, 31),
+        initial_capital=100000.0,
+        execution=execution,
+        objective="balanced",
+        evaluation_score=1.0,
+    )
+    assert rid > 0
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT metrics FROM backtest_runs WHERE id = ?", (rid,)).fetchone()
+    conn.close()
+    assert row is not None
+    metrics = json.loads(row[0])
+    assert "decision_markers" in metrics
+    assert len(metrics["decision_markers"]) == 1
+    assert metrics["decision_markers"][0]["side"] == "buy"
+    assert metrics["decision_markers"][0]["date"] == "2025-01-03"
+    assert metrics.get("start_date")
+    assert metrics.get("end_date")

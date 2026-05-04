@@ -125,11 +125,6 @@ export const searchUdfSymbols = async (
   return Array.isArray(response.data) ? response.data : []
 }
 
-export interface LatestPriceAnchor {
-  latestPrice: number
-  latestTime: number
-}
-
 export type PriceDailyRow = {
   date: string
   open?: number | null
@@ -140,6 +135,13 @@ export type PriceDailyRow = {
   volume?: number | null
 }
 
+/** Same-key concurrent calls share one HTTP request (e.g. many equity charts on Backtests). */
+const tickerPricesForRangeInflight = new Map<string, Promise<PriceDailyRow[]>>()
+
+function tickerPricesForRangeKey(ticker: string, startDate: string, endDate: string, limit: number): string {
+  return `${ticker.toUpperCase()}\0${startDate.slice(0, 10)}\0${endDate.slice(0, 10)}\0${limit}`
+}
+
 /** Daily OHLC rows for a ticker in [startDate, endDate] (YYYY-MM-DD), ascending by date in DB but returned newest-first from API. */
 export const getTickerPricesForRange = async (
   ticker: string,
@@ -147,15 +149,28 @@ export const getTickerPricesForRange = async (
   endDate: string,
   limit = 1000,
 ): Promise<PriceDailyRow[]> => {
-  const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
-    params: {
-      start_date: `${startDate.slice(0, 10)}T00:00:00`,
-      end_date: `${endDate.slice(0, 10)}T23:59:59`,
-      limit,
-    },
-  })
-  const rows = response.data?.data
-  return Array.isArray(rows) ? rows : []
+  const key = tickerPricesForRangeKey(ticker, startDate, endDate, limit)
+  const inflight = tickerPricesForRangeInflight.get(key)
+  if (inflight) return inflight
+
+  const promise = (async () => {
+    try {
+      const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
+        params: {
+          start_date: `${startDate.slice(0, 10)}T00:00:00`,
+          end_date: `${endDate.slice(0, 10)}T23:59:59`,
+          limit,
+        },
+      })
+      const rows = response.data?.data
+      return Array.isArray(rows) ? rows : []
+    } finally {
+      tickerPricesForRangeInflight.delete(key)
+    }
+  })()
+
+  tickerPricesForRangeInflight.set(key, promise)
+  return promise
 }
 
 export interface PriceHistoryRow {
@@ -173,31 +188,6 @@ export const getPriceHistory = async (ticker: string, limit: number = 2): Promis
     params: { limit },
   })
   return Array.isArray(response.data?.data) ? response.data.data : []
-}
-
-export const getLatestPriceAnchor = async (ticker: string): Promise<LatestPriceAnchor | null> => {
-  const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
-    params: { limit: 1 },
-  })
-  const rows = response.data?.data
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return null
-  }
-
-  const latest = rows[0]
-  if (typeof latest?.close !== 'number' || typeof latest?.date !== 'string') {
-    return null
-  }
-
-  const timestampMs = Date.parse(`${latest.date}T00:00:00Z`)
-  if (!Number.isFinite(timestampMs)) {
-    return null
-  }
-
-  return {
-    latestPrice: latest.close,
-    latestTime: Math.floor(timestampMs / 1000),
-  }
 }
 
 export type CreatePredictionOptions = {
@@ -229,20 +219,119 @@ export const createPrediction = async (
   return response.data
 }
 
-export interface PredictionProjectionRequest {
-  symbol: string
-  anchor_time: string
-  anchor_price: number
-  horizon_days: number
-  strategy_names?: string[]
-  params_by_strategy?: Record<string, Record<string, any>>
+export interface SavedModel {
+  id: number
+  name: string
+  strategy_name: string
+  ticker: string
+  params: Record<string, any>
+  params_hash: string
+  objective: string
+  baseline_metrics?: Record<string, any> | null
+  latest_metrics?: Record<string, any> | null
+  latest_equity_curve?: unknown[] | null
+  degrade_status?: string
+  degrade_reason?: string | null
+  last_evaluated_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  is_active?: boolean
 }
 
-export const getPredictionProjections = async (payload: PredictionProjectionRequest) => {
-  const response = await instance.post('/api/predictions/projections', payload)
+export interface SavedModelEvaluation {
+  model_id: number
+  name?: string | null
+  params?: Record<string, any>
+  status: string
+  strategy_name: string
+  ticker: string
+  params_hash: string
+  objective: string
+  metrics: Record<string, any>
+  equity_curve: Array<Record<string, any>>
+  degrade_status: string
+  degrade_reason?: string | null
+  evaluated_at: string
+  error?: string | null
+}
+
+export type SavedModelSignalAction = 'buy' | 'sell' | 'hold'
+
+export interface SavedModelSignal {
+  model_id: number
+  name?: string | null
+  strategy_name: string
+  ticker: string
+  params: Record<string, any>
+  params_hash: string
+  as_of: string
+  last_price: number
+  action: SavedModelSignalAction
+  target_pct: number
+  confidence: number
+  reason: string
+  degrade_status: string
+  degrade_reason?: string | null
+  error?: string | null
+}
+
+export const listSavedModels = async (query?: {
+  ticker?: string
+  active?: boolean
+  strategy?: string
+}): Promise<SavedModel[]> => {
+  const response = await instance.get('/api/models/saved', { params: query })
   return response.data
 }
 
+export const evaluateSavedModelsBatch = async (body: {
+  ticker: string
+  start_date: string
+  end_date: string
+  initial_capital?: number
+  objective?: string
+  top_n?: number
+  rank_after_evaluation?: boolean
+  max_evaluate?: number
+  include_model_ids?: number[]
+  exclude_model_ids?: number[]
+  drift_thresholds?: Record<string, number>
+}): Promise<SavedModelEvaluation[]> => {
+  const response = await instance.post('/api/models/saved/evaluate-batch', body)
+  return response.data
+}
+
+export const signalsSavedModelsBatch = async (body: {
+  ticker: string
+  objective?: string
+  top_n?: number
+  include_model_ids?: number[]
+  exclude_model_ids?: number[]
+  /** YYYY-MM-DD — latest bar on or before this date */
+  as_of_date?: string | null
+}): Promise<SavedModelSignal[]> => {
+  const response = await instance.post('/api/models/saved/signals-batch', body)
+  return response.data
+}
+
+export const createSavedModel = async (body: {
+  name: string
+  strategy_name: string
+  ticker: string
+  params?: Record<string, any>
+  objective?: string
+  is_active?: boolean
+}): Promise<SavedModel> => {
+  const response = await instance.post('/api/models/saved', {
+    name: body.name,
+    strategy_name: body.strategy_name,
+    ticker: body.ticker.trim().toUpperCase(),
+    params: body.params ?? {},
+    objective: body.objective ?? 'balanced',
+    is_active: body.is_active ?? true,
+  })
+  return response.data
+}
 
 // Portfolio API functions
 export const getPortfolio = async () => {
@@ -256,25 +345,19 @@ export const getHealth = async () => {
   return response.data
 }
 
-// Backtests API functions
-export const getBacktests = async () => {
-  const response = await instance.get('/trading/backtest')
-  return response.data
-}
-
-export const runBacktest = async (data: {
-  strategy_name: string
-  start_date: string
-  end_date: string
-  initial_capital: number
-  parameters?: Record<string, any>
+// Backtests API functions (single endpoint: list with pagination, or one row via backtestId)
+export const getBacktests = async (opts?: {
+  page?: number
+  limit?: number
+  /** When set, returns a one-element array (or caller should handle 404 from axios). */
+  backtestId?: string
 }) => {
-  const response = await instance.post('/backtest', data)
-  return response.data
-}
-
-export const getBacktest = async (backtestId: string) => {
-  const response = await instance.get(`/backtest/${encodeURIComponent(backtestId)}`)
+  const id = opts?.backtestId?.trim()
+  const params: Record<string, string | number> =
+    id && id.length > 0
+      ? { backtest_id: id }
+      : { page: opts?.page ?? 1, limit: opts?.limit ?? 50 }
+  const response = await instance.get('/trading/backtest', { params })
   return response.data
 }
 
