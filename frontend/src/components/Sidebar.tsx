@@ -7,7 +7,6 @@ import {
   X,
   Activity,
   Settings,
-  Brain,
   LineChart,
   BookOpen
 } from 'lucide-react'
@@ -22,7 +21,6 @@ interface SidebarProps {
 const navigation = [
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
-  { name: 'Strategies', href: '/strategies', icon: Brain },
   { name: 'Performance', href: '/strategy-performance', icon: LineChart },
   { name: 'Scripts', href: '/scripts', icon: Settings },
   { name: 'Recommendations', href: '/recommendations', icon: BookOpen },

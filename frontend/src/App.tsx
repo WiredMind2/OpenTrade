@@ -3,7 +3,6 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import Predictions from './pages/Predictions'
 import Backtests from './pages/Backtests'
 import Scripts from './pages/Scripts'
-import Strategies from './pages/Strategies'
 import StrategyPerformance from './pages/StrategyPerformance'
 import Recommendations from './pages/Recommendations'
 import { ThemeProvider } from './components/ThemeProvider'
@@ -37,7 +36,6 @@ export default function App() {
               <Route path="/predictions" element={<Predictions />} />
               <Route path="/backtests" element={<Backtests />} />
               <Route path="/scripts" element={<Scripts />} />
-              <Route path="/strategies" element={<Strategies />} />
               <Route path="/strategy-performance" element={<StrategyPerformance />} />
               <Route path="/recommendations" element={<Recommendations />} />
             </Routes>
