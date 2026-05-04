@@ -20,7 +20,7 @@ const API_BASE =
 
 const instance = axios.create({
   baseURL: API_BASE,
-  timeout: 30000
+  timeout: 30000,
 })
 
 

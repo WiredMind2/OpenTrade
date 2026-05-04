@@ -81,6 +81,21 @@ function equityChartYDomain(chartData: Array<{ value: number }>): [number, numbe
   return [minV - pad, maxV + pad]
 }
 
+type ServerWaitPhase = 'idle' | 'preflight' | 'backtest' | 'training'
+
+function serverWaitPhaseLabel(phase: ServerWaitPhase): string {
+  switch (phase) {
+    case 'preflight':
+      return 'Contacting the server: validating data for your ticker and dates…'
+    case 'backtest':
+      return 'Starting backtest job…'
+    case 'training':
+      return 'Running parameter optimization on the server (this can take several minutes)…'
+    default:
+      return ''
+  }
+}
+
 export default function Backtests() {
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
@@ -100,6 +115,7 @@ export default function Backtests() {
   const [trainResult, setTrainResult] = useState<StrategyTrainResponse | null>(null)
   const [trainError, setTrainError] = useState<string | null>(null)
   const [preflight, setPreflight] = useState<StrategyPreflightResponse | null>(null)
+  const [serverWaitPhase, setServerWaitPhase] = useState<ServerWaitPhase>('idle')
 
   const fetchBacktests = async () => {
     setLoading(true)
@@ -167,6 +183,7 @@ export default function Backtests() {
       return
     }
     setRunning(true)
+    setServerWaitPhase('preflight')
     try {
       const check = await preflightStrategy(strategy, {
         ticker: ticker.trim().toUpperCase(),
@@ -179,6 +196,7 @@ export default function Backtests() {
         alert(topError)
         return
       }
+      setServerWaitPhase('backtest')
       const data = await runBacktest({
         strategy_name: strategy,
         start_date: startDate,
@@ -192,6 +210,7 @@ export default function Backtests() {
       alert('Failed to start backtest: ' + (e.message || 'Unknown error'))
     } finally {
       setRunning(false)
+      setServerWaitPhase('idle')
     }
   }
 
@@ -206,6 +225,7 @@ export default function Backtests() {
     }
     setTraining(true)
     setTrainError(null)
+    setServerWaitPhase('preflight')
     try {
       const check = await preflightStrategy(strategy, {
         ticker: ticker.trim().toUpperCase(),
@@ -217,6 +237,7 @@ export default function Backtests() {
         setTrainError(check.issues[0]?.message || 'Preflight failed')
         return
       }
+      setServerWaitPhase('training')
       const seedNum = randomSeed.trim() === '' ? undefined : Number(randomSeed)
       const response = await trainStrategy(strategy, {
         ticker: ticker.trim().toUpperCase(),
@@ -246,6 +267,7 @@ export default function Backtests() {
       setTrainError(e.message || 'Failed to train strategy parameters')
     } finally {
       setTraining(false)
+      setServerWaitPhase('idle')
     }
   }
 
@@ -414,6 +436,22 @@ export default function Backtests() {
                 )}
               </Button>
             </div>
+            {serverWaitPhase !== 'idle' && (
+              <div
+                className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2"
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <div className="flex items-center gap-2 text-sm text-foreground">
+                  <Activity className="h-4 w-4 shrink-0 animate-spin text-primary" aria-hidden />
+                  <span>{serverWaitPhaseLabel(serverWaitPhase)}</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div className="h-full w-2/5 rounded-full bg-primary server-wait-bar" />
+                </div>
+              </div>
+            )}
             {trainError && <p className="text-sm text-destructive">{trainError}</p>}
             {preflight && !preflight.ready && (
               <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm space-y-1">
