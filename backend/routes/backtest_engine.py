@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import backtrader as bt
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Optional, Type
 
 from backend.domain.trading import ExecutionConfig, OrderIntent, TargetAllocation
 from backend.logging_config import get_component_logger
@@ -18,6 +18,83 @@ from .websocket import broadcast_websocket_message
 
 
 logger = get_component_logger(__file__)
+
+
+def _backtrader_strategy_kwargs(
+    strategy_class: Type[Any], parameters: Dict[str, Any] | None
+) -> Dict[str, Any]:
+    """Pass only keys declared on Strategy.params; extras (e.g. ticker) break bt.Strategy.__init__."""
+    params_meta = getattr(strategy_class, "params", ()) or ()
+    if not isinstance(params_meta, (tuple, list)):
+        return {}
+    names = {
+        p[0]
+        for p in params_meta
+        if isinstance(p, (tuple, list)) and len(p) >= 1 and isinstance(p[0], str)
+    }
+    if not names:
+        return {}
+    return {k: v for k, v in (parameters or {}).items() if k in names}
+
+
+def _decision_markers_from_signal_execution(execution: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One row per executed buy/sell (aligned with signal-engine ``trades`` / ``order_fills``)."""
+    trades_list = execution.get("trades") or []
+    fills_list = execution.get("order_fills") or []
+    out: List[Dict[str, Any]] = []
+    for i, t in enumerate(trades_list):
+        if not isinstance(t, dict):
+            continue
+        raw_date = t.get("date")
+        if raw_date is None:
+            continue
+        date = str(raw_date)[:10]
+        side_raw = t.get("side")
+        side = str(side_raw).lower() if side_raw is not None else ""
+        if side not in ("buy", "sell"):
+            continue
+        ticker = t.get("ticker")
+        tic = str(ticker).upper() if ticker else None
+        reason: Optional[str] = None
+        if i < len(fills_list):
+            f = fills_list[i]
+            if isinstance(f, dict):
+                meta = f.get("metadata") or {}
+                if isinstance(meta, dict):
+                    r = meta.get("reason")
+                    if r is not None:
+                        reason = str(r)
+        row: Dict[str, Any] = {"date": date, "side": side, "ticker": tic}
+        if reason:
+            row["reason"] = reason
+        out.append(row)
+    return out[:500]
+
+
+def _normalize_bt_decision_markers(raw: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return []
+    for m in raw[:500]:
+        if not isinstance(m, dict):
+            continue
+        d = m.get("date")
+        if d is None:
+            continue
+        date = str(d)[:10]
+        side_raw = m.get("side")
+        side = str(side_raw).lower() if side_raw is not None else ""
+        if side not in ("buy", "sell"):
+            continue
+        row: Dict[str, Any] = {"date": date, "side": side}
+        tic = m.get("ticker")
+        if tic:
+            row["ticker"] = str(tic).upper()
+        r = m.get("reason")
+        if r is not None:
+            row["reason"] = str(r)
+        out.append(row)
+    return out
 
 
 def _build_execution_config(parameters: Dict[str, Any]) -> ExecutionConfig:
@@ -38,8 +115,18 @@ def _run_signal_execution_backtest(
     initial_capital: float,
     parameters: Dict[str, Any],
     price_frames: Dict[str, pd.DataFrame],
+    signal_db_conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
     exec_config = _build_execution_config(parameters)
+    # O(1) close lookup per (ticker, calendar day); first row wins on duplicate dates (matches iloc[0]).
+    close_by_ticker_date: Dict[str, Dict[str, float]] = {}
+    for ticker, df in price_frames.items():
+        day_close: Dict[str, float] = {}
+        for d, c in zip(df["date"].tolist(), df["close"].tolist()):
+            dk = pd.to_datetime(d).date().isoformat()
+            if dk not in day_close:
+                day_close[dk] = float(c)
+        close_by_ticker_date[ticker] = day_close
     all_dates = sorted(
         {
             pd.to_datetime(d).date().isoformat()
@@ -58,11 +145,10 @@ def _run_signal_execution_backtest(
     for date_str in all_dates:
         current_prices: Dict[str, float] = {}
         symbols: List[str] = []
-        for ticker, df in price_frames.items():
-            row = df[df["date"] == date_str]
-            if row.empty:
+        for ticker in price_frames.keys():
+            close_px = close_by_ticker_date.get(ticker, {}).get(date_str)
+            if close_px is None:
                 continue
-            close_px = float(row.iloc[0]["close"])
             current_prices[ticker] = close_px
             symbols.append(ticker)
         if not symbols:
@@ -73,6 +159,7 @@ def _run_signal_execution_backtest(
             symbols=symbols,
             as_of=as_of,
             current_prices=current_prices,
+            db_conn=signal_db_conn,
         )
         signal_records.extend(allocations)
 
@@ -439,6 +526,107 @@ def persist_optimizer_evaluation_run(
         conn.close()
 
 
+def insert_pending_backtest_run(
+    database_path: str,
+    *,
+    strategy_name: str,
+    start_date: datetime,
+    end_date: datetime,
+    initial_capital: float,
+    parameters: Dict[str, Any],
+    backtest_id: str,
+) -> int:
+    """Insert a queued row so clients can poll ``GET /backtest/{id}`` before work finishes."""
+    parameters = parameters or {}
+    ph = compute_params_hash(parameters)
+    vl = (parameters or {}).get("variant_label") or variant_label_from_params(parameters)
+    om = (parameters or {}).get("optimizer_mode")
+    eid = (parameters or {}).get("experiment_id")
+    metrics = {
+        "backtest_id": backtest_id,
+        "status": "running",
+        "phase": "queued",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+    }
+    conn = sqlite3.connect(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA foreign_keys = ON;")
+        cur.execute(
+            """
+            INSERT INTO backtest_runs (
+                name, params, params_hash, variant_label, optimizer_mode, experiment_id,
+                client_backtest_id, started_at, completed_at, initial_capital,
+                final_value, total_return, annualized_return, sharpe_ratio,
+                max_drawdown, win_rate, total_trades, avg_trade_return,
+                volatility, equity_curve, metrics
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                strategy_name,
+                json.dumps(parameters),
+                ph,
+                vl,
+                om,
+                eid,
+                backtest_id,
+                start_date.isoformat(),
+                None,
+                initial_capital,
+                initial_capital,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0,
+                0.0,
+                0.0,
+                json.dumps([]),
+                json.dumps(metrics),
+            ),
+        )
+        rid = int(cur.lastrowid)
+        conn.commit()
+        return rid
+    finally:
+        conn.close()
+
+
+def _merge_backtest_run_metrics(
+    database_path: str,
+    run_row_id: int,
+    patch: Dict[str, Any],
+    *,
+    conn: Optional[sqlite3.Connection] = None,
+) -> None:
+    own_conn = conn is None
+    if conn is None:
+        conn = sqlite3.connect(database_path)
+    try:
+        cur = conn.cursor()
+        row = cur.execute("SELECT metrics FROM backtest_runs WHERE id = ?", (run_row_id,)).fetchone()
+        base: Dict[str, Any] = {}
+        if row and row[0]:
+            raw = row[0]
+            try:
+                base = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, dict) else {})
+            except (json.JSONDecodeError, TypeError):
+                base = {}
+        if not isinstance(base, dict):
+            base = {}
+        base.update(patch)
+        cur.execute(
+            "UPDATE backtest_runs SET metrics = ? WHERE id = ?",
+            (json.dumps(base), run_row_id),
+        )
+        conn.commit()
+    finally:
+        if own_conn:
+            conn.close()
+
+
 async def run_backtest_background(
     backtest_id: str,
     strategy_name: str,
@@ -446,10 +634,15 @@ async def run_backtest_background(
     end_date: datetime,
     initial_capital: float,
     parameters: Dict[str, Any],
-    app_state: Dict[str, Any]
+    app_state: Dict[str, Any],
+    pending_run_id: Optional[int] = None,
 ):
     """Run backtest in background using Backtrader."""
     parameters = parameters or {}
+    db_path = app_state["database_path"]
+    metrics_conn: Optional[sqlite3.Connection] = None
+    if pending_run_id is not None:
+        metrics_conn = sqlite3.connect(db_path)
     try:
         logger.info(f"Running background backtest: {strategy_name} (ID: {backtest_id})")
 
@@ -458,6 +651,67 @@ async def run_backtest_background(
         strategy = registry.get(strategy_name)
         if strategy is None:
             raise ValueError(f"Strategy '{strategy_name}' is not registered")
+
+        ticker = str(parameters.get("ticker", "AAPL")).upper()
+
+        if pending_run_id is not None:
+            from backend.services.strategy_framework import StrategyPreflightService
+
+            _merge_backtest_run_metrics(
+                db_path, pending_run_id, {"phase": "preflight"}, conn=metrics_conn
+            )
+            preflight = StrategyPreflightService(db_path).evaluate(
+                strategy_name=strategy_name,
+                strategy=strategy,
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if not preflight.ready:
+                issue_messages = "; ".join(issue.message for issue in preflight.issues)
+                fail_metrics = {
+                    "backtest_id": backtest_id,
+                    "status": "failed",
+                    "phase": "failed",
+                    "error": f"Preflight failed: {issue_messages}",
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                }
+                cur_pf = metrics_conn.cursor()
+                cur_pf.execute(
+                    "UPDATE backtest_runs SET completed_at = ?, metrics = ? WHERE id = ?",
+                    (datetime.utcnow().isoformat(), json.dumps(fail_metrics), pending_run_id),
+                )
+                metrics_conn.commit()
+                await broadcast_websocket_message(
+                    {
+                        "type": "backtest_status",
+                        "data": {
+                            "strategy_name": strategy_name,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                            "initial_capital": initial_capital,
+                            "final_value": initial_capital,
+                            "total_return": 0.0,
+                            "annualized_return": 0.0,
+                            "sharpe_ratio": 0.0,
+                            "max_drawdown": 0.0,
+                            "win_rate": 0.0,
+                            "total_trades": 0,
+                            "avg_trade_return": 0.0,
+                            "volatility": 0.0,
+                            "timestamp": datetime.utcnow(),
+                            "metrics": fail_metrics,
+                            "equity_curve": [],
+                        },
+                    }
+                )
+                return
+
+            _merge_backtest_run_metrics(
+                db_path, pending_run_id, {"phase": "loading_data"}, conn=metrics_conn
+            )
+
         strategy_class = strategy.create_backtrader_strategy(parameters)
         execution_mode = str(parameters.get("execution_mode", "backtrader")).lower()
 
@@ -465,6 +719,8 @@ async def run_backtest_background(
         min_bars_required = max(
             int(parameters.get("short_window", 10)),
             int(parameters.get("long_window", 30)),
+            int(parameters.get("vol_lookback", 0) or 0),
+            int(parameters.get("momentum_lookback", 0) or 0),
             2,
         )
         lookback_days = max(min_bars_required * 3, 60)
@@ -474,6 +730,10 @@ async def run_backtest_background(
         conn = sqlite3.connect(app_state["database_path"])
         try:
             cur = conn.cursor()
+            if pending_run_id is not None:
+                _merge_backtest_run_metrics(
+                    db_path, pending_run_id, {"phase": "loading_prices"}, conn=metrics_conn
+                )
 
             # Prefer tickers with predictions in-range.
             cur.execute("""
@@ -552,17 +812,27 @@ async def run_backtest_background(
                 f"{start_date.date().isoformat()} to {end_date.date().isoformat()}"
             )
 
+        if pending_run_id is not None:
+            _merge_backtest_run_metrics(
+                db_path, pending_run_id, {"phase": "executing"}, conn=metrics_conn
+            )
+
         if execution_mode == "signal":
             logger.info(f"Starting signal execution for {strategy_name}")
-            execution = _run_signal_execution_backtest(
-                strategy=strategy,
-                strategy_name=strategy_name,
-                start_date=start_date,
-                end_date=end_date,
-                initial_capital=initial_capital,
-                parameters=parameters,
-                price_frames=price_frames,
-            )
+            sig_conn = sqlite3.connect(app_state["database_path"])
+            try:
+                execution = _run_signal_execution_backtest(
+                    strategy=strategy,
+                    strategy_name=strategy_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_capital=initial_capital,
+                    parameters=parameters,
+                    price_frames=price_frames,
+                    signal_db_conn=sig_conn,
+                )
+            finally:
+                sig_conn.close()
             final_value = execution["final_value"]
             total_return = execution["total_return"]
             annualized_return = execution["annualized_return"]
@@ -578,6 +848,7 @@ async def run_backtest_background(
             signal_records = execution["signal_records"]
             order_intents = execution["order_intents"]
             order_fills = execution["order_fills"]
+            decision_markers = _decision_markers_from_signal_execution(execution)
             if strategy_name == "recursive_forecast":
                 reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
                 no_model_count = int(reason_counts.get("no_model_available", 0) or 0)
@@ -592,7 +863,9 @@ async def run_backtest_background(
         else:
             # Set up Backtrader
             cerebro = bt.Cerebro()
-            cerebro.addstrategy(strategy_class, **parameters)
+            cerebro.addstrategy(
+                strategy_class, **_backtrader_strategy_kwargs(strategy_class, parameters)
+            )
             for ticker, df in price_frames.items():
                 data = bt.feeds.PandasData(
                     dataname=df,
@@ -645,6 +918,7 @@ async def run_backtest_background(
             signal_records = []
             order_intents = []
             order_fills = []
+            decision_markers = _normalize_bt_decision_markers(getattr(strat, "decision_markers", None))
 
         # Store results in database
         params_hash = compute_params_hash(parameters)
@@ -656,54 +930,86 @@ async def run_backtest_background(
         cur = conn.cursor()
         cur.execute("PRAGMA foreign_keys = ON;")
 
-        cur.execute(
-            """
-            INSERT INTO backtest_runs (
-                name, params, params_hash, variant_label, optimizer_mode, experiment_id,
-                client_backtest_id, started_at, completed_at, initial_capital,
-                final_value, total_return, annualized_return, sharpe_ratio,
-                max_drawdown, win_rate, total_trades, avg_trade_return,
-                volatility, equity_curve, metrics
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                strategy_name,
-                json.dumps(parameters),
-                params_hash,
-                variant_label,
-                optimizer_mode,
-                experiment_id,
-                backtest_id,
-                start_date.isoformat(),
-                datetime.utcnow().isoformat(),
-                initial_capital,
-                final_value,
-                total_return,
-                annualized_return,
-                sharpe_ratio,
-                max_drawdown,
-                win_rate,
-                total_trades,
-                avg_trade_return,
-                volatility,
-                json.dumps(equity_curve),
-                json.dumps(
-                    {
-                        "backtest_id": backtest_id,
-                        "status": "completed",
-                        "sharpe_ratio": sharpe_ratio,
-                        "max_drawdown": max_drawdown,
-                        "win_rate": win_rate,
-                        "total_trades": total_trades,
-                        "avg_trade_return": avg_trade_return,
-                        "volatility": volatility,
-                        "execution_summary": execution_summary,
-                        "params_hash": params_hash,
-                    }
+        completed_metrics = {
+            "backtest_id": backtest_id,
+            "status": "completed",
+            "phase": "completed",
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "sharpe_ratio": sharpe_ratio,
+            "max_drawdown": max_drawdown,
+            "win_rate": win_rate,
+            "total_trades": total_trades,
+            "avg_trade_return": avg_trade_return,
+            "volatility": volatility,
+            "execution_summary": execution_summary,
+            "params_hash": params_hash,
+            "decision_markers": decision_markers,
+        }
+
+        if pending_run_id is not None:
+            cur.execute(
+                """
+                UPDATE backtest_runs SET
+                    completed_at = ?,
+                    final_value = ?, total_return = ?, annualized_return = ?,
+                    sharpe_ratio = ?, max_drawdown = ?, win_rate = ?, total_trades = ?,
+                    avg_trade_return = ?, volatility = ?, equity_curve = ?, metrics = ?
+                WHERE id = ?
+                """,
+                (
+                    datetime.utcnow().isoformat(),
+                    final_value,
+                    total_return,
+                    annualized_return,
+                    sharpe_ratio,
+                    max_drawdown,
+                    win_rate,
+                    total_trades,
+                    avg_trade_return,
+                    volatility,
+                    json.dumps(equity_curve),
+                    json.dumps(completed_metrics),
+                    pending_run_id,
                 ),
-            ),
-        )
-        run_row_id = int(cur.lastrowid)
+            )
+            run_row_id = pending_run_id
+        else:
+            cur.execute(
+                """
+                INSERT INTO backtest_runs (
+                    name, params, params_hash, variant_label, optimizer_mode, experiment_id,
+                    client_backtest_id, started_at, completed_at, initial_capital,
+                    final_value, total_return, annualized_return, sharpe_ratio,
+                    max_drawdown, win_rate, total_trades, avg_trade_return,
+                    volatility, equity_curve, metrics
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy_name,
+                    json.dumps(parameters),
+                    params_hash,
+                    variant_label,
+                    optimizer_mode,
+                    experiment_id,
+                    backtest_id,
+                    start_date.isoformat(),
+                    datetime.utcnow().isoformat(),
+                    initial_capital,
+                    final_value,
+                    total_return,
+                    annualized_return,
+                    sharpe_ratio,
+                    max_drawdown,
+                    win_rate,
+                    total_trades,
+                    avg_trade_return,
+                    volatility,
+                    json.dumps(equity_curve),
+                    json.dumps(completed_metrics),
+                ),
+            )
+            run_row_id = int(cur.lastrowid)
 
         conn.commit()
         conn.close()
@@ -733,17 +1039,7 @@ async def run_backtest_background(
                 "avg_trade_return": avg_trade_return,
                 "volatility": volatility,
                 "timestamp": datetime.utcnow(),
-                "metrics": {
-                    "backtest_id": backtest_id,
-                    "status": "completed",
-                    "sharpe_ratio": sharpe_ratio,
-                    "max_drawdown": max_drawdown,
-                    "win_rate": win_rate,
-                    "total_trades": total_trades,
-                    "avg_trade_return": avg_trade_return,
-                        "volatility": volatility,
-                        "execution_summary": execution_summary,
-                },
+                "metrics": completed_metrics,
                 "equity_curve": equity_curve
             }
         })
@@ -754,39 +1050,49 @@ async def run_backtest_background(
 
         # Store failure in database
         try:
+            ph = compute_params_hash(parameters)
+            vl = (parameters or {}).get("variant_label") or variant_label_from_params(parameters)
+            fail_row_metrics = {
+                "backtest_id": backtest_id,
+                "status": "failed",
+                "phase": "failed",
+                "error": error_message,
+                "params_hash": ph,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            }
             conn = sqlite3.connect(app_state["database_path"])
             try:
                 cur = conn.cursor()
-                ph = compute_params_hash(parameters)
-                vl = (parameters or {}).get("variant_label") or variant_label_from_params(parameters)
-                cur.execute(
-                    """
-                    INSERT INTO backtest_runs (
-                        name, params, params_hash, variant_label, optimizer_mode, experiment_id,
-                        client_backtest_id, started_at, completed_at, metrics
+                if pending_run_id is not None:
+                    cur.execute(
+                        """
+                        UPDATE backtest_runs SET completed_at = ?, metrics = ? WHERE id = ?
+                        """,
+                        (datetime.utcnow().isoformat(), json.dumps(fail_row_metrics), pending_run_id),
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        strategy_name,
-                        json.dumps(parameters),
-                        ph,
-                        vl,
-                        (parameters or {}).get("optimizer_mode"),
-                        (parameters or {}).get("experiment_id"),
-                        backtest_id,
-                        start_date.isoformat(),
-                        datetime.utcnow().isoformat(),
-                        json.dumps(
-                            {
-                                "backtest_id": backtest_id,
-                                "status": "failed",
-                                "error": error_message,
-                                "params_hash": ph,
-                            }
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO backtest_runs (
+                            name, params, params_hash, variant_label, optimizer_mode, experiment_id,
+                            client_backtest_id, started_at, completed_at, metrics
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            strategy_name,
+                            json.dumps(parameters),
+                            ph,
+                            vl,
+                            (parameters or {}).get("optimizer_mode"),
+                            (parameters or {}).get("experiment_id"),
+                            backtest_id,
+                            start_date.isoformat(),
+                            datetime.utcnow().isoformat(),
+                            json.dumps(fail_row_metrics),
                         ),
-                    ),
-                )
+                    )
                 conn.commit()
             finally:
                 conn.close()
@@ -809,13 +1115,15 @@ async def run_backtest_background(
                     "avg_trade_return": 0.0,
                     "volatility": 0.0,
                     "timestamp": datetime.utcnow(),
-                    "metrics": {
-                        "backtest_id": backtest_id,
-                        "status": "failed",
-                        "error": error_message
-                    },
+                    "metrics": fail_row_metrics,
                     "equity_curve": []
                 }
             })
         except Exception as db_e:
             logger.error(f"Failed to store backtest failure: {str(db_e)}")
+    finally:
+        if metrics_conn is not None:
+            try:
+                metrics_conn.close()
+            except Exception:
+                pass

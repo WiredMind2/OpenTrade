@@ -451,7 +451,6 @@ export interface MonteCarloResult {
   probability_positive_return: number;
   simulations: SimulationResult[];
   distribution_summary: Record<string, any>;
->>>>>>> Stashed changes
 }
 
 /** One strategy row within a ticker's leaderboard slice (matches backend TickerStrategyRow). */
