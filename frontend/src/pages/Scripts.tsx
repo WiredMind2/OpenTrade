@@ -50,8 +50,8 @@ export default function Scripts() {
   const [pipelineSteps, setPipelineSteps] = useState('')
 
   // MA Prediction form states
-  const [maStartDate, setMaStartDate] = useState('2020-01-01')
-  const [maEndDate, setMaEndDate] = useState('2023-12-31')
+  const [maStartDate, setMaStartDate] = useState('2025-01-01')
+  const [maEndDate, setMaEndDate] = useState('2025-12-31')
   const [skipOptimization, setSkipOptimization] = useState(false)
   const [shortMaRange, setShortMaRange] = useState('3,5,7')
   const [mediumMaRange, setMediumMaRange] = useState('15,20,25')

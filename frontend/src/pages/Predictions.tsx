@@ -90,8 +90,8 @@ export default function Predictions() {
   const [predictionProjections, setPredictionProjections] = useState<PredictionProjection[]>([])
   const [projectionAnchorWarning, setProjectionAnchorWarning] = useState<string | null>(null)
 
-  const [backtestStartDate, setBacktestStartDate] = useState('2023-01-01')
-  const [backtestEndDate, setBacktestEndDate] = useState('2023-12-31')
+  const [backtestStartDate, setBacktestStartDate] = useState('2025-01-01')
+  const [backtestEndDate, setBacktestEndDate] = useState('2025-12-31')
   const [backtestRunning, setBacktestRunning] = useState(false)
   const [backtestPollPhase, setBacktestPollPhase] = useState<string | undefined>(undefined)
   const [backtestError, setBacktestError] = useState<string | null>(null)
