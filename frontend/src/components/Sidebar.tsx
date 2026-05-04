@@ -3,7 +3,6 @@ import { Link, useLocation } from 'react-router-dom'
 import {
   TrendingUp,
   BarChart3,
-  Wallet,
   Menu,
   X,
   Activity,
@@ -23,7 +22,6 @@ interface SidebarProps {
 const navigation = [
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
-  { name: 'Portfolio', href: '/portfolio', icon: Wallet },
   { name: 'Strategies', href: '/strategies', icon: Brain },
   { name: 'Performance', href: '/strategy-performance', icon: LineChart },
   { name: 'Scripts', href: '/scripts', icon: Settings },
