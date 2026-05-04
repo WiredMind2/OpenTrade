@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard,
   TrendingUp,
   BarChart3,
   Wallet,
@@ -14,7 +13,6 @@ import {
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
-import { Separator } from './ui/separator'
 import { ThemeToggle } from './ThemeToggle'
 
 interface SidebarProps {
@@ -22,7 +20,6 @@ interface SidebarProps {
 }
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
   { name: 'Portfolio', href: '/portfolio', icon: Wallet },

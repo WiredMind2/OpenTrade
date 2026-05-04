@@ -1,10 +1,8 @@
-import React, { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
-  executeScript,
   listScriptExecutions,
   runPipeline,
   generateMAPredictions,
-  getMAPredictionStatus
 } from '../services/api'
 import websocketService from '../services/websocket'
 import { ScriptStatusMessage, PipelineStatusMessage } from '../types'
@@ -24,8 +22,6 @@ import {
   TrendingUp,
   Zap
 } from 'lucide-react'
-import { Separator } from '../components/ui/separator'
-
 interface ScriptExecution {
   execution_id: string
   script_name: string
@@ -44,7 +40,6 @@ interface PipelineExecution extends ScriptExecution {
 export default function Scripts() {
   const [executions, setExecutions] = useState<ScriptExecution[]>([])
   const [pipelineExecution, setPipelineExecution] = useState<PipelineExecution | null>(null)
-  const [runningScripts, setRunningScripts] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -94,42 +89,6 @@ export default function Scripts() {
       }
     }
   }, [])
-
-  const handleExecuteScript = async (scriptName: string, parameters: Record<string, any> = {}) => {
-    try {
-      setError(null)
-      const execution = await executeScript(scriptName, parameters)
-      setRunningScripts(prev => new Set(prev).add(execution.execution_id))
-
-      // Register WebSocket listener for status updates
-      const cleanup = websocketService.registerListener('script_status', (message: ScriptStatusMessage) => {
-        if (message.data.execution_id === execution.execution_id) {
-          if (message.data.status !== 'running') {
-            setRunningScripts(prev => {
-              const newSet = new Set(prev)
-              newSet.delete(execution.execution_id)
-              return newSet
-            })
-            // Update executions list
-            setExecutions(prev => prev.map(ex =>
-              ex.execution_id === execution.execution_id
-                ? { ...ex, status: message.data.status, end_time: message.data.end_time, duration_seconds: message.data.duration_seconds }
-                : ex
-            ))
-            cleanup()
-            // Remove from cleanups array
-            scriptCleanupsRef.current = scriptCleanupsRef.current.filter(c => c !== cleanup)
-          }
-        }
-      })
-
-      scriptCleanupsRef.current.push(cleanup)
-
-      await fetchExecutions()
-    } catch (e: any) {
-      setError(e.message || `Failed to execute ${scriptName}`)
-    }
-  }
 
   const handleRunPipeline = async () => {
     try {
@@ -508,11 +467,6 @@ export default function Scripts() {
           </CardContent>
         </Card>
       )}
-
-      <Separator />
-
-
-      <Separator />
 
       {/* Executions History */}
       <Card>
