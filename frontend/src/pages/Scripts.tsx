@@ -43,7 +43,7 @@ export default function Scripts() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const scriptCleanupsRef = useRef<(() => void)[]>([])
+  const maCleanupRef = useRef<(() => void) | null>(null)
   const pipelineCleanupRef = useRef<(() => void) | null>(null)
 
   // Form states for different scripts
@@ -78,11 +78,12 @@ export default function Scripts() {
     fetchExecutions()
   }, [])
 
-  // Cleanup WebSocket listeners on unmount
   useEffect(() => {
     return () => {
-      scriptCleanupsRef.current.forEach(cleanup => cleanup())
-      scriptCleanupsRef.current = []
+      if (maCleanupRef.current) {
+        maCleanupRef.current()
+        maCleanupRef.current = null
+      }
       if (pipelineCleanupRef.current) {
         pipelineCleanupRef.current()
         pipelineCleanupRef.current = null
@@ -138,19 +139,22 @@ export default function Scripts() {
       const execution = await generateMAPredictions(requestData)
       setMaExecution(execution)
 
-      // Register WebSocket listener for MA prediction status
+      if (maCleanupRef.current) {
+        maCleanupRef.current()
+        maCleanupRef.current = null
+      }
+
       const cleanup = websocketService.registerListener('script_status', (message: ScriptStatusMessage) => {
         if (message.data.execution_id === execution.execution_id) {
           if (message.data.status !== 'running') {
             setMaExecution(prev => prev ? { ...prev, ...message.data } : null)
             cleanup()
-            // Remove from cleanups array
-            scriptCleanupsRef.current = scriptCleanupsRef.current.filter(c => c !== cleanup)
+            maCleanupRef.current = null
           }
         }
       })
 
-      scriptCleanupsRef.current.push(cleanup)
+      maCleanupRef.current = cleanup
 
       await fetchExecutions()
     } catch (e: any) {
