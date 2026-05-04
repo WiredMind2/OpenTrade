@@ -102,7 +102,9 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
   const fetchNews = async () => {
     try {
       setError(null)
-      const data = await getNews(ticker)
+      console.log('Fetching news for ticker:', ticker || 'global')
+      const data = await getNews(ticker || '')
+      console.log('Fetched news articles:', data.length)
       setArticles(data.slice(0, 10))
     } catch (err) {
       console.error('Failed to fetch news:', err)
@@ -130,7 +132,7 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
     return (
       <Card className="h-full">
         <CardHeader>
-          <CardTitle>{ticker} News</CardTitle>
+          <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
@@ -151,7 +153,7 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
     return (
       <Card className="h-full">
         <CardHeader>
-          <CardTitle>{ticker} News</CardTitle>
+          <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-red-500 text-sm">{error}</p>
@@ -164,10 +166,12 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
     return (
       <Card className="h-full">
         <CardHeader>
-          <CardTitle>{ticker} News</CardTitle>
+          <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground text-sm">No news available for {ticker}</p>
+          <p className="text-muted-foreground text-sm">
+            {ticker ? `No news available for ${ticker}` : 'No news available'}
+          </p>
         </CardContent>
       </Card>
     )
@@ -176,7 +180,7 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="flex-shrink-0">
-        <CardTitle>{ticker} News</CardTitle>
+        <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         <div className="flex gap-1 mt-2">
           <Button
             variant={sentimentFilter === 'all' ? 'default' : 'outline'}
