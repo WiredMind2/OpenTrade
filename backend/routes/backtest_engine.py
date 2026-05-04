@@ -3,6 +3,7 @@ Backtest execution engine for the Trading Backtester API.
 """
 import json
 import sqlite3
+import uuid
 from collections import Counter
 import numpy as np
 import pandas as pd
@@ -400,14 +401,15 @@ def persist_optimizer_evaluation_run(
         cur.execute(
             """
             INSERT INTO backtest_runs (
-                name, params, params_hash, variant_label, optimizer_mode, experiment_id,
+                id, name, params, params_hash, variant_label, optimizer_mode, experiment_id,
                 client_backtest_id, started_at, completed_at, initial_capital,
                 final_value, total_return, annualized_return, sharpe_ratio,
                 max_drawdown, win_rate, total_trades, avg_trade_return,
                 volatility, equity_curve, metrics
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                str(uuid.uuid4()),
                 strategy_name,
                 json.dumps(parameters),
                 params_hash,
@@ -943,17 +945,7 @@ async def run_backtest_background(
                 "avg_trade_return": avg_trade_return,
                 "volatility": volatility,
                 "timestamp": datetime.utcnow(),
-                "metrics": {
-                    "backtest_id": backtest_id,
-                    "status": "completed",
-                    "sharpe_ratio": sharpe_ratio,
-                    "max_drawdown": max_drawdown,
-                    "win_rate": win_rate,
-                    "total_trades": total_trades,
-                    "avg_trade_return": avg_trade_return,
-                        "volatility": volatility,
-                        "execution_summary": execution_summary,
-                },
+                "metrics": completed_metrics,
                 "equity_curve": equity_curve
             }
         })
