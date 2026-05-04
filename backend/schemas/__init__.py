@@ -61,7 +61,8 @@ class PredictionResponse(BaseModel):
     predicted_return: float
     confidence: float
     timestamp: datetime
-    model_version: str
+    strategy_name: Optional[str] = None
+    model_id: Optional[str] = None
     features_used: List[str]
     feature_schema_version: Optional[str] = None
     interval_lower: Optional[float] = None

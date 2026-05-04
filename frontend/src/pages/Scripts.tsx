@@ -300,7 +300,7 @@ export default function Scripts() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Scripts</h1>
           <p className="text-muted-foreground">
-            Execute batch operations and manage automated pipelines for data processing and model training
+            Execute batch operations and manage automated pipelines for data processing and strategy training
           </p>
         </div>
         <Button onClick={fetchExecutions} variant="outline">

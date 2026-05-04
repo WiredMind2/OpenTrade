@@ -8,7 +8,6 @@ export interface StrategyMetadata {
   type: string
   can_train: boolean
   parameters_schema: any
-  model_info?: any
 }
 
 export interface StrategyTrainRequest {

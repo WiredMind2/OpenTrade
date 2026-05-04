@@ -23,7 +23,7 @@ const navigation = [
   { name: 'Market Brief', href: '/brief', icon: Newspaper },
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
-  { name: 'Performance', href: '/strategy-performance', icon: LineChart },
+  { name: 'Strategy Performance', href: '/strategy-performance', icon: LineChart },
   { name: 'Scripts', href: '/scripts', icon: Settings },
   { name: 'Recommendations', href: '/recommendations', icon: BookOpen },
 ]

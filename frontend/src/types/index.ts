@@ -14,6 +14,8 @@ export interface PredictionRequest {
   ticker: string;
   horizon: string;
   context?: Record<string, any>;
+  strategy_name?: string;
+  strategy_params?: Record<string, any>;
   /** ISO datetime: use features only through this instant (walk-forward simulation). */
   as_of?: string;
   /** When false with as_of, skips writing to sentiment_predictions (default false if as_of set). */
@@ -28,7 +30,8 @@ export interface PredictionResponse {
   predicted_return: number;
   confidence: number;
   timestamp: string;
-  model_version: string;
+  strategy_name?: string | null;
+  model_id?: string | null;
   features_used: string[];
   feature_schema_version?: string;
   interval_lower?: number | null;
@@ -311,7 +314,7 @@ export interface PredictionProjectionPoint {
 export interface PredictionProjection {
   id: string;
   ticker: string;
-  modelName: string;
+  strategy_name: string;
   horizon: number; // in days
   points: PredictionProjectionPoint[];
   confidence: number;

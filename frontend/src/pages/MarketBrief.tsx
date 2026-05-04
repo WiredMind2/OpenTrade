@@ -365,7 +365,7 @@ export default function MarketBrief() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               <Sparkles className="h-4 w-4 text-primary" />
-              Model Bias
+              Prediction Bias
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -432,7 +432,7 @@ export default function MarketBrief() {
               <ArrowUpRight className="h-5 w-5 text-success" />
               Constructive Watchlist
             </CardTitle>
-            <CardDescription>Names with positive model returns in recent predictions.</CardDescription>
+            <CardDescription>Names with positive predicted returns in recent signals.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             {bullish.length === 0 ? (
@@ -465,7 +465,7 @@ export default function MarketBrief() {
               <ArrowDownRight className="h-5 w-5 text-destructive" />
               Caution Watchlist
             </CardTitle>
-            <CardDescription>Names where models lean negative or risk is rising.</CardDescription>
+            <CardDescription>Names where predictions lean negative or risk is rising.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             {bearish.length === 0 ? (

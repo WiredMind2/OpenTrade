@@ -135,6 +135,7 @@ class ProjectionSeriesRequest(BaseModel):
 async def make_prediction(request: PredictionRequest) -> PredictionResponse:
     """Core prediction routine (kept patchable for tests)."""
     app_state = _get_app_state()
+    ml_model_key = f"lightgbm_{request.horizon}"
 
     logger.info(f"Prediction request received: ticker={request.ticker}, horizon={request.horizon}")
 
@@ -165,7 +166,8 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
                 predicted_return=predicted_return,
                 confidence=max(0.0, min(1.0, confidence)),
                 timestamp=_utc_now(),
-                model_version=strategy_name,
+                strategy_name=strategy_name,
+                model_id=None,
                 features_used=[],
                 metadata={
                     "strategy_name": strategy_name,
@@ -176,7 +178,7 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
 
         if os.getenv("ML_PREDICTION_V2_ENABLED", "true").lower() not in {"true", "1", "yes"}:
             raise HTTPException(status_code=503, detail="ML prediction v2 is disabled by configuration")
-        model_key = f"lightgbm_{request.horizon}"
+        model_key = ml_model_key
         models_loaded = app_state.get("models_loaded") or {}
         if model_key not in models_loaded:
             raise HTTPException(status_code=404, detail=f"No model available for horizon {request.horizon}")
@@ -196,7 +198,8 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
                     predicted_return=0.0,
                     confidence=0.1,
                     timestamp=_utc_now(),
-                    model_version=model_key,
+                    strategy_name=None,
+                    model_id=model_key,
                     features_used=[],
                     metadata={"fallback": True, "reason": "no_market_context"},
                 )
@@ -220,7 +223,8 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
             predicted_return=result.predicted_return,
             confidence=result.confidence,
             timestamp=result.timestamp,
-            model_version=result.model.model_version,
+            strategy_name=None,
+            model_id=result.model.model_name,
             features_used=result.features_used,
             feature_schema_version=result.model.feature_schema_version,
             interval_lower=result.intervals.lower if result.intervals else None,
@@ -252,14 +256,15 @@ async def make_prediction(request: PredictionRequest) -> PredictionResponse:
         logger.error(f"Prediction failed for {request.ticker}: {str(e)}")
         db_path = app_state.get("database_path")
         if isinstance(db_path, str):
-            _persist_fallback_prediction(db_path, request.ticker, request.horizon, model_key)
+            _persist_fallback_prediction(db_path, request.ticker, request.horizon, ml_model_key)
         return PredictionResponse(
             ticker=request.ticker.upper(),
             horizon=request.horizon,
             predicted_return=0.0,
             confidence=0.1,
             timestamp=_utc_now(),
-            model_version=model_key,
+            strategy_name=None,
+            model_id=ml_model_key,
             features_used=[],
             metadata={"fallback": True, "error": str(e)},
         )
@@ -331,7 +336,8 @@ async def get_recent_predictions(
                 predicted_return=row['predicted_return'],
                 confidence=row.get('confidence', 0.5),
                 timestamp=pd.to_datetime(row['produced_at']).to_pydatetime(),
-                model_version=row['model'],
+                strategy_name=None,
+                model_id=row['model'],
                 features_used=row.get('features_used', '').split(',') if row.get('features_used') else [],
                 feature_schema_version=metadata.get("feature_schema_version"),
                 interval_lower=(metadata.get("intervals") or {}).get("lower"),
@@ -449,7 +455,7 @@ async def get_prediction_projections(request: ProjectionSeriesRequest):
             {
                 "id": f"{symbol}_{strategy_name}_{int(_utc_now().timestamp())}",
                 "ticker": symbol,
-                "modelName": strategy_name,
+                "strategy_name": strategy_name,
                 "horizon": request.horizon_days,
                 "points": points,
                 "confidence": round(avg_confidence, 4),

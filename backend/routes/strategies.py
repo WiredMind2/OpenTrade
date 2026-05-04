@@ -538,10 +538,6 @@ async def get_strategy(name: str):
         'can_train': strategy.can_train
     }
 
-    # For ML strategies, include model info (None for Phase 1)
-    if strategy.type == 'ml':
-        metadata['model_info'] = None  # Placeholder for future ML model info
-
     return metadata
 
 
@@ -573,7 +569,7 @@ async def preflight_strategy(name: str, req: StrategyPreflightRequest):
 
 @router.post("/strategies/{name}/train", response_model=Dict[str, Any], tags=["Strategies"])
 async def train_strategy(name: str, request: TrainRequest):
-    """Train a strategy's model with the provided configuration."""
+    """Train a strategy using either parameter optimization or strategy-specific training."""
     from backend.main import app_state  # Import here to avoid circular imports
 
     registry = app_state.get("strategy_registry")
