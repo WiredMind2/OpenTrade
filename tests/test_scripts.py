@@ -62,42 +62,6 @@ class TestScriptEndpoints:
         assert "start_time" in data
 
     @patch('backend.routes.scripts.run_script_async')
-    def test_execute_script_generate_sentiment_predictions(self, mock_run_script):
-        """Test executing generate_sentiment_predictions script."""
-        mock_run_script.return_value = None
-
-        payload = {
-            "script_name": "generate_sentiment_predictions",
-            "parameters": {
-                "horizon": 1,
-                "model": "models/lightgbm_1d_top10.joblib"
-            }
-        }
-        response = self.client.post("/scripts/execute", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["script_name"] == "generate_sentiment_predictions"
-        assert data["status"] == "running"
-
-    @patch('backend.routes.scripts.run_script_async')
-    def test_execute_script_generate_trading_predictions(self, mock_run_script):
-        """Test executing generate_trading_predictions script."""
-        mock_run_script.return_value = None
-
-        payload = {
-            "script_name": "generate_trading_predictions",
-            "parameters": {
-                "start": "2020-01-01",
-                "end": "2025-01-01"
-            }
-        }
-        response = self.client.post("/scripts/execute", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["script_name"] == "generate_trading_predictions"
-        assert data["status"] == "running"
-
-    @patch('backend.routes.scripts.run_script_async')
     def test_execute_script_backtest_runner(self, mock_run_script):
         """Test executing backtest_runner script."""
         mock_run_script.return_value = None
@@ -157,17 +121,19 @@ class TestScriptEndpoints:
         assert data["status"] == "running"
         assert data["script_name"] == "train_sentiment_model"
 
-    @patch('backend.routes.scripts.script_executions')
-    def test_get_script_status_running(self, mock_executions):
-        """Test getting status of running script."""
+    def test_get_script_status_running(self):
+        """Test getting status of running script from script_executions."""
+        from backend.routes.scripts import script_executions
+
         execution_id = "test_exec_456"
-        mock_executions.__getitem__.return_value = {
-            "script_name": "generate_sentiment_predictions",
+        script_executions.clear()
+        script_executions[execution_id] = {
+            "script_name": "backtest_runner",
             "status": "running",
             "start_time": datetime.utcnow(),
             "output": "Processing articles...",
             "error": "",
-            "parameters": {}
+            "parameters": {},
         }
 
         response = self.client.get(f"/scripts/status/{execution_id}")
@@ -195,7 +161,7 @@ class TestScriptEndpoints:
             "end_time": datetime.utcnow(),
         }
         script_executions["exec_2"] = {
-            "script_name": "generate_trading_predictions",
+            "script_name": "backtest_runner",
             "status": "running",
             "start_time": datetime.utcnow()
         }
@@ -208,7 +174,7 @@ class TestScriptEndpoints:
         # executions can be in any order, so just check that both are present
         script_names = {e["script_name"] for e in data["executions"]}
         assert "train_sentiment_model" in script_names
-        assert "generate_trading_predictions" in script_names
+        assert "backtest_runner" in script_names
 
     @patch('backend.routes.scripts.run_pipeline_async')
     def test_run_pipeline_default_steps(self, mock_run_pipeline):
@@ -361,14 +327,14 @@ class TestScriptEndpoints:
         assert data["duration_seconds"] is None
 
     @patch('backend.routes.scripts.run_script_async')
-    def test_get_script_status_running(self, mock_run_script):
-        """Test getting status of running script."""
+    def test_get_script_status_running_after_execute(self, mock_run_script):
+        """Test getting status of running script after POST /scripts/execute."""
         mock_run_script.return_value = None
         
         # Execute a script
         payload = {
-            "script_name": "generate_sentiment_predictions",
-            "parameters": {"input": "data/articles.csv"}
+            "script_name": "backtest_runner",
+            "parameters": {"start": "2023-01-01", "end": "2023-12-31"}
         }
         exec_response = self.client.post("/scripts/execute", json=payload)
         assert exec_response.status_code == 200
@@ -381,4 +347,4 @@ class TestScriptEndpoints:
         
         data = response.json()
         assert data["status"] == "running"
-        assert data["script_name"] == "generate_sentiment_predictions"
+        assert data["script_name"] == "backtest_runner"

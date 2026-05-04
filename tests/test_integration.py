@@ -216,59 +216,6 @@ class TestIntegrationWorkflow:
                     gc.collect()
                     time.sleep(0.05)
 
-    def test_data_ingestion_to_prediction_workflow(self):
-        """Test complete workflow from data ingestion to prediction."""
-        # Step 1: Insert test price data
-        conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO price_daily
-            (ticker, date, open, high, low, close, adjusted_close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("AAPL", "2024-01-01", 150.0, 152.0, 148.0, 151.0, 151.0, 1000000))
-        conn.execute("""
-            INSERT INTO price_daily
-            (ticker, date, open, high, low, close, adjusted_close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("AAPL", "2024-01-02", 151.0, 153.0, 149.0, 152.0, 152.0, 1000000))
-        conn.commit()
-
-        # Step 2: Insert test article data
-        conn.execute("""
-            INSERT INTO articles
-            (source, url, canonical_timestamp, published_at, title, author, content, sentiment_score, ticker)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, ("test_source", "http://test.com", "2024-01-01T10:00:00", "2024-01-01T10:00:00",
-              "AAPL shows strong growth", "Test Author", "Apple stock is performing well", 0.8, "AAPL"))
-        conn.commit()
-        conn.close()
-
-        # Step 3: Test prediction endpoint
-        with patch('routes.predictions.make_prediction') as mock_predict:
-            from schemas import PredictionResponse
-            mock_predict.return_value = PredictionResponse(
-                ticker="AAPL",
-                horizon="1d",
-                predicted_return=0.025,
-                confidence=0.85,
-                timestamp=datetime.utcnow(),
-                model_version="1.0.0",
-                features_used=["price_change", "volume"],
-                metadata={}
-            )
-
-            payload = {
-                "ticker": "AAPL",
-                "horizon": "1d",
-                "context": {}
-            }
-            response = self.client.post("/predict", json=payload)
-            assert response.status_code == 200
-
-            data = response.json()
-            assert data["ticker"] == "AAPL"
-            assert data["horizon"] == "1d"
-            assert "predicted_return" in data
-
     def _seed_moving_average_preflight_data(self):
         from datetime import timedelta
 
@@ -410,7 +357,7 @@ class TestIntegrationWorkflow:
             script_status_message = {
                 "type": "script_status",
                 "data": {
-                    "script_name": "generate_trading_predictions",
+                    "script_name": "backtest_runner",
                     "status": "completed",
                     "execution_id": "test_exec_123",
                     "start_time": datetime.utcnow().isoformat(),
@@ -426,7 +373,7 @@ class TestIntegrationWorkflow:
             # Verify script status message was received
             assert len(received_messages) == 2
             assert received_messages[1]["type"] == "script_status"
-            assert received_messages[1]["data"]["script_name"] == "generate_trading_predictions"
+            assert received_messages[1]["data"]["script_name"] == "backtest_runner"
             assert received_messages[1]["data"]["status"] == "completed"
 
             # Test 3: Simulate pipeline status update
@@ -528,7 +475,7 @@ class TestIntegrationWorkflow:
                 # Set up the execution record
                 execution_id = "test_script_exec_123"
                 script_executions[execution_id] = {
-                    "script_name": "generate_trading_predictions",
+                    "script_name": "backtest_runner",
                     "status": "running",
                     "start_time": datetime.utcnow(),
                     "parameters": {},
@@ -538,13 +485,13 @@ class TestIntegrationWorkflow:
                 }
 
                 # Execute script
-                await run_script_async(execution_id, "generate_trading_predictions", {}, {})
+                await run_script_async(execution_id, "backtest_runner", {}, {})
 
                 # Verify WebSocket message was sent
                 assert len(received_messages) == 1
                 message = received_messages[0]
                 assert message["type"] == "script_status"
-                assert message["data"]["script_name"] == "generate_trading_predictions"
+                assert message["data"]["script_name"] == "backtest_runner"
                 assert message["data"]["status"] == "completed"
                 assert message["data"]["execution_id"] == execution_id
                 assert message["data"]["output"] == "Script output"

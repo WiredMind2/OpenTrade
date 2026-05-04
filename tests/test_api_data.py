@@ -197,61 +197,6 @@ class TestAPIDataEndpoints:
         response = self.client.get("/data/prices/AAPL?start_date=2024-01-02&end_date=2024-01-01")
         assert response.status_code == 422  # Validation error
 
-    def test_get_recent_predictions_success(self):
-        """Test getting recent predictions successfully."""
-        # Insert test prediction data
-        conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO sentiment_predictions (article_id, ticker, model, horizon, predicted_return, predicted_confidence, features_used, metadata, produced_at, training_run_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (1, "AAPL", "lightgbm_1d", "1d", 0.02, 0.85, "{}", "{}", datetime.utcnow().isoformat(), "test_run"))
-        conn.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt, enter_prob)
-            VALUES (?, ?, ?, ?)
-        """, ("AAPL", 0.1, datetime.utcnow().isoformat(), 0.75))
-        conn.commit()
-        conn.close()
-
-        response = self.client.get("/predictions/recent")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-        assert len(data) >= 1
-        assert "ticker" in data[0]
-        assert "predicted_return" in data[0]
-
-    def test_get_recent_predictions_empty(self):
-        """Test getting recent predictions when no data exists."""
-        response = self.client.get("/predictions/recent")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-        assert len(data) == 0
-
-    def test_get_trading_predictions_success(self):
-        """Test getting trading predictions successfully."""
-        # Insert test trading prediction data
-        conn = sqlite3.connect(self.temp_db.name)
-        conn.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt, enter_prob)
-            VALUES (?, ?, ?, ?)
-        """, ("AAPL", 0.1, datetime.utcnow().isoformat(), 0.75))
-        conn.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt, enter_prob)
-            VALUES (?, ?, ?, ?)
-        """, ("GOOGL", -0.05, datetime.utcnow().isoformat(), 0.82))
-        conn.commit()
-        conn.close()
-
-        response = self.client.get("/trading/predictions")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-        assert len(data) >= 2
-        assert data[0]["ticker"] in ["AAPL", "GOOGL"]
-        assert "suggested_position_pct" in data[0]
-        assert "confidence" in data[0]
-
     def test_get_price_data_database_error(self):
         """Test getting price data when database connection fails."""
         # Temporarily change database path to invalid path

@@ -167,8 +167,7 @@ class ScriptExecutionRequest(BaseModel):
     @classmethod
     def validate_script_name(cls, v):
         valid_scripts = [
-            'run_pipeline', 'train_sentiment_model', 'generate_sentiment_predictions',
-            'generate_trading_predictions', 'backtest_runner'
+            'run_pipeline', 'train_sentiment_model', 'backtest_runner', 'train_all_strategies'
         ]
         if v not in valid_scripts:
             raise ValueError(f'script_name must be one of: {", ".join(valid_scripts)}')
@@ -201,6 +200,65 @@ class PipelineStatus(BaseModel):
     status: str  # 'running', 'completed', 'failed'
     start_time: datetime
     estimated_completion: Optional[datetime] = None
+
+
+class BatchStrategyTrainingRequest(BaseModel):
+    """Batch signal-parameter training for every strategy that supports optimization training."""
+
+    ticker: str = Field(..., description="Primary ticker symbol")
+    start_date: str = Field(..., description="Training window start (YYYY-MM-DD)")
+    end_date: str = Field(..., description="Training window end (YYYY-MM-DD)")
+    initial_capital: float = Field(default=100000.0, gt=0)
+    objective: str = Field(default="balanced", description="sharpe|return|drawdown|balanced")
+    max_evals: int = Field(default=8, ge=1, le=50)
+    optimizer_mode: str = Field(default="grid", description="grid|random")
+    random_seed: Optional[int] = Field(default=None)
+    pair_ticker: Optional[str] = Field(
+        default=None,
+        description="Second leg for pairs_trading (omit to skip pairs in the batch)",
+    )
+    universe_limit: int = Field(default=8, ge=2, le=15)
+    stop_on_error: bool = Field(default=False, description="Stop on first strategy failure")
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker(cls, v: str) -> str:
+        s = (v or "").strip().upper()
+        if not s:
+            raise ValueError("ticker cannot be empty")
+        return s
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_date(cls, v: str) -> str:
+        try:
+            datetime.fromisoformat(v)
+            return v
+        except ValueError as e:
+            raise ValueError("Date must be in YYYY-MM-DD format") from e
+
+    @field_validator("end_date")
+    @classmethod
+    def validate_end_after_start(cls, v: str, info) -> str:
+        if "start_date" in info.data and v <= info.data["start_date"]:
+            raise ValueError("end_date must be after start_date")
+        return v
+
+    @field_validator("objective")
+    @classmethod
+    def validate_objective(cls, v: str) -> str:
+        o = (v or "balanced").lower()
+        if o not in {"sharpe", "return", "drawdown", "balanced"}:
+            raise ValueError("objective must be sharpe, return, drawdown, or balanced")
+        return o
+
+    @field_validator("optimizer_mode")
+    @classmethod
+    def validate_optimizer_mode(cls, v: str) -> str:
+        m = (v or "grid").strip().lower()
+        if m not in {"grid", "random"}:
+            raise ValueError("optimizer_mode must be grid or random")
+        return m
 
 
 class HistoricalDataPoint(BaseModel):
@@ -248,46 +306,6 @@ class ChartDataResponse(BaseModel):
         if not v or len(v.strip()) == 0:
             raise ValueError('ticker cannot be empty')
         return v.upper().strip()
-
-
-class MAPredictionRequest(BaseModel):
-    """Request model for generating MA predictions."""
-    start_date: str = Field(..., description="Start date for prediction generation (YYYY-MM-DD)")
-    end_date: str = Field(..., description="End date for prediction generation (YYYY-MM-DD)")
-    short_ma_range: Optional[List[int]] = Field(default=[3, 5, 7], description="Range of short MA periods for optimization")
-    medium_ma_range: Optional[List[int]] = Field(default=[15, 20, 25], description="Range of medium MA periods for optimization")
-    long_ma_range: Optional[List[int]] = Field(default=[40, 50, 60], description="Range of long MA periods for optimization")
-    skip_optimization: bool = Field(default=False, description="Skip optimization and use fixed MA periods")
-    fixed_short: Optional[int] = Field(default=5, description="Fixed short MA period when skip_optimization is true")
-    fixed_medium: Optional[int] = Field(default=20, description="Fixed medium MA period when skip_optimization is true")
-    fixed_long: Optional[int] = Field(default=50, description="Fixed long MA period when skip_optimization is true")
-
-    @field_validator('start_date', 'end_date')
-    @classmethod
-    def validate_date(cls, v):
-        try:
-            datetime.fromisoformat(v)
-            return v
-        except ValueError:
-            raise ValueError('Date must be in YYYY-MM-DD format')
-
-    @field_validator('end_date')
-    @classmethod
-    def validate_end_date(cls, v, info):
-        if 'start_date' in info.data and v <= info.data['start_date']:
-            raise ValueError('end_date must be after start_date')
-        return v
-
-
-class MAPredictionResponse(BaseModel):
-    """Response model for MA prediction generation."""
-    status: str  # 'running', 'completed', 'failed'
-    execution_id: str
-    start_time: datetime
-    end_time: Optional[datetime] = None
-    output: Optional[str] = None
-    error: Optional[str] = None
-    duration_seconds: Optional[float] = None
 
 
 class ModelPredictRequest(BaseModel):
@@ -405,3 +423,38 @@ class StrategyVariantTimeseriesResponse(BaseModel):
     granularity: str
     benchmark_points: List[StrategyTimeseriesPoint]
     variant_series: List[VariantSeriesPayload]
+
+
+class TickerStrategyRow(BaseModel):
+    """One strategy row within a ticker's leaderboard slice."""
+
+    ticker: str
+    strategy: str
+    params_hash: str
+    variant_label: Optional[str] = None
+    representative_run_id: int
+    run_count: int
+    total_return: float
+    annualized_return: float
+    sharpe_ratio: float
+    max_drawdown: float
+    win_rate: float
+    total_trades: int
+    volatility: float
+    params: Dict[str, Any] = Field(default_factory=dict)
+    last_completed_at: Optional[str] = None
+
+
+class TickerStrategyLeaderboard(BaseModel):
+    """Per-ticker ranked strategies for the leaderboard."""
+
+    ticker: str
+    strategies: List[TickerStrategyRow]
+
+
+class TickerStrategyLeaderboardResponse(BaseModel):
+    """Ticker × strategy leaderboard for Performance tab."""
+
+    objective: str
+    top_n: int
+    tickers: List[TickerStrategyLeaderboard]

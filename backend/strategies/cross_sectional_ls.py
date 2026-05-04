@@ -15,6 +15,7 @@ import numpy as np
 
 from backend.domain.trading import TargetAllocation
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_bool, param_float, param_int
 
 
@@ -104,7 +105,7 @@ class CrossSectionalLSStrategy(BaseStrategy):
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         norm = self._normalize_parameters(parameters)
 
-        class CrossSectionalLS(bt.Strategy):
+        class CrossSectionalLS(DecisionRecordingStrategy):
             params = (
                 ("short_window", norm["short_window"]),
                 ("long_window", norm["long_window"]),

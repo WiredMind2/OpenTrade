@@ -13,6 +13,7 @@ import backtrader as bt
 import numpy as np
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int
 
 
@@ -72,7 +73,7 @@ class VolatilityTargetingStrategy(BaseStrategy):
         n = self._normalize_parameters(parameters)
         target_daily = float(n["target_ann_vol"]) / float(np.sqrt(252.0))
 
-        class VolatilityTargeting(bt.Strategy):
+        class VolatilityTargeting(DecisionRecordingStrategy):
             params = (
                 ("short_window", n["short_window"]),
                 ("long_window", n["long_window"]),

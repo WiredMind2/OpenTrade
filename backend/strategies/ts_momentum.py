@@ -16,6 +16,7 @@ import numpy as np
 
 from backend.domain.trading import TargetAllocation
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int
 
 # Table 5.2: long if p(up) > 0.55, short if < 0.45
@@ -63,7 +64,7 @@ class TsMomentumStrategy(BaseStrategy):
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         normalized = self._normalize_parameters(parameters)
 
-        class TsMomentumBt(bt.Strategy):
+        class TsMomentumBt(DecisionRecordingStrategy):
             params = (
                 ("short_window", normalized["short_window"]),
                 ("long_window", normalized["long_window"]),

@@ -19,6 +19,7 @@ import numpy as np
 
 from backend.domain.trading import TargetAllocation
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int, param_str
 
 logger = logging.getLogger(__name__)
@@ -151,7 +152,7 @@ class PairsTradingStrategy(BaseStrategy):
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         normalized = self._normalize_parameters(parameters)
 
-        class PairsZScore(bt.Strategy):
+        class PairsZScore(DecisionRecordingStrategy):
             params = (
                 ("short_window", normalized["short_window"]),
                 ("long_window", normalized["long_window"]),
@@ -217,7 +218,7 @@ class PairsTradingStrategy(BaseStrategy):
                 each = v * self.p.max_position_pct * 0.5
                 n0 = int(max(each / max(p0, 1e-9), 0))
                 n1 = int(max(each / max(p1, 1e-9), 0))
-                if n0 > 0:
+                if n0 > 0 and self.d0 is not None:
                     self.buy(data=self.d0, size=n0)
                 if n1 > 0 and self.d1 is not None:
                     self.sell(data=self.d1, size=n1)

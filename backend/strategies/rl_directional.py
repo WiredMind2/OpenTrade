@@ -17,6 +17,7 @@ import backtrader as bt
 import numpy as np
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int, param_bool
 
 
@@ -102,7 +103,7 @@ class RLDirectionalStrategy(BaseStrategy):
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         n = self._normalize_parameters(parameters)
 
-        class TabularRLDirectional(bt.Strategy):
+        class TabularRLDirectional(DecisionRecordingStrategy):
             params = (
                 ("short_window", n["short_window"]),
                 ("long_window", n["long_window"]),

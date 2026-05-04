@@ -233,3 +233,66 @@ def test_strategy_variant_distribution(tmp_path):
     assert body["strategy"].startswith("moving_average:")
     assert isinstance(body["returns_histogram"], list)
     assert len(body["returns_histogram"]) >= 1
+
+
+def test_ticker_strategy_leaderboard_across_strategies(tmp_path):
+    db_path = tmp_path / "analytics.db"
+    conn = sqlite3.connect(db_path)
+    _seed_analytics_db(conn)
+
+    # Add a second strategy competing on AAPL so leaderboard ranks cross-strategy.
+    params_alt = {"ticker": "AAPL", "lookback": 20}
+    hash_alt = compute_params_hash(params_alt)
+    conn.execute(
+        """
+        INSERT INTO backtest_runs (
+            name, params, params_hash, initial_capital, final_value, equity_curve, metrics, completed_at,
+            total_return, annualized_return, sharpe_ratio, max_drawdown, win_rate, total_trades,
+            avg_trade_return, volatility
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "momentum",
+            json.dumps(params_alt),
+            hash_alt,
+            100000.0,
+            115000.0,
+            '[{"date":"2024-01-01","value":100000},{"date":"2024-01-02","value":108000},{"date":"2024-01-03","value":115000}]',
+            '{"status":"completed"}',
+            "2024-01-03",
+            0.15,
+            0.2,
+            1.4,
+            0.04,
+            0.62,
+            4,
+            55.0,
+            0.14,
+        ),
+    )
+    run_id_alt = conn.execute("SELECT id FROM backtest_runs WHERE name = 'momentum'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO trades (backtest_run_id, ticker, entry_dt, exit_dt, pnl) VALUES (?, ?, ?, ?, ?)",
+        (run_id_alt, "AAPL", "2024-01-01", "2024-01-03", 300.0),
+    )
+    conn.commit()
+    conn.close()
+
+    client = TestClient(app)
+    with patch("backend.main.app_state", {"database_path": str(db_path)}):
+        res = client.get(
+            "/api/strategy-analytics/tickers/leaderboard",
+            params={"objective": "return", "top_n": 3, "ticker": "AAPL"},
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["objective"] == "return"
+    assert body["top_n"] == 3
+    assert len(body["tickers"]) == 1
+    ticker_row = body["tickers"][0]
+    assert ticker_row["ticker"] == "AAPL"
+    assert len(ticker_row["strategies"]) >= 2
+    # Momentum has higher return than moving_average in this seeded fixture.
+    assert ticker_row["strategies"][0]["strategy"] == "momentum"
+    assert ticker_row["strategies"][0]["total_return"] >= ticker_row["strategies"][1]["total_return"]

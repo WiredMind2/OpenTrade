@@ -14,6 +14,7 @@ import backtrader as bt
 import numpy as np
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int
 from backend.domain.trading import TargetAllocation
 
@@ -73,7 +74,7 @@ class MeanReversionStrategy(BaseStrategy):
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         normalized = self._normalize_parameters(parameters)
 
-        class MeanReversionZScore(bt.Strategy):
+        class MeanReversionZScore(DecisionRecordingStrategy):
             params = (
                 ("short_window", int(normalized["short_window"])),
                 ("long_window", int(normalized["long_window"])),

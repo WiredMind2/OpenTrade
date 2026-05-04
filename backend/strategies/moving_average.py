@@ -11,6 +11,7 @@ import backtrader as bt
 import numpy as np
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int
 from backend.domain.trading import TargetAllocation
 
@@ -52,7 +53,7 @@ class MovingAverageStrategy(BaseStrategy):
         """Create and return a Backtrader strategy class with MA crossover logic."""
         normalized = self._normalize_parameters(parameters)
 
-        class MovingAverageCrossover(bt.Strategy):
+        class MovingAverageCrossover(DecisionRecordingStrategy):
             params = (
                 ("short_window", normalized["short_window"]),
                 ("long_window", normalized["long_window"]),
@@ -61,7 +62,6 @@ class MovingAverageStrategy(BaseStrategy):
 
             def __init__(self):
                 self.equity_curve = []
-                self.decision_markers: List[Dict[str, Any]] = []
                 self.trades = []
 
                 # Create indicators for each data feed
@@ -124,29 +124,11 @@ class MovingAverageStrategy(BaseStrategy):
                         shares_to_buy = int((target_value - current_value) / data.close[0])
                         if shares_to_buy > 0:
                             self.buy(data=data, size=shares_to_buy)
-                            day = self.datas[0].datetime.date(0).isoformat()
-                            self.decision_markers.append(
-                                {
-                                    "date": day,
-                                    "side": "buy",
-                                    "ticker": str(ticker).upper(),
-                                    "reason": "ma_golden_cross",
-                                }
-                            )
                     elif target_value < current_value:
                         # Sell
                         shares_to_sell = int((current_value - target_value) / data.close[0])
                         if shares_to_sell > 0:
                             self.sell(data=data, size=shares_to_sell)
-                            day = self.datas[0].datetime.date(0).isoformat()
-                            self.decision_markers.append(
-                                {
-                                    "date": day,
-                                    "side": "sell",
-                                    "ticker": str(ticker).upper(),
-                                    "reason": "ma_death_cross",
-                                }
-                            )
 
                 # Record equity curve
                 current_date = self.datas[0].datetime.date(0).isoformat()

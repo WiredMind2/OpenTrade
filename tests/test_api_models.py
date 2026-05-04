@@ -4,7 +4,7 @@ Integration tests for model API endpoints.
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 import tempfile
 import os
 
@@ -67,10 +67,8 @@ class TestModelAPI:
         assert "predict" in test_model["capabilities"]
         assert "config_schema" in test_model
 
-    @patch('backend.models.three_ma_adapter.ThreeMAAdapter')
-    def test_predict_with_three_ma_model(self, mock_adapter_class):
-        """Test POST /api/models/{name}/predict with three MA model."""
-        # Mock the adapter instance
+    def test_predict_with_three_ma_model(self):
+        """Test POST /api/models/{name}/predict with a script-style model name."""
         mock_adapter = MagicMock()
         mock_adapter.name = "three_ma_crossover_v1"
         mock_adapter.predict.return_value = {
@@ -101,9 +99,8 @@ class TestModelAPI:
                 "optimization_skipped": True
             }
         }
-        mock_adapter_class.return_value = mock_adapter
 
-        # Register the three MA model
+        # Register mock as the named model
         registry = app_state["model_registry"]
         registry.register(mock_adapter)
 

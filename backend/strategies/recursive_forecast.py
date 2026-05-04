@@ -19,6 +19,7 @@ from backend.logging_config import get_component_logger
 from backend.ml.forecasting import BacktestBridge
 from backend.ml.prediction_service import PredictionService
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 
 
 logger = get_component_logger(__file__)
@@ -47,7 +48,7 @@ class RecursiveForecastStrategy(BaseStrategy):
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:
         model_name = getattr(self, "model_name", self.name)
 
-        class RecursiveForecastBacktrader(bt.Strategy):
+        class RecursiveForecastBacktrader(DecisionRecordingStrategy):
             params = (
                 ("model_name", "sentiment_model"),
                 ("prediction_threshold", 0.002),
@@ -57,7 +58,6 @@ class RecursiveForecastStrategy(BaseStrategy):
 
             def __init__(self):
                 self.equity_curve = []
-                self.decision_markers: List[Dict[str, Any]] = []
                 self.trades = []
                 self.model_name = model_name
                 self.prediction_threshold = self.p.prediction_threshold
@@ -106,26 +106,10 @@ class RecursiveForecastStrategy(BaseStrategy):
                         shares_to_buy = int((target_value - current_value) / data.close[0])
                         if shares_to_buy > 0:
                             self.buy(data=data, size=shares_to_buy)
-                            self.decision_markers.append(
-                                {
-                                    "date": current_date,
-                                    "side": "buy",
-                                    "ticker": str(ticker).upper(),
-                                    "reason": "recursive_forecast_buy",
-                                }
-                            )
                     elif target_value < current_value:
                         shares_to_sell = int((current_value - target_value) / data.close[0])
                         if shares_to_sell > 0:
                             self.sell(data=data, size=shares_to_sell)
-                            self.decision_markers.append(
-                                {
-                                    "date": current_date,
-                                    "side": "sell",
-                                    "ticker": str(ticker).upper(),
-                                    "reason": "recursive_forecast_sell",
-                                }
-                            )
 
                 self.equity_curve.append({"date": current_date, "value": self.broker.getvalue()})
 

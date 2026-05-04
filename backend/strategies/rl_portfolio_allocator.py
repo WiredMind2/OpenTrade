@@ -22,6 +22,7 @@ import numpy as np
 
 from backend.domain.trading import TargetAllocation
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bt_decision_markers import DecisionRecordingStrategy
 from backend.strategies.support import capability_profile, param_float, param_int
 
 
@@ -181,7 +182,7 @@ class RLPortfolioAllocatorStrategy(BaseStrategy):
         temperature = float(norm["temperature"])
         min_bars = max(lookbacks, long_window + 1, short_window + 1)
 
-        class RLPortfolioAllocator(bt.Strategy):
+        class RLPortfolioAllocator(DecisionRecordingStrategy):
             params = (
                 ("short_window", short_window),
                 ("long_window", long_window),
