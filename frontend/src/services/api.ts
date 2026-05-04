@@ -210,6 +210,11 @@ export const runBacktest = async (data: {
   return response.data
 }
 
+export const getBacktest = async (backtestId: string) => {
+  const response = await instance.get(`/backtest/${encodeURIComponent(backtestId)}`)
+  return response.data
+}
+
 // MA Predictions API functions
 export const generateMAPredictions = async (data: {
   start_date: string

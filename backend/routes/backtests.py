@@ -12,8 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks
 
 from backend.logging_config import get_component_logger
 from backend.schemas import BacktestRequest, BacktestResult
-from backend.services.strategy_framework import StrategyPreflightService
-from .backtest_engine import run_backtest_background
+from .backtest_engine import insert_pending_backtest_run, run_backtest_background
 
 
 logger = get_component_logger(__file__)
@@ -40,18 +39,6 @@ async def run_backtest(
         if not strategy:
             raise HTTPException(status_code=404, detail=f"Strategy '{request.strategy_name}' not found")
 
-        ticker = str((request.parameters or {}).get("ticker", "AAPL")).upper()
-        preflight = StrategyPreflightService(app_state.get("database_path") or config.database.path).evaluate(
-            strategy_name=request.strategy_name,
-            strategy=strategy,
-            ticker=ticker,
-            start_date=request.start_date,
-            end_date=request.end_date,
-        )
-        if not preflight.ready:
-            issue_messages = "; ".join(issue.message for issue in preflight.issues)
-            raise HTTPException(status_code=400, detail=f"Preflight failed: {issue_messages}")
-
         # Generate unique backtest ID
         backtest_id = f"bt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{uuid.uuid4().hex[:8]}"
 
@@ -67,7 +54,18 @@ async def run_backtest(
             }
         )
 
-        # Run backtest in background
+        db_path = app_state.get("database_path") or config.database.path
+        pending_run_id = insert_pending_backtest_run(
+            db_path,
+            strategy_name=request.strategy_name,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            initial_capital=request.initial_capital,
+            parameters=request.parameters or {},
+            backtest_id=backtest_id,
+        )
+
+        # Run backtest in background (preflight + execution); clients poll GET /backtest/{id}
         background_tasks.add_task(
             run_backtest_background,
             backtest_id,
@@ -76,7 +74,8 @@ async def run_backtest(
             request.end_date,
             request.initial_capital,
             request.parameters,
-            app_state
+            app_state,
+            pending_run_id,
         )
 
         # Return immediate response with backtest ID
@@ -126,7 +125,7 @@ async def get_backtest_result(
             FROM backtest_runs
             WHERE CAST(id AS TEXT) = ?
                OR json_extract(metrics, '$.backtest_id') = ?
-            ORDER BY completed_at DESC, id DESC
+            ORDER BY id DESC
             LIMIT 1
         """, (backtest_id, backtest_id))
 
@@ -147,13 +146,26 @@ async def get_backtest_result(
             except Exception:
                 return default
 
-        equity_curve = json.loads(equity_curve_json) if equity_curve_json else []
-        metrics = json.loads(metrics_json) if metrics_json else {}
+        if isinstance(equity_curve_json, str) and equity_curve_json.strip():
+            equity_curve = json.loads(equity_curve_json)
+        elif isinstance(equity_curve_json, list):
+            equity_curve = equity_curve_json
+        else:
+            equity_curve = []
+        if isinstance(metrics_json, dict):
+            metrics = metrics_json
+        elif isinstance(metrics_json, str) and metrics_json.strip():
+            metrics = json.loads(metrics_json)
+        else:
+            metrics = {}
+
+        sim_end = metrics.get("end_date") if isinstance(metrics, dict) else None
+        end_ts = completed_at or sim_end or started_at
 
         return BacktestResult(
             strategy_name=name,
             start_date=pd.to_datetime(started_at).to_pydatetime(),
-            end_date=pd.to_datetime(completed_at).to_pydatetime(),
+            end_date=pd.to_datetime(end_ts).to_pydatetime(),
             completed_at=pd.to_datetime(completed_at).to_pydatetime() if completed_at else None,
             initial_capital=_f(initial_capital, 100000.0),
             final_value=_f(final_value, _f(initial_capital, 100000.0)),
@@ -165,7 +177,7 @@ async def get_backtest_result(
             total_trades=int(total_trades or 0),
             avg_trade_return=_f(avg_trade_return),
             volatility=_f(volatility),
-            timestamp=pd.to_datetime(completed_at).to_pydatetime(),
+            timestamp=pd.to_datetime(completed_at or started_at).to_pydatetime(),
             metrics=metrics,
             equity_curve=equity_curve
         )

@@ -1,5 +1,17 @@
 import { useEffect, useState, useRef } from 'react'
-import { getPredictions, createPrediction, getTickers, getPredictionProjections, getLatestPriceAnchor, searchUdfSymbols } from '../services/api'
+import { Link } from 'react-router-dom'
+import {
+  getPredictions,
+  createPrediction,
+  getTickers,
+  getPredictionProjections,
+  getLatestPriceAnchor,
+  searchUdfSymbols,
+  runBacktest,
+  getBacktest,
+} from '../services/api'
+import websocketService from '../services/websocket'
+import { BacktestResult } from '../types'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -14,7 +26,10 @@ import {
   Clock,
   Target,
   Activity,
-  Eye
+  Eye,
+  Calendar,
+  BarChart3,
+  DollarSign,
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
@@ -22,6 +37,75 @@ import OHLCChart from '../components/OHLCChart'
 import StrategySelector from '../components/StrategySelector'
 import { resolveProjectionAnchor } from '../utils/projectionAnchor'
 import { NewsSidebar } from '../components/NewsSidebar'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
+
+type PredictionBacktestRow = BacktestResult & {
+  id?: string | number
+  status?: string
+  error?: string
+  chart_data?: Array<{ day: number; value: number }>
+}
+
+function toChartNumber(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
+  return null
+}
+
+function buildBacktestEquityChartData(b: PredictionBacktestRow): Array<{ day: number; value: number }> {
+  const fromChart = Array.isArray(b.chart_data) ? b.chart_data : []
+  const fromChartPoints = fromChart
+    .map((p: Record<string, unknown>, idx: number) => {
+      const value = toChartNumber(p?.value)
+      if (value == null) return null
+      const dayRaw = p?.day
+      const day = typeof dayRaw === 'number' && Number.isFinite(dayRaw) ? dayRaw : idx
+      return { day, value }
+    })
+    .filter((p): p is { day: number; value: number } => p != null)
+
+  if (fromChartPoints.length > 0) return fromChartPoints
+
+  const eq = Array.isArray(b.equity_curve) ? b.equity_curve : []
+  return eq
+    .map((p: Record<string, unknown>, idx: number) => {
+      const value = toChartNumber(p?.value)
+      if (value == null) return null
+      return { day: idx, value }
+    })
+    .filter((p): p is { day: number; value: number } => p != null)
+}
+
+function equityChartYDomain(chartData: Array<{ value: number }>): [number, number] | undefined {
+  if (chartData.length === 0) return undefined
+  const values = chartData.map(d => d.value)
+  const minV = Math.min(...values)
+  const maxV = Math.max(...values)
+  const span = maxV - minV
+  const pad = span > 0 ? span * 0.05 : Math.max(Math.abs(minV) * 0.01, 1)
+  return [minV - pad, maxV + pad]
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function backtestPhaseLabel(phase: string | undefined): string {
+  switch (phase) {
+    case 'queued':
+      return 'Job queued on the server…'
+    case 'preflight':
+      return 'Validating price history and strategy requirements…'
+    case 'loading_data':
+      return 'Preparing backtest run…'
+    case 'loading_prices':
+      return 'Loading market data…'
+    case 'executing':
+      return 'Running simulation (this may take a while)…'
+    default:
+      return 'Waiting for the server…'
+  }
+}
 
 export default function Predictions() {
   const [preds, setPreds] = useState<PredictionResponse[]>([])
@@ -54,6 +138,13 @@ export default function Predictions() {
   const [simulateAsOfLocal, setSimulateAsOfLocal] = useState('')
   const [includeForwardActuals, setIncludeForwardActuals] = useState(true)
   const [persistHistoricalPrediction, setPersistHistoricalPrediction] = useState(false)
+
+  const [backtestStartDate, setBacktestStartDate] = useState('2023-01-01')
+  const [backtestEndDate, setBacktestEndDate] = useState('2023-12-31')
+  const [backtestRunning, setBacktestRunning] = useState(false)
+  const [backtestPollPhase, setBacktestPollPhase] = useState<string | undefined>(undefined)
+  const [backtestError, setBacktestError] = useState<string | null>(null)
+  const [predictionBacktest, setPredictionBacktest] = useState<PredictionBacktestRow | null>(null)
 
   const chartRef = useRef<any>(null)
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -133,6 +224,89 @@ export default function Predictions() {
     fetchPredictions()
     fetchTickers()
   }, [])
+
+  useEffect(() => {
+    const handleBacktestStatus = (message: { data: PredictionBacktestRow }) => {
+      const row = message.data
+      const bid = row.metrics?.backtest_id
+      setPredictionBacktest(prev => {
+        if (!prev || !bid) return prev
+        const prevId = prev.metrics?.backtest_id ?? prev.id
+        if (prevId == null || String(prevId) !== String(bid)) return prev
+        const chartData = buildBacktestEquityChartData(row)
+        return {
+          ...row,
+          chart_data: chartData,
+          status: row.metrics?.status ?? row.status,
+          error: row.metrics?.error ?? row.error,
+        }
+      })
+    }
+    return websocketService.registerListener('backtest_status', handleBacktestStatus)
+  }, [])
+
+  const startHistoricalBacktest = async () => {
+    if (!projectionStrategy.trim()) {
+      alert('Choose a strategy in Projection Controls above before running a backtest.')
+      return
+    }
+    const sym = selectedTicker.trim().toUpperCase()
+    if (!sym) {
+      alert('Select a chart ticker first.')
+      return
+    }
+    setBacktestRunning(true)
+    setBacktestError(null)
+    setBacktestPollPhase('queued')
+    try {
+      const data = await runBacktest({
+        strategy_name: projectionStrategy,
+        start_date: backtestStartDate,
+        end_date: backtestEndDate,
+        initial_capital: 100000,
+        parameters: { ...projectionParams, ticker: sym },
+      })
+      const backtestId = data.metrics?.backtest_id as string | undefined
+      if (!backtestId) {
+        throw new Error('Server did not return a backtest id')
+      }
+      setPredictionBacktest({
+        ...data,
+        id: backtestId,
+        status: (data.metrics?.status as string | undefined) ?? 'running',
+        chart_data: [],
+      })
+
+      const deadline = Date.now() + 15 * 60_000
+      while (Date.now() < deadline) {
+        await sleep(1200)
+        const row = await getBacktest(backtestId)
+        const metrics = row.metrics as Record<string, unknown> | undefined
+        const phase = typeof metrics?.phase === 'string' ? metrics.phase : undefined
+        setBacktestPollPhase(phase)
+        const st = typeof metrics?.status === 'string' ? metrics.status : undefined
+        setPredictionBacktest({
+          ...row,
+          id: backtestId,
+          status: st ?? row.metrics?.status,
+          chart_data: buildBacktestEquityChartData({ ...row, id: backtestId }),
+        })
+        if (st === 'completed' || st === 'failed') {
+          if (st === 'failed' && typeof metrics?.error === 'string') {
+            setBacktestError(metrics.error)
+          }
+          break
+        }
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      setBacktestError(msg)
+      alert('Failed to run backtest: ' + msg)
+    } finally {
+      setBacktestRunning(false)
+      setBacktestPollPhase(undefined)
+    }
+  }
 
   const submit = async () => {
     if (!ticker.trim()) {
@@ -265,7 +439,8 @@ export default function Predictions() {
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Predictions</h2>
         <p className="text-muted-foreground">
-          Generate ad-hoc forecasts for individual stocks using trained models
+          Generate forecasts and run historical strategy backtests on the chart ticker to inform future prices and
+          buy/sell timing. Parameter training lives on the Backtests page.
         </p>
       </div>
 
@@ -481,6 +656,166 @@ export default function Predictions() {
                     <p className="text-xs text-amber-500">{projectionAnchorWarning}</p>
                   )}
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-muted shadow-md">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5 text-primary" />
+                  Historical strategy backtest
+                </CardTitle>
+                <CardDescription>
+                  Simulates the strategy selected in Projection Controls on the chart symbol ({' '}
+                  <span className="font-mono text-foreground">{selectedTicker || '—'}</span>
+                  ) over your date range. Results stream below; full history stays on the{' '}
+                  <Link to="/backtests" className="text-primary underline-offset-4 hover:underline">
+                    Backtests
+                  </Link>{' '}
+                  page.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium flex items-center gap-2">
+                      <Calendar className="h-4 w-4" />
+                      Start date
+                    </label>
+                    <Input
+                      type="date"
+                      value={backtestStartDate}
+                      onChange={e => setBacktestStartDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium flex items-center gap-2">
+                      <Calendar className="h-4 w-4" />
+                      End date
+                    </label>
+                    <Input
+                      type="date"
+                      value={backtestEndDate}
+                      onChange={e => setBacktestEndDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  onClick={() => void startHistoricalBacktest()}
+                  disabled={backtestRunning || !projectionStrategy.trim() || !selectedTicker.trim()}
+                  className="w-full sm:w-auto"
+                >
+                  {backtestRunning ? (
+                    <>
+                      <Activity className="mr-2 h-4 w-4 animate-spin" />
+                      Starting…
+                    </>
+                  ) : (
+                    <>
+                      <BarChart3 className="mr-2 h-4 w-4" />
+                      Run historical backtest
+                    </>
+                  )}
+                </Button>
+                {!projectionStrategy.trim() && (
+                  <p className="text-xs text-muted-foreground">
+                    Pick a strategy in Projection Controls to enable this button.
+                  </p>
+                )}
+                {backtestRunning && (
+                  <p className="text-xs text-muted-foreground" role="status" aria-live="polite">
+                    {backtestPhaseLabel(backtestPollPhase)}
+                  </p>
+                )}
+                {backtestError && <p className="text-sm text-destructive">{backtestError}</p>}
+                {predictionBacktest && (() => {
+                  const b = predictionBacktest
+                  const returnPercent = b.total_return * 100
+                  const isPositive = returnPercent > 0
+                  const status = b.status ?? b.metrics?.status ?? 'completed'
+                  const isFailed = status === 'failed'
+                  const chartData = buildBacktestEquityChartData(b)
+                  const yDomain = equityChartYDomain(chartData)
+                  return (
+                    <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium text-sm">
+                          {b.strategy_name}{' '}
+                          <span className="text-muted-foreground font-normal">
+                            ({b.start_date} → {b.end_date})
+                          </span>
+                        </p>
+                        <Badge variant={isFailed ? 'destructive' : status === 'running' ? 'secondary' : 'outline'}>
+                          {status}
+                        </Badge>
+                      </div>
+                      {isFailed && (
+                        <p className="text-sm text-destructive">
+                          {b.error || b.metrics?.error || 'Backtest failed'}
+                        </p>
+                      )}
+                      {chartData.length > 0 && (
+                        <div className="h-[140px] w-full">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                              <XAxis dataKey="day" className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                              <YAxis
+                                className="text-xs"
+                                tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                                domain={yDomain}
+                                tickFormatter={v => `$${(Number(v) / 1000).toFixed(0)}k`}
+                              />
+                              <RechartsTooltip
+                                contentStyle={{
+                                  backgroundColor: 'hsl(var(--card))',
+                                  border: '1px solid hsl(var(--border))',
+                                  borderRadius: '0.5rem',
+                                }}
+                                formatter={(value: number) => [`$${value.toFixed(2)}`, 'Portfolio']}
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="value"
+                                stroke={
+                                  isPositive ? 'hsl(142, 76%, 36%)' : 'hsl(0, 84.2%, 60.2%)'
+                                }
+                                strokeWidth={2}
+                                dot={false}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                        <div className="flex items-center gap-2 rounded-md bg-background/80 p-2">
+                          <DollarSign className="h-5 w-5 text-primary shrink-0" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Return</p>
+                            <p className={`font-semibold ${isPositive ? 'text-success' : 'text-destructive'}`}>
+                              {returnPercent.toFixed(2)}%
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-md bg-background/80 p-2">
+                          <Activity className="h-5 w-5 text-blue-500 shrink-0" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Sharpe</p>
+                            <p className="font-semibold">{b.sharpe_ratio?.toFixed?.(3) ?? '—'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-md bg-background/80 p-2">
+                          <Target className="h-5 w-5 text-orange-500 shrink-0" />
+                          <div>
+                            <p className="text-xs text-muted-foreground">Trades</p>
+                            <p className="font-semibold">{b.total_trades ?? '—'}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
               </CardContent>
             </Card>
 

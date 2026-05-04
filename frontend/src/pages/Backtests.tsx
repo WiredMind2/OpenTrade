@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { getBacktests, runBacktest } from '../services/api'
+import { getBacktests } from '../services/api'
 import {
   preflightStrategy,
   trainStrategy,
@@ -15,15 +15,14 @@ import { BacktestResult } from '../types'
 import Loading from '../components/Loading'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
-import { 
+import {
   BarChart3,
-  Play,
   Calendar,
   DollarSign,
   TrendingUp,
   TrendingDown,
   Activity,
-  Target
+  Target,
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
@@ -81,14 +80,12 @@ function equityChartYDomain(chartData: Array<{ value: number }>): [number, numbe
   return [minV - pad, maxV + pad]
 }
 
-type ServerWaitPhase = 'idle' | 'preflight' | 'backtest' | 'training'
+type ServerWaitPhase = 'idle' | 'preflight' | 'training'
 
 function serverWaitPhaseLabel(phase: ServerWaitPhase): string {
   switch (phase) {
     case 'preflight':
       return 'Contacting the server: validating data for your ticker and dates…'
-    case 'backtest':
-      return 'Starting backtest job…'
     case 'training':
       return 'Running parameter optimization on the server (this can take several minutes)…'
     default:
@@ -100,9 +97,8 @@ export default function Backtests() {
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
   const [strategyParams, setStrategyParams] = useState<Record<string, any>>({})
-  const [startDate, setStartDate] = useState('2023-01-01')
-  const [endDate, setEndDate] = useState('2023-12-31')
-  const [running, setRunning] = useState(false)
+  const [startDate, setStartDate] = useState('2025-01-01')
+  const [endDate, setEndDate] = useState('2025-12-31')
   const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -176,43 +172,6 @@ export default function Backtests() {
     // Cleanup on unmount
     return websocketService.registerListener('backtest_status', handleBacktestStatus)
   }, [])
-
-  const startBacktest = async () => {
-    if (!hasValidStrategySelection) {
-      alert('Please select a strategy')
-      return
-    }
-    setRunning(true)
-    setServerWaitPhase('preflight')
-    try {
-      const check = await preflightStrategy(strategy, {
-        ticker: ticker.trim().toUpperCase(),
-        start_date: startDate,
-        end_date: endDate,
-      })
-      setPreflight(check)
-      if (!check.ready) {
-        const topError = check.issues[0]?.message || 'Preflight failed'
-        alert(topError)
-        return
-      }
-      setServerWaitPhase('backtest')
-      const data = await runBacktest({
-        strategy_name: strategy,
-        start_date: startDate,
-        end_date: endDate,
-        initial_capital: 100000,
-        parameters: { ...strategyParams, ...(trainedParams ?? {}), ticker: ticker.trim().toUpperCase() },
-      })
-
-      setBacktests(prev => [{ ...data, id: data.metrics?.backtest_id, status: 'running', chart_data: [] }, ...prev])
-    } catch (e: any) {
-      alert('Failed to start backtest: ' + (e.message || 'Unknown error'))
-    } finally {
-      setRunning(false)
-      setServerWaitPhase('idle')
-    }
-  }
 
   const runTraining = async () => {
     if (!hasValidStrategySelection) {
@@ -298,11 +257,12 @@ export default function Backtests() {
       <Card className="border-muted shadow-md">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Play className="h-5 w-5 text-primary" />
-            Configure Backtest
+            <Target className="h-5 w-5 text-primary" />
+            Train strategy parameters
           </CardTitle>
           <CardDescription>
-            Set up a new backtest with your preferred parameters
+            Optimize parameters for your ticker and date range. Run historical backtests from the Predictions tab
+            (chart) to validate signals against past prices.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -417,24 +377,6 @@ export default function Backtests() {
                   </>
                 )}
               </Button>
-              <Button
-                onClick={startBacktest}
-                disabled={running || !hasValidStrategySelection}
-                className="w-full md:w-auto"
-                size="lg"
-              >
-                {running ? (
-                  <>
-                    <Activity className="mr-2 h-4 w-4 animate-spin" />
-                    Running Backtest...
-                  </>
-                ) : (
-                  <>
-                    <Target className="mr-2 h-4 w-4" />
-                    Start Backtest
-                  </>
-                )}
-              </Button>
             </div>
             {serverWaitPhase !== 'idle' && (
               <div
@@ -519,7 +461,7 @@ export default function Backtests() {
             <CardContent className="flex flex-col items-center justify-center py-12">
               <BarChart3 className="h-12 w-12 text-muted-foreground mb-4" />
               <p className="text-muted-foreground text-center">
-                No backtests yet. Configure and run your first backtest above!
+                No backtests yet. Run a historical strategy simulation from Predictions (Chart tab).
               </p>
             </CardContent>
           </Card>

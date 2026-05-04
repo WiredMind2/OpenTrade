@@ -45,6 +45,26 @@ const fmtNum = (value: number) => value.toFixed(2)
 const safeNumber = (value: unknown, fallback: number = 0) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback
 
+/** Tight Y domain so normalized equity curves (often near 1.0) stay visually separated. */
+function normalizedEquityComparisonYDomain(
+  rows: Array<Record<string, unknown>>,
+  seriesKeys: string[],
+): [number, number] | undefined {
+  const values: number[] = []
+  for (const row of rows) {
+    for (const k of seriesKeys) {
+      const v = row[k]
+      if (typeof v === 'number' && Number.isFinite(v)) values.push(v)
+    }
+  }
+  if (values.length === 0) return undefined
+  const minV = Math.min(...values)
+  const maxV = Math.max(...values)
+  const span = maxV - minV
+  const pad = span > 0 ? span * 0.1 : Math.max(Math.abs(minV) * 0.01, 0.01)
+  return [minV - pad, maxV + pad]
+}
+
 function shortHash(h: string) {
   return h.length > 10 ? `${h.slice(0, 6)}…` : h
 }
@@ -223,8 +243,9 @@ export default function StrategyPerformance() {
     if (variantTs.benchmark_points?.length) {
       const bmKey = `${selectedBenchmark}_benchmark`
       for (const bp of variantTs.benchmark_points) {
-        if (!byDate[bp.date]) byDate[bp.date] = { date: bp.date }
-        byDate[bp.date][bmKey] = safeNumber(bp.normalized_equity, 0)
+        if (byDate[bp.date]) {
+          byDate[bp.date][bmKey] = safeNumber(bp.normalized_equity, 0)
+        }
       }
     }
     return Object.values(byDate).sort((a: any, b: any) => a.date.localeCompare(b.date))
@@ -234,6 +255,12 @@ export default function StrategyPerformance() {
     if (!variantTs?.variant_series?.length) return [] as string[]
     return variantTs.variant_series.map((_, idx) => `v_${idx}_${shortHash(variantTs.variant_series[idx].params_hash)}`)
   }, [variantTs])
+
+  const variantEquityYDomain = useMemo(() => {
+    const bmKey = `${selectedBenchmark}_benchmark`
+    const keys = lineKeys.length ? [...lineKeys, bmKey] : []
+    return normalizedEquityComparisonYDomain(variantComparisonData, keys)
+  }, [variantComparisonData, lineKeys, selectedBenchmark])
 
   const riskReturnScatter = useMemo(
     () =>
@@ -538,7 +565,15 @@ export default function StrategyPerformance() {
                         <LineChart data={variantComparisonData}>
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="date" hide />
-                          <YAxis />
+                          <YAxis
+                            domain={variantEquityYDomain}
+                            tickFormatter={(v: number | string) => {
+                              const n = Number(v)
+                              if (!Number.isFinite(n)) return ''
+                              return n.toFixed(Number.isInteger(n) ? 0 : 3)
+                            }}
+                            width={52}
+                          />
                           <Tooltip />
                           <Legend />
                           {lineKeys.map((k, idx) => (
