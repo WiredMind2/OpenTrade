@@ -111,6 +111,7 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
 
        const containerRef = useRef<HTMLDivElement>(null);
        const widgetRef = useRef<IChartingLibraryWidget | null>(null);
+       const [chartReady, setChartReady] = useState(false);
        const containerIdRef = useRef<string>(
          `tradingview_${Math.random().toString(36).substr(2, 9)}`
        );
@@ -314,6 +315,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
 
           // Attach projection manager when chart is ready
           widgetRef.current.onChartReady(() => {
+            if (isMounted) setChartReady(true);
             console.log("[OHLCChart] Chart ready, attaching projection manager");
 
             // Force theme overrides after localStorage restore
@@ -483,6 +485,7 @@ widgetRef.current = new TradingView.widget(widgetOptions);
 
       return () => {
         isMounted = false;
+        setChartReady(false);
         if (widgetRef.current) {
           detachProjectionManager();
           widgetRef.current.remove();
@@ -633,7 +636,17 @@ widgetRef.current = new TradingView.widget(widgetOptions);
     }));
 
     return (
-      <div>
+      <div style={{ position: "relative", width: "100%", height }}>
+        {!chartReady && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              backgroundColor: isDark ? "#171717" : "#FFFFFF",
+              zIndex: 10,
+            }}
+          />
+        )}
         <div
           ref={containerRef}
           id={containerIdRef.current}

@@ -13,12 +13,14 @@ import pandas as pd
 SIGNAL_PARAMETER_TRAINABLE_STRATEGIES: FrozenSet[str] = frozenset(
     {
         "moving_average",
-        "recursive_forecast",
         "mean_reversion",
         "ts_momentum",
         "pairs_trading",
         "cross_sectional_ls",
+        "macd",
+        "rl_directional",
         "rl_portfolio_allocator",
+        "volatility_targeting",
     }
 )
 
@@ -191,6 +193,24 @@ class StrategyOptimizerEngine:
                 for s, l, p in itertools.product([3, 8, 12], [20, 35, 50], [0.06, 0.1])
                 if s < l
             ]
+        if strategy_name == "macd":
+            return [
+                {
+                    "macd_fast": fast,
+                    "macd_slow": slow,
+                    "macd_signal": sig,
+                    "ema_period": ema,
+                    "risk_pct": risk,
+                }
+                for fast, slow, sig, ema, risk in itertools.product(
+                    [8, 12, 16],
+                    [21, 26, 35],
+                    [7, 9],
+                    [100, 200],
+                    [0.005, 0.01],
+                )
+                if fast < slow
+            ]
         if strategy_name == "pairs_trading":
             out = []
             for s, l, ze, zx, p in itertools.product(
@@ -252,6 +272,50 @@ class StrategyOptimizerEngine:
                         "lookbacks": lb,
                         "max_gross": float(mg),
                         "temperature": float(temp),
+                    }
+                )
+            return out
+        if strategy_name == "rl_directional":
+            out = []
+            for s, l, mp, eps, lr in itertools.product(
+                [3, 5, 8],
+                [20, 35, 50],
+                [0.05, 0.1],
+                [0.05, 0.12, 0.2],
+                [0.1, 0.2],
+            ):
+                if s >= l:
+                    continue
+                out.append(
+                    {
+                        "short_window": s,
+                        "long_window": l,
+                        "max_position_pct": float(mp),
+                        "epsilon": float(eps),
+                        "learning_rate": float(lr),
+                        "gamma": 0.99,
+                        "n_return_bins": 5,
+                        "return_clip": 0.05,
+                        "online_q_updates": True,
+                    }
+                )
+            return out
+        if strategy_name == "volatility_targeting":
+            out = []
+            for vol_lb, mom_lb, target_vol, mp in itertools.product(
+                [10, 20, 30],
+                [10, 20, 40],
+                [0.10, 0.15, 0.20],
+                [0.05, 0.1],
+            ):
+                out.append(
+                    {
+                        "short_window": max(5, min(vol_lb, mom_lb)),
+                        "long_window": max(vol_lb, mom_lb) + 40,
+                        "target_ann_vol": float(target_vol),
+                        "vol_lookback": int(vol_lb),
+                        "momentum_lookback": int(mom_lb),
+                        "max_position_pct": float(mp),
                     }
                 )
             return out
