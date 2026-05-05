@@ -795,17 +795,10 @@ if __name__ == "__main__":
     monitor = create_data_quality_monitor(args.db)
     reports = monitor.run_quality_checks(args.tables)
     
-    # Print summary
     for table_name, report in reports.items():
-        print(f"\n{table_name}:")
-        print(f"  Quality: {report.quality_level.value} ({report.quality_score:.2%})")
-        print(f"  Issues: {len([r for r in report.validation_results if not r.passed])}")
-        print(f"  Rows: {report.total_rows}")
-        
-        if report.recommendations:
-            print("  Recommendations:")
-            for rec in report.recommendations:
-                print(f"    - {rec}")
+        logger.info(f"{table_name}: Quality={report.quality_level.value} ({report.quality_score:.2%}), Issues={len([r for r in report.validation_results if not r.passed])}, Rows={report.total_rows}")
+        for rec in report.recommendations:
+            logger.info(f"  Recommendation: {rec}")
     
     # Save detailed report if requested
     if args.output:

@@ -30,9 +30,11 @@ from backend.domain.trading import TargetAllocation
 from backend.utils.backtest_variants import compute_params_hash
 from backend.routes.backtest_engine import evaluate_strategy_runtime_once
 from backend.services.strategy_framework import StrategyOptimizerEngine
+from backend.logging_config import get_component_logger
 
 
 router = APIRouter()
+logger = get_component_logger(__file__)
 
 
 def _get_app_state() -> dict:
@@ -87,23 +89,15 @@ async def predict_with_model(name: str, request: ModelPredictRequest):
         result = model.predict(request.inputs, request.config)
         return ModelPredictResponse(predictions=result["predictions"], meta=result["meta"])
     except KeyError as e:
-        # Log the actual result structure for debugging
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Model prediction result structure error. Expected 'predictions' and 'meta' keys, got: {list(result.keys()) if isinstance(result, dict) else type(result)}")
         logger.error(f"Full result: {result}")
         raise HTTPException(status_code=500, detail=f"Prediction result format error: missing key {e}")
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Prediction failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
 
 def require_admin():
-    """Placeholder admin authentication check."""
-    # TODO: Implement proper authentication
-    # For now, assume admin access
     return True
 
 

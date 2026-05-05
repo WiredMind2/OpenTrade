@@ -21,4 +21,3 @@ passlib[bcrypt]>=1.7.4
 slowapi>=0.1.9
 readability-lxml
 lxml_html_clean
-newsapi-python

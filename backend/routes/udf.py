@@ -1391,9 +1391,6 @@ async def get_historical_data(
             "v": volumes
         }
 
-        # Cache the response
-        # udf_history_cache.set(cache_key, response)  # Disabled due to logging issues
-
         return response
 
     except Exception as e:
