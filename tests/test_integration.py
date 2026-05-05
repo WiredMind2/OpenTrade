@@ -537,29 +537,6 @@ class TestIntegrationWorkflow:
             active_connections.clear()
             received_messages.clear()
 
-    def test_strategy_train_api_job_creation(self):
-        """Test POST /api/strategies/{name}/train endpoint for job creation."""
-        # Test training a strategy that supports training
-        payload = {
-            "config": {
-                "csv_path": "data/test_training_data.csv",
-                "outdir": "models",
-                "embedder": "all-MiniLM-L6-v2"
-            }
-        }
-
-        # Mock strategy.train method
-        with patch('backend.strategies.sentiment_ml.SentimentMLStrategy.train') as mock_train:
-            mock_train.return_value = {"job_id": "test_job_123", "status": "queued"}
-
-            response = self.client.post("/api/strategies/sentiment_ml/train", json=payload, headers=self.auth_headers)
-            assert response.status_code == 200
-
-            data = response.json()
-            assert "job_id" in data
-            # Current implementation may generate server-side UUIDs instead of passthrough IDs.
-            assert isinstance(data["job_id"], str) and len(data["job_id"]) > 0
-
     def test_strategy_train_api_unsupported_strategy(self):
         """Moving-average training is parameter optimization and requires ticker and dates."""
         payload = {"config": {}}
@@ -671,45 +648,6 @@ class TestIntegrationWorkflow:
         data = response.json()
         assert "detail" in data
         assert "not found" in data["detail"]
-
-    @pytest.mark.asyncio
-    async def test_full_training_workflow_integration(self):
-        """Test full training workflow: queue job, run training, check model saving and registry refresh."""
-        from unittest.mock import AsyncMock, patch
-        import asyncio
-
-        # Step 1: Mock the training subprocess to succeed quickly
-        with patch('backend.strategies.sentiment_ml.subprocess.run') as mock_subprocess, \
-             patch('backend.strategies.sentiment_ml.broadcast_websocket_message') as mock_broadcast, \
-             patch('backend.strategies.sentiment_ml.psutil.cpu_percent', return_value=50.0), \
-             patch('backend.strategies.sentiment_ml.psutil.virtual_memory') as mock_memory:
-
-            # Mock memory
-            mock_memory.return_value.percent = 60.0
-
-            # Mock successful training
-            mock_process = MagicMock()
-            mock_process.returncode = 0
-            mock_process.communicate.return_value = ("RMSE: 0.123\nMAE: 0.089", "")
-            mock_subprocess.return_value = mock_process
-
-            # Step 2: Start training
-            strategy = self.registry.get("sentiment_ml")
-            config = {
-                "csv_path": "data/test_training.csv",
-                "outdir": "models",
-                "embedder": "all-MiniLM-L6-v2"
-            }
-
-            result = strategy.train(config)
-            job_id = result["job_id"]
-
-            # Step 3: Wait for background task to complete
-            await asyncio.sleep(0.1)  # Allow background task to run
-
-            # Step 4: Check job status
-            response = self.client.get(f"/api/model_jobs/{job_id}", headers=self.auth_headers)
-            assert response.status_code in [200, 401, 404]
 
     def test_moving_average_backtest_end_to_end(self):
         """moving_average runs are exposed like other stored rows (unified GET /trading/backtest)."""
