@@ -24,6 +24,7 @@ import {
   Activity,
   Target,
   Loader2,
+  X,
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import StrategySelector from '../components/StrategySelector'
@@ -131,15 +132,16 @@ function serverWaitPhaseLabel(phase: ServerWaitPhase): string {
 }
 
 export default function Backtests() {
+  const [detailBacktest, setDetailBacktest] = useState<BacktestListItem | null>(null)
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
-  const [strategyParams, setStrategyParams] = useState<Record<string, any>>({})
   const [startDate, setStartDate] = useState(() => `${new Date().getFullYear() - 1}-01-01`)
   const [endDate, setEndDate] = useState(() => `${new Date().getFullYear() - 1}-12-31`)
   const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ticker, setTicker] = useState(() => getStoredTicker())
+  const [pairTicker, setPairTicker] = useState('')
   const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [maxEvals, setMaxEvals] = useState(8)
   const [optimizerMode, setOptimizerMode] = useState<'grid' | 'random'>('grid')
@@ -160,6 +162,15 @@ export default function Backtests() {
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
   const backtestsRef = useRef<BacktestListItem[]>([])
   backtestsRef.current = backtests
+
+  useEffect(() => {
+    if (!detailBacktest) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDetailBacktest(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [detailBacktest])
 
   const fetchBacktests = async () => {
     setLoading(true)
@@ -332,6 +343,11 @@ export default function Backtests() {
       alert('Please provide a ticker for training')
       return
     }
+    const pt = pairTicker.trim().toUpperCase() || undefined
+    if (strategy === 'pairs_trading' && !pt) {
+      alert('pairs_trading requires a second ticker — fill in the "Second ticker" field next to Ticker')
+      return
+    }
     setTraining(true)
     setTrainError(null)
     setServerWaitPhase('preflight')
@@ -341,6 +357,7 @@ export default function Backtests() {
         ticker: normalizedTicker,
         start_date: startDate,
         end_date: endDate,
+        ...(pt ? { pair_ticker: pt } : {}),
       })
       setPreflight(check)
       if (!check.ready) {
@@ -358,6 +375,7 @@ export default function Backtests() {
         max_evals: maxEvals,
         optimizer_mode: optimizerMode,
         ...(Number.isFinite(seedNum as number) ? { random_seed: seedNum } : {}),
+        ...(pt ? { pair_ticker: pt } : {}),
       })
       if (
         response &&
@@ -434,6 +452,7 @@ export default function Backtests() {
   }
 
   return (
+    <>
     <div className="space-y-6">
       {/* Header */}
       <div className="space-y-2">
@@ -460,9 +479,8 @@ export default function Backtests() {
             <div className="space-y-2">
               <label className="text-sm font-medium">Strategy Name</label>
               <StrategySelector
-                onStrategyChange={(selectedStrategy, params) => {
+                onStrategyChange={(selectedStrategy) => {
                   setStrategy(selectedStrategy)
-                  setStrategyParams(params)
                   setTrainResult(null)
                   setTrainedParams(null)
                   setTrainError(null)
@@ -491,13 +509,26 @@ export default function Backtests() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Training Ticker</label>
+                <label className="text-sm font-medium">Ticker</label>
                 <TickerSearch
                   value={ticker}
                   onChange={(t) => setTicker(rememberTicker(t))}
                   placeholder="Search a ticker"
                 />
               </div>
+
+              {strategy === 'pairs_trading' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Second ticker <span className="text-destructive">*</span>
+                  </label>
+                  <TickerSearch
+                    value={pairTicker}
+                    onChange={(t) => setPairTicker(t.toUpperCase())}
+                    placeholder="e.g. MSFT"
+                  />
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-sm font-medium">Objective</label>
@@ -778,7 +809,6 @@ export default function Backtests() {
                 <CardContent className="p-6">
                   <div className="space-y-4">
                     <Skeleton className="h-6 w-48" />
-                    <Skeleton className="h-32 w-full" />
                     <div className="flex gap-4">
                       <Skeleton className="h-4 w-32" />
                       <Skeleton className="h-4 w-32" />
@@ -809,10 +839,20 @@ export default function Backtests() {
               const isPositive = returnPercent > 0
               const status = b.status ?? b.metrics?.status ?? 'completed'
               const isFailed = status === 'failed'
+              const initialCap = b.initial_capital ?? 100000
               return (
-                <Card 
+                <Card
                   key={rowKey}
-                  className="hover:shadow-lg transition-all border-muted hover:border-primary/50"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setDetailBacktest(b)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setDetailBacktest(b)
+                    }
+                  }}
+                  className="hover:shadow-lg transition-all border-muted hover:border-primary/50 cursor-pointer text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <CardHeader>
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -862,14 +902,9 @@ export default function Backtests() {
                         Backtest failed: {b.error || b.metrics?.error || 'Unknown error'}
                       </p>
                     )}
-                    <div className="mb-4">
-                      <BacktestEquityCompareChart
-                        backtest={b}
-                        isPositive={isPositive}
-                        isFailed={isFailed}
-                        height={170}
-                      />
-                    </div>
+                    <p className="text-xs text-muted-foreground mb-4">
+                      Click this card for an interactive chart and full run details (opens in a dialog).
+                    </p>
 
                     {/* Metrics */}
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -877,7 +912,7 @@ export default function Backtests() {
                         <DollarSign className="h-8 w-8 text-primary" />
                         <div>
                           <p className="text-xs text-muted-foreground">Initial Capital</p>
-                          <p className="font-semibold">$100,000</p>
+                          <p className="font-semibold">${initialCap.toLocaleString()}</p>
                         </div>
                       </div>
                       
@@ -886,7 +921,7 @@ export default function Backtests() {
                         <div>
                           <p className="text-xs text-muted-foreground">Final Value</p>
                           <p className="font-semibold">
-                            ${(100000 * (1 + b.total_return)).toFixed(0)}
+                            ${(initialCap * (1 + b.total_return)).toFixed(0)}
                           </p>
                         </div>
                       </div>
@@ -934,5 +969,115 @@ export default function Backtests() {
         )}
       </div>
     </div>
+
+    {detailBacktest ? (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        role="presentation"
+        onClick={() => setDetailBacktest(null)}
+      >
+        <div
+          role="dialog"
+          aria-modal
+          aria-labelledby="backtest-detail-title"
+          className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="absolute right-3 top-3 z-10 rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Close"
+            onClick={() => setDetailBacktest(null)}
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="overflow-y-auto overscroll-contain p-6 pt-14">
+            {(() => {
+              const d = detailBacktest
+              const dReturn = d.total_return * 100
+              const dPositive = dReturn > 0
+              const dStatus = d.status ?? d.metrics?.status ?? 'completed'
+              const dFailed = dStatus === 'failed'
+              const dKey = backtestCorrelationKey(d) || String(d.timestamp)
+              const dIc = d.initial_capital ?? 100000
+              return (
+                <>
+                  <h2 id="backtest-detail-title" className="text-xl font-semibold pr-10">
+                    {d.strategy_name}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {d.ticker ? <span className="font-medium text-foreground">{d.ticker}</span> : null}
+                    {d.ticker ? ' · ' : null}
+                    {d.start_date} → {d.end_date}
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Badge variant={dFailed ? 'destructive' : dStatus === 'running' ? 'secondary' : 'outline'}>
+                      {dStatus}
+                    </Badge>
+                    <Badge variant={getReturnBadge(dReturn).variant}>{getReturnBadge(dReturn).label}</Badge>
+                    <span className={`text-lg font-bold ${getReturnColor(dReturn)}`}>{dReturn.toFixed(2)}% return</span>
+                  </div>
+                  {dFailed && (
+                    <p className="mt-3 text-sm text-destructive">
+                      {d.error || d.metrics?.error || 'Unknown error'}
+                    </p>
+                  )}
+                  <div className="mt-5 min-h-[420px] w-full">
+                    <BacktestEquityCompareChart
+                      key={dKey}
+                      backtest={d}
+                      isPositive={dPositive}
+                      isFailed={dFailed}
+                      height={420}
+                    />
+                  </div>
+                  <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Sharpe</p>
+                      <p className="font-mono text-sm font-semibold">{Number(d.sharpe_ratio).toFixed(3)}</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Max drawdown</p>
+                      <p className="font-mono text-sm font-semibold">{(Number(d.max_drawdown) * 100).toFixed(2)}%</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Win rate</p>
+                      <p className="font-mono text-sm font-semibold">{(Number(d.win_rate) * 100).toFixed(1)}%</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Trades</p>
+                      <p className="font-mono text-sm font-semibold">{d.total_trades}</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Volatility</p>
+                      <p className="font-mono text-sm font-semibold">{(Number(d.volatility) * 100).toFixed(2)}%</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Avg trade return</p>
+                      <p className="font-mono text-sm font-semibold">${Number(d.avg_trade_return).toFixed(2)}</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Annualized</p>
+                      <p className="font-mono text-sm font-semibold">{(Number(d.annualized_return) * 100).toFixed(2)}%</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Run at</p>
+                      <p className="text-sm font-medium">{new Date(d.timestamp).toLocaleString()}</p>
+                    </div>
+                  </div>
+                  <p className="mt-4 text-xs text-muted-foreground">
+                    Engine: {d.execution_engine ?? d.metrics?.execution_summary?.engine ?? 'backtrader'} | Signals:{' '}
+                    {d.signals_emitted ?? d.metrics?.execution_summary?.signals_emitted ?? 0} | Intents:{' '}
+                    {d.order_intents ?? d.metrics?.execution_summary?.order_intents ?? 0} | Fills:{' '}
+                    {d.order_fills ?? d.metrics?.execution_summary?.order_fills ?? 0}
+                  </p>
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      </div>
+    ) : null}
+    </>
   )
 }

@@ -10,7 +10,6 @@ import {
   LineChart,
   BookOpen,
   Newspaper,
-  Target
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
@@ -25,7 +24,6 @@ const navigation = [
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
   { name: 'Strategy Performance', href: '/strategy-performance', icon: LineChart },
-  { name: 'Trade Plan', href: '/trade-plan', icon: Target },
   { name: 'Scripts', href: '/scripts', icon: Settings },
   { name: 'Recommendations', href: '/recommendations', icon: BookOpen },
 ]

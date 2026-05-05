@@ -133,11 +133,11 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
 
   if (loading) {
     return (
-      <Card className="h-full">
-        <CardHeader>
+      <Card className="h-full min-h-0 flex flex-col overflow-hidden">
+        <CardHeader className="flex-shrink-0">
           <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex-1 min-h-0 overflow-y-auto">
           <div className="space-y-3">
             {[...Array(5)].map((_, i) => (
               <div key={i} className="animate-pulse">
@@ -154,11 +154,11 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
 
   if (error) {
     return (
-      <Card className="h-full">
-        <CardHeader>
+      <Card className="h-full min-h-0 flex flex-col overflow-hidden">
+        <CardHeader className="flex-shrink-0">
           <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex-1 min-h-0 overflow-y-auto">
           <p className="text-red-500 text-sm">{error}</p>
         </CardContent>
       </Card>
@@ -167,11 +167,11 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
 
   if (articles.length === 0) {
     return (
-      <Card className="h-full">
-        <CardHeader>
+      <Card className="h-full min-h-0 flex flex-col overflow-hidden">
+        <CardHeader className="flex-shrink-0">
           <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex-1 min-h-0 overflow-y-auto">
           <p className="text-muted-foreground text-sm">
             {ticker ? `No news available for ${ticker}` : 'No news available'}
           </p>
@@ -181,7 +181,7 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
   }
 
   return (
-    <Card className="h-full flex flex-col">
+    <Card className="h-full min-h-0 flex flex-col overflow-hidden">
       <CardHeader className="flex-shrink-0">
         <CardTitle>{ticker ? `${ticker} News` : 'Latest News'}</CardTitle>
         <div className="flex gap-1 mt-2">
@@ -220,7 +220,7 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="flex-1 overflow-y-auto">
+      <CardContent className="flex-1 min-h-0 overflow-y-auto">
         <div className="space-y-3">
           {visibleArticles.map((article, index) => (
             <div key={index} className="border-b border-border pb-3 last:border-0">
