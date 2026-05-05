@@ -20,6 +20,7 @@ export interface StrategyTrainRequest {
   /** grid = deterministic search order; random = shuffled subset of the same candidate grid */
   optimizer_mode?: 'grid' | 'random'
   random_seed?: number | null
+  pair_ticker?: string | null
 }
 
 export interface StrategyTrainResponse {
@@ -98,7 +99,7 @@ export const getStrategy = async (name: string): Promise<StrategyMetadata> => {
 
 export const preflightStrategy = async (
   strategyName: string,
-  payload: { ticker: string; start_date: string; end_date: string }
+  payload: { ticker: string; start_date: string; end_date: string; pair_ticker?: string | null }
 ): Promise<StrategyPreflightResponse> => {
   const response = await instance.post(`/api/strategies/${strategyName}/preflight`, payload)
   return response.data

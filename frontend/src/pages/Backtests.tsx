@@ -135,13 +135,13 @@ export default function Backtests() {
   const [detailBacktest, setDetailBacktest] = useState<BacktestListItem | null>(null)
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
-  const [strategyParams, setStrategyParams] = useState<Record<string, any>>({})
   const [startDate, setStartDate] = useState(() => `${new Date().getFullYear() - 1}-01-01`)
   const [endDate, setEndDate] = useState(() => `${new Date().getFullYear() - 1}-12-31`)
   const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ticker, setTicker] = useState(() => getStoredTicker())
+  const [pairTicker, setPairTicker] = useState('')
   const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [maxEvals, setMaxEvals] = useState(8)
   const [optimizerMode, setOptimizerMode] = useState<'grid' | 'random'>('grid')
@@ -343,6 +343,11 @@ export default function Backtests() {
       alert('Please provide a ticker for training')
       return
     }
+    const pt = pairTicker.trim().toUpperCase() || undefined
+    if (strategy === 'pairs_trading' && !pt) {
+      alert('pairs_trading requires a second ticker — fill in the "Second ticker" field next to Ticker')
+      return
+    }
     setTraining(true)
     setTrainError(null)
     setServerWaitPhase('preflight')
@@ -352,6 +357,7 @@ export default function Backtests() {
         ticker: normalizedTicker,
         start_date: startDate,
         end_date: endDate,
+        ...(pt ? { pair_ticker: pt } : {}),
       })
       setPreflight(check)
       if (!check.ready) {
@@ -369,6 +375,7 @@ export default function Backtests() {
         max_evals: maxEvals,
         optimizer_mode: optimizerMode,
         ...(Number.isFinite(seedNum as number) ? { random_seed: seedNum } : {}),
+        ...(pt ? { pair_ticker: pt } : {}),
       })
       if (
         response &&
@@ -472,9 +479,8 @@ export default function Backtests() {
             <div className="space-y-2">
               <label className="text-sm font-medium">Strategy Name</label>
               <StrategySelector
-                onStrategyChange={(selectedStrategy, params) => {
+                onStrategyChange={(selectedStrategy) => {
                   setStrategy(selectedStrategy)
-                  setStrategyParams(params)
                   setTrainResult(null)
                   setTrainedParams(null)
                   setTrainError(null)
@@ -503,13 +509,26 @@ export default function Backtests() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Training Ticker</label>
+                <label className="text-sm font-medium">Ticker</label>
                 <TickerSearch
                   value={ticker}
                   onChange={(t) => setTicker(rememberTicker(t))}
                   placeholder="Search a ticker"
                 />
               </div>
+
+              {strategy === 'pairs_trading' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Second ticker <span className="text-destructive">*</span>
+                  </label>
+                  <TickerSearch
+                    value={pairTicker}
+                    onChange={(t) => setPairTicker(t.toUpperCase())}
+                    placeholder="e.g. MSFT"
+                  />
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-sm font-medium">Objective</label>
