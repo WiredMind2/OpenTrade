@@ -364,41 +364,18 @@ export interface StrategyDistributionResponse {
   pnl_by_symbol: DistributionBucket[];
 }
 
-<<<<<<< Updated upstream
 export interface StrategyVariantRow {
   params_hash: string;
   variant_label?: string | null;
   strategy: string;
   representative_run_id: number;
   run_count: number;
-=======
-// Monte Carlo Simulation Types
-export interface MonteCarloConfig {
-  num_simulations: number;
-  time_horizon: number;
-  confidence_level: number;
-}
-
-export interface MonteCarloBacktestRequest {
-  strategy_name: string;
-  start_date: string;
-  end_date: string;
-  initial_capital: number;
-  parameters?: Record<string, any>;
-  monte_carlo: MonteCarloConfig;
-}
-
-export interface SimulationResult {
-  simulation_id: number;
-  final_value: number;
->>>>>>> Stashed changes
   total_return: number;
   annualized_return: number;
   sharpe_ratio: number;
   max_drawdown: number;
   win_rate: number;
   total_trades: number;
-<<<<<<< Updated upstream
   volatility: number;
   params: Record<string, any>;
   last_completed_at?: string | null;
@@ -429,6 +406,33 @@ export interface StrategyVariantTimeseriesResponse {
   equity_curve: Array<Record<string, any>>;
 }
 
+// Monte Carlo Simulation Types
+export interface MonteCarloConfig {
+  num_simulations: number;
+  time_horizon: number;
+  confidence_level: number;
+}
+
+export interface MonteCarloBacktestRequest {
+  strategy_name: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  parameters?: Record<string, any>;
+  monte_carlo: MonteCarloConfig;
+}
+
+export interface SimulationResult {
+  simulation_id: number;
+  final_value: number;
+  total_return: number;
+  annualized_return: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  win_rate: number;
+  total_trades: number;
+}
+
 export interface MonteCarloResult {
   strategy_name: string;
   num_simulations: number;
@@ -448,35 +452,6 @@ export interface MonteCarloResult {
   distribution_summary: Record<string, any>;
 }
 
-/** One strategy row within a ticker's leaderboard slice (matches backend TickerStrategyRow). */
-export interface TickerStrategyRow {
-  ticker: string;
-  strategy: string;
-  params_hash: string;
-  variant_label?: string | null;
-  representative_run_id: number;
-  run_count: number;
-  total_return: number;
-  annualized_return: number;
-  sharpe_ratio: number;
-  max_drawdown: number;
-  win_rate: number;
-  total_trades: number;
-  volatility: number;
-  params: Record<string, any>;
-  last_completed_at?: string | null;
-}
-
-export interface TickerStrategyLeaderboard {
-  ticker: string;
-  strategies: TickerStrategyRow[];
-}
-
-export interface TickerStrategyLeaderboardResponse {
-  objective: string;
-  top_n: number;
-  tickers: TickerStrategyLeaderboard[];
-}
 
 /** One strategy row within a ticker's leaderboard slice (matches backend TickerStrategyRow). */
 export interface TickerStrategyRow {

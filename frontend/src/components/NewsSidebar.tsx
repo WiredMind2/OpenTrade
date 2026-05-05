@@ -8,6 +8,7 @@ interface NewsSidebarProps {
 }
 
 type SentimentFilter = 'all' | 'positive' | 'negative'
+const COLLAPSED_NEWS_COUNT = 4
 
 function cleanSummary(summary: string | null | undefined): string {
   if (!summary) return ''
@@ -98,16 +99,14 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>('all')
+  const [showAll, setShowAll] = useState(false)
 
   const fetchNews = async () => {
     try {
       setError(null)
-      console.log('Fetching news for ticker:', ticker || 'global')
       const data = await getNews(ticker || '')
-      console.log('Fetched news articles:', data.length)
       setArticles(data.slice(0, 10))
     } catch (err) {
-      console.error('Failed to fetch news:', err)
       setError(err instanceof Error ? err.message : 'Failed to load news')
     } finally {
       setLoading(false)
@@ -116,6 +115,7 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
 
   useEffect(() => {
     setLoading(true)
+    setShowAll(false)
     fetchNews()
     
     // Auto refresh every 60 seconds
@@ -127,6 +127,9 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
     if (sentimentFilter === 'all') return articles
     return articles.filter(a => a.sentiment === sentimentFilter)
   }, [articles, sentimentFilter])
+
+  const visibleArticles = showAll ? filteredArticles : filteredArticles.slice(0, COLLAPSED_NEWS_COUNT)
+  const hiddenCount = Math.max(0, filteredArticles.length - COLLAPSED_NEWS_COUNT)
 
   if (loading) {
     return (
@@ -185,7 +188,10 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
           <Button
             variant={sentimentFilter === 'all' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setSentimentFilter('all')}
+            onClick={() => {
+              setSentimentFilter('all')
+              setShowAll(false)
+            }}
             className="text-xs px-2 py-1 h-6"
           >
             All
@@ -193,7 +199,10 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
           <Button
             variant={sentimentFilter === 'positive' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setSentimentFilter('positive')}
+            onClick={() => {
+              setSentimentFilter('positive')
+              setShowAll(false)
+            }}
             className="text-xs px-2 py-1 h-6"
           >
             Positive
@@ -201,7 +210,10 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
           <Button
             variant={sentimentFilter === 'negative' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setSentimentFilter('negative')}
+            onClick={() => {
+              setSentimentFilter('negative')
+              setShowAll(false)
+            }}
             className="text-xs px-2 py-1 h-6"
           >
             Negative
@@ -210,7 +222,7 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
       </CardHeader>
       <CardContent className="flex-1 overflow-y-auto">
         <div className="space-y-3">
-          {filteredArticles.map((article, index) => (
+          {visibleArticles.map((article, index) => (
             <div key={index} className="border-b border-border pb-3 last:border-0">
               <div className="flex items-center gap-2 mb-1">
                 <SentimentBadge sentiment={article.sentiment} />
@@ -245,6 +257,17 @@ export function NewsSidebar({ ticker }: NewsSidebarProps) {
             </div>
           ))}
         </div>
+        {hiddenCount > 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-3 w-full"
+            onClick={() => setShowAll((prev) => !prev)}
+          >
+            {showAll ? 'Show less' : `Show ${hiddenCount} more`}
+          </Button>
+        )}
       </CardContent>
     </Card>
   )
