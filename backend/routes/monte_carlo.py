@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from backend.logging_config import get_component_logger
 from backend.monte_carlo import MonteCarloGenerator, aggregate_monte_carlo_results, calculate_value_at_risk, calculate_expected_shortfall
 from backend.services.strategy_framework import StrategyPreflightService
-from backend.main import app_state
 
 
 router = APIRouter()
@@ -48,6 +47,7 @@ class MonteCarloResult(BaseModel):
 async def run_monte_carlo_simulation(request: MonteCarloRequest):
     """Run Monte Carlo simulation for a strategy to assess risk and potential outcomes."""
     from backend.config import get_config
+    from backend.main import app_state
 
     try:
         # Get strategy registry
