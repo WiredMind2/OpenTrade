@@ -8,6 +8,9 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import sys
 
+import backtrader as bt
+import pandas as pd
+
 # Import the strategy components
 import sys
 from pathlib import Path
@@ -15,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
 from backend.strategies.base import BaseStrategy
 from backend.strategies.registry import StrategyRegistry
 from backend.strategies.sentiment_ml import SentimentMLStrategy
+from backend.strategies.macd_strategy import MACDStrategy
 
 
 @pytest.mark.unit
@@ -412,3 +416,97 @@ class TestSentimentMLStrategy:
         # Verify backtest ran
         assert len(results) == 1
         assert hasattr(results[0], 'equity_curve')
+
+
+@pytest.mark.unit
+class TestMACDStrategy:
+    """Test the MACD strategy class functionality."""
+
+    def setup_method(self):
+        self.strategy = MACDStrategy()
+
+    def test_initialization(self):
+        assert self.strategy.name == "macd"
+        assert self.strategy.description == "MACD with 200 EMA trend filter and zero-line pullback logic"
+        assert self.strategy.type == "rule"
+        assert self.strategy.can_train is False
+        expected_keys = {
+            "macd_fast",
+            "macd_slow",
+            "macd_signal",
+            "ema_period",
+            "lowest_period",
+            "risk_pct",
+            "reward_ratio",
+        }
+        assert expected_keys.issubset(set(self.strategy.parameters_schema.keys()))
+
+    def test_create_backtrader_strategy(self):
+        parameters = {
+            "macd_fast": 12,
+            "macd_slow": 26,
+            "macd_signal": 9,
+            "ema_period": 200,
+            "lowest_period": 10,
+            "risk_pct": 0.01,
+            "reward_ratio": 1.5,
+        }
+
+        bt_strategy_class = self.strategy.create_backtrader_strategy(parameters)
+
+        assert bt_strategy_class is not None
+        assert isinstance(bt_strategy_class, type)
+        assert hasattr(bt_strategy_class, "params")
+        assert bt_strategy_class.__name__ == "UpgradedMACDCrossover"
+
+        assert getattr(bt_strategy_class.params, "macd_fast") == 12
+        assert getattr(bt_strategy_class.params, "macd_slow") == 26
+        assert getattr(bt_strategy_class.params, "macd_signal") == 9
+        assert getattr(bt_strategy_class.params, "ema_period") == 200
+        assert getattr(bt_strategy_class.params, "risk_pct") == 0.01
+        assert getattr(bt_strategy_class.params, "reward_ratio") == 1.5
+
+    def test_instantiate_backtrader_strategy_defaults(self):
+        bt_strategy_class = self.strategy.create_backtrader_strategy({})
+
+        # Minimal sample data to initialize the Backtrader strategy.
+        dates = pd.date_range(start="2024-01-01", periods=260, freq="D")
+        closes = [100.0 + i * 0.1 for i in range(260)]
+        df = pd.DataFrame(
+            {
+                "open": [c - 0.5 for c in closes],
+                "high": [c + 0.5 for c in closes],
+                "low": [c - 1.0 for c in closes],
+                "close": closes,
+                "volume": [1000 + i for i in range(260)],
+            },
+            index=dates,
+        )
+
+        data = bt.feeds.PandasData(dataname=df)
+        cerebro = bt.Cerebro()
+        cerebro.addstrategy(bt_strategy_class)
+        cerebro.adddata(data)
+
+        results = cerebro.run()
+        assert len(results) == 1
+
+        strategy_instance = results[0]
+        assert hasattr(strategy_instance, "next")
+        assert hasattr(strategy_instance, "notify_trade")
+        assert strategy_instance.params.macd_fast == 12
+        assert strategy_instance.params.macd_slow == 26
+        assert strategy_instance.params.macd_signal == 9
+        assert strategy_instance.params.ema_period == 200
+        assert strategy_instance.params.lowest_period == 10
+        assert strategy_instance.params.risk_pct == 0.01
+        assert strategy_instance.params.reward_ratio == 1.5
+
+    def test_project_returns_expected_fields(self):
+        result = self.strategy.project({}, projection_days=30, initial_capital=100000.0)
+
+        assert isinstance(result, dict)
+        assert result["projected_return"] == 0.0
+        assert result["projected_volatility"] == 0.0
+        assert result["confidence_interval"] == [0.0, 0.0]
+        assert result["metrics"] == {}
