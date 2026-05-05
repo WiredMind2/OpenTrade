@@ -164,6 +164,24 @@ export function closeOnOrBefore(asc: Array<{ date: string; close: number }>, ymd
   return best >= 0 ? asc[best].close : undefined
 }
 
+/** First close on or after `ymd` (inclusive), using trading-day series. */
+export function closeOnOrAfter(asc: Array<{ date: string; close: number }>, ymd: string): number | undefined {
+  if (asc.length === 0) return undefined
+  let lo = 0
+  let hi = asc.length - 1
+  let best = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (asc[mid].date >= ymd) {
+      best = mid
+      hi = mid - 1
+    } else {
+      lo = mid + 1
+    }
+  }
+  return best >= 0 ? asc[best].close : undefined
+}
+
 export function mergeBuyHoldOntoSeries(
   points: BacktestChartPoint[],
   priceRows: PriceDailyRow[],
@@ -178,7 +196,7 @@ export function mergeBuyHoldOntoSeries(
   const firstKey = points.map((p) => p.dateKey).find(Boolean)
   if (!firstKey) return points.map((p) => ({ ...p, tickerValue: null }))
 
-  const firstClose = closeOnOrBefore(asc, firstKey)
+  const firstClose = closeOnOrBefore(asc, firstKey) ?? closeOnOrAfter(asc, firstKey)
   if (firstClose == null || firstClose <= 0) return points.map((p) => ({ ...p, tickerValue: null }))
 
   return points.map((p) => {
@@ -242,6 +260,54 @@ export function attachDecisionMarkers(
     }
     return next
   })
+}
+
+/**
+ * Index of the last model trade/signal bar (chronological), for default chart viewport.
+ * Prefers attached buy/sell markers; if none on series (e.g. missing dateKey), uses the
+ * latest marker date from ``markers`` matched to ``points[].dateKey``.
+ */
+export function lastTradeBarIndex(points: BacktestChartPoint[], markers: unknown): number | null {
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i]
+    if (
+      (typeof p.buyMarker === 'number' && Number.isFinite(p.buyMarker)) ||
+      (typeof p.sellMarker === 'number' && Number.isFinite(p.sellMarker))
+    ) {
+      return i
+    }
+  }
+  if (!Array.isArray(markers) || markers.length === 0) return null
+  let maxDate = ''
+  for (const raw of markers) {
+    if (!raw || typeof raw !== 'object') continue
+    const d = (raw as Record<string, unknown>).date
+    if (typeof d !== 'string' || d.length < 10) continue
+    const key = d.slice(0, 10)
+    if (key > maxDate) maxDate = key
+  }
+  if (!maxDate) return null
+  let best = -1
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].dateKey === maxDate) best = i
+  }
+  return best >= 0 ? best : null
+}
+
+/** ``YYYY-MM-DD`` → Unix **seconds** UTC at 00:00. Use for TradingView Charting Library ``createShape`` / ``setVisibleRange`` (see TV drawing examples). */
+export function dateKeyToUnixSecondsUtc(dateKey: string): number | null {
+  if (typeof dateKey !== 'string' || dateKey.length < 10) return null
+  const y = Number(dateKey.slice(0, 4))
+  const mo = Number(dateKey.slice(5, 7))
+  const d = Number(dateKey.slice(8, 10))
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null
+  return Math.floor(Date.UTC(y, mo - 1, d) / 1000)
+}
+
+/** Same as {@link dateKeyToUnixSecondsUtc} but **milliseconds** — matches UDF ``Bar.time`` in the datafeed. */
+export function dateKeyToUnixMsUtc(dateKey: string): number | null {
+  const sec = dateKeyToUnixSecondsUtc(dateKey)
+  return sec == null ? null : sec * 1000
 }
 
 /** Human-readable timestamp for tooltip (daily bars). */

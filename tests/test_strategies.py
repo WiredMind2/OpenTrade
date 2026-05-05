@@ -14,7 +14,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
 from backend.strategies.base import BaseStrategy
 from backend.strategies.registry import StrategyRegistry
-from backend.strategies.sentiment_ml import SentimentMLStrategy
 
 
 @pytest.mark.unit
