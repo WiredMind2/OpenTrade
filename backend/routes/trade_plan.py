@@ -30,6 +30,8 @@ class TradePlanRequest(BaseModel):
     signal_action: Optional[str] = None
     signal_confidence: Optional[float] = None
     signal_reason: Optional[str] = None
+    strategy_name: Optional[str] = None
+    backtest_metrics: Optional[Dict[str, float]] = None
 
 
 class TradePlanResponse(BaseModel):
@@ -153,9 +155,162 @@ def _style_scores(df: pd.DataFrame) -> Dict[str, float]:
     }
 
 
+def _strategy_family(strategy_name: Optional[str]) -> str:
+    name = (strategy_name or "").lower()
+    if any(token in name for token in ("pairs", "pair", "reversion", "mean")):
+        return "mean_reversion"
+    if any(token in name for token in ("breakout", "cross_sectional", "ts_momentum", "momentum", "moving_average")):
+        return "trend_breakout"
+    if any(token in name for token in ("volatility", "vol_target", "risk_parity")):
+        return "volatility"
+    if any(token in name for token in ("recursive", "forecast", "prediction", "sentiment", "rl_directional")):
+        return "forecast"
+    if any(token in name for token in ("allocator", "portfolio")):
+        return "portfolio"
+    return "price_action"
+
+
+def _safe_level(value: Optional[float], latest: float) -> Optional[float]:
+    if value is None or not math.isfinite(value) or value <= 0:
+        return None
+    if value > latest * 5 or value < latest / 5:
+        return None
+    return value
+
+
+def _build_levels(
+    *,
+    strategy_name: Optional[str],
+    direction: Direction,
+    latest: float,
+    atr: float,
+    high20: float,
+    low20: float,
+    ma20: Optional[float],
+    ma50: Optional[float],
+    entry_buf: float,
+    stop_atr: float,
+    target1_atr: float,
+    target2_atr: float,
+) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float], str, str]:
+    family = _strategy_family(strategy_name)
+    atr = max(atr, latest * 0.003)
+    if direction == "wait":
+        if family == "mean_reversion":
+            direction = "short" if ma20 is not None and latest > ma20 else "long"
+        else:
+            direction = "short" if ma50 is not None and latest < ma50 else "long"
+
+    if family == "mean_reversion":
+        anchor = ma20 or ma50 or latest
+        if direction == "short":
+            entry = max(latest + 0.05 * atr, anchor + 0.25 * atr)
+            stop = max(high20 + 0.20 * atr, entry + stop_atr * 0.75 * atr)
+            target1 = min(anchor, entry - target1_atr * 0.65 * atr)
+            target2 = max(low20, entry - target2_atr * 0.75 * atr)
+            invalidation = f"Cancel or exit if price closes above {_round_price(stop)} instead of reverting."
+        else:
+            entry = min(latest - 0.05 * atr, anchor - 0.25 * atr)
+            stop = min(low20 - 0.20 * atr, entry - stop_atr * 0.75 * atr)
+            target1 = max(anchor, entry + target1_atr * 0.65 * atr)
+            target2 = min(high20, entry + target2_atr * 0.75 * atr)
+            invalidation = f"Cancel or exit if price closes below {_round_price(stop)} instead of reverting."
+    elif family == "trend_breakout":
+        if direction == "short":
+            entry = min(latest - entry_buf * atr, low20 - 0.05 * atr)
+            stop = max(ma20 or latest, entry + stop_atr * atr)
+            target1 = entry - target1_atr * atr
+            target2 = entry - target2_atr * atr
+            invalidation = f"Only enter on downside continuation; cancel if price reclaims {_round_price(stop)}."
+        else:
+            entry = max(latest + entry_buf * atr, high20 + 0.05 * atr)
+            stop = min(ma20 or latest, entry - stop_atr * atr)
+            target1 = entry + target1_atr * atr
+            target2 = entry + target2_atr * atr
+            invalidation = f"Only enter on upside continuation; cancel if price loses {_round_price(stop)}."
+    elif family == "volatility":
+        scaled_stop = stop_atr * 0.85
+        scaled_target1 = target1_atr * 0.85
+        scaled_target2 = target2_atr * 0.95
+        if direction == "short":
+            entry = latest - entry_buf * 0.60 * atr
+            stop = entry + scaled_stop * atr
+            target1 = entry - scaled_target1 * atr
+            target2 = entry - scaled_target2 * atr
+            invalidation = f"Reduce risk if volatility expands and price closes above {_round_price(stop)}."
+        else:
+            entry = latest + entry_buf * 0.60 * atr
+            stop = entry - scaled_stop * atr
+            target1 = entry + scaled_target1 * atr
+            target2 = entry + scaled_target2 * atr
+            invalidation = f"Reduce risk if volatility expands and price closes below {_round_price(stop)}."
+    elif family == "forecast":
+        if direction == "short":
+            entry = latest - 0.20 * atr
+            stop = max(latest + stop_atr * 0.90 * atr, ma20 or latest)
+            target1 = entry - target1_atr * 0.90 * atr
+            target2 = entry - target2_atr * atr
+            invalidation = f"Forecast setup fails if price closes above {_round_price(stop)}."
+        else:
+            entry = latest + 0.20 * atr
+            stop = min(latest - stop_atr * 0.90 * atr, ma20 or latest)
+            target1 = entry + target1_atr * 0.90 * atr
+            target2 = entry + target2_atr * atr
+            invalidation = f"Forecast setup fails if price closes below {_round_price(stop)}."
+    elif family == "portfolio":
+        anchor = ma50 or ma20 or latest
+        scaled_stop = stop_atr * 0.70
+        scaled_target1 = target1_atr * 0.70
+        scaled_target2 = target2_atr * 0.85
+        if direction == "short":
+            entry = min(latest - 0.10 * atr, anchor - 0.10 * atr)
+            stop = entry + scaled_stop * atr
+            target1 = entry - scaled_target1 * atr
+            target2 = entry - scaled_target2 * atr
+            invalidation = f"Allocator setup fails if price closes above {_round_price(stop)} or relative risk improves."
+        else:
+            entry = max(latest + 0.10 * atr, anchor + 0.10 * atr)
+            stop = entry - scaled_stop * atr
+            target1 = entry + scaled_target1 * atr
+            target2 = entry + scaled_target2 * atr
+            invalidation = f"Allocator setup fails if price closes below {_round_price(stop)} or relative risk worsens."
+    else:
+        if direction == "short":
+            entry = latest - entry_buf * atr
+            stop = entry + stop_atr * atr
+            target1 = entry - target1_atr * atr
+            target2 = entry - target2_atr * atr
+            invalidation = f"Exit if price closes above {_round_price(stop)} or reclaims the active trend average."
+        elif direction == "long":
+            entry = latest + entry_buf * atr
+            stop = entry - stop_atr * atr
+            target1 = entry + target1_atr * atr
+            target2 = entry + target2_atr * atr
+            invalidation = f"Exit if price closes below {_round_price(stop)} or loses the active trend average."
+        else:
+            entry = high20 + entry_buf * atr
+            stop = entry - stop_atr * atr
+            target1 = entry + target1_atr * atr
+            target2 = entry + target2_atr * atr
+            invalidation = f"Only enter on a break above {_round_price(entry)}; cancel below {_round_price(stop)}."
+
+    entry = _safe_level(entry, latest)
+    stop = _safe_level(stop, latest)
+    target1 = _safe_level(target1, latest)
+    target2 = _safe_level(target2, latest)
+    return entry, stop, target1, target2, invalidation, family
+
+
 @router.post("/trade-plan", response_model=TradePlanResponse, tags=["Trade Plan"])
 async def create_trade_plan(req: TradePlanRequest) -> TradePlanResponse:
     ticker = req.ticker.strip().upper()
+    if req.as_of_date is None:
+        try:
+            from backend.routes.data_endpoints import _refresh_latest_daily_prices
+
+            _refresh_latest_daily_prices(_db_path(), ticker, None)
+        except Exception:
+            pass
     df = _load_prices(ticker, req.as_of_date)
     if df.empty:
         raise HTTPException(status_code=404, detail=f"No price history found for {ticker}")
@@ -198,10 +353,26 @@ async def create_trade_plan(req: TradePlanRequest) -> TradePlanResponse:
 
     direction: Direction = "wait"
     strategy = f"{style} wait"
+    backtest_metrics = req.backtest_metrics or {}
+    backtest_return = float(backtest_metrics.get("total_return", 0.0) or 0.0)
+    backtest_sharpe = float(backtest_metrics.get("sharpe_ratio", 0.0) or 0.0)
+    backtest_drawdown = float(backtest_metrics.get("max_drawdown", 0.0) or 0.0)
     if req.signal_action in {"buy", "sell"} and (req.signal_confidence or 0) >= 0.55:
         direction = "long" if req.signal_action == "buy" else "short"
         strategy = f"saved-model {req.signal_action} signal"
         reasons.append(req.signal_reason or "Saved model signal supports this direction.")
+    elif req.strategy_name and backtest_return > 0.02 and backtest_sharpe > 0.25 and backtest_drawdown < 0.25:
+        if trend_down and style != "long":
+            direction, strategy = "short", f"{req.strategy_name} backtest context"
+            reasons.append(
+                f"Best completed backtest is {req.strategy_name}, but current trend is down; plan is defensive/short."
+            )
+        else:
+            direction, strategy = "long", f"{req.strategy_name} backtest context"
+            reasons.append(
+                f"Best completed backtest is {req.strategy_name}: return {backtest_return * 100:.2f}%, "
+                f"Sharpe {backtest_sharpe:.2f}, max drawdown {backtest_drawdown * 100:.2f}%."
+            )
     elif trend_up and not overbought:
         direction, strategy = "long", f"{style} trend continuation"
         reasons.append("Price is above the active trend averages.")
@@ -211,35 +382,42 @@ async def create_trade_plan(req: TradePlanRequest) -> TradePlanResponse:
     else:
         reasons.append("No clean directional edge is active yet.")
 
+    if req.strategy_name and backtest_metrics and not any(req.strategy_name in r for r in reasons):
+        reasons.append(
+            f"Backtest context: {req.strategy_name} return {backtest_return * 100:.2f}%, "
+            f"Sharpe {backtest_sharpe:.2f}, max drawdown {backtest_drawdown * 100:.2f}%."
+        )
+    if req.strategy_name and req.strategy_name not in strategy:
+        strategy = f"{req.strategy_name} with {strategy}"
+
     if overbought:
         warnings.append("RSI is overbought; avoid chasing without confirmation.")
     if oversold:
         warnings.append("RSI is oversold; short entries have elevated squeeze risk.")
 
-    if direction == "long":
-        entry = latest + entry_buf * atr
-        stop = entry - stop_atr * atr
-        target1 = entry + target1_atr * atr
-        target2 = entry + target2_atr * atr
-        invalidation = f"Exit if price closes below {_round_price(stop)} or loses the active trend average."
-    elif direction == "short":
-        entry = latest - entry_buf * atr
-        stop = entry + stop_atr * atr
-        target1 = entry - target1_atr * atr
-        target2 = entry - target2_atr * atr
-        invalidation = f"Exit if price closes above {_round_price(stop)} or reclaims the active trend average."
-    else:
-        entry = high20 + entry_buf * atr
-        stop = entry - stop_atr * atr
-        target1 = entry + target1_atr * atr
-        target2 = entry + target2_atr * atr
-        invalidation = f"Only enter on a break above {_round_price(entry)}; cancel below {_round_price(stop)}."
+    entry, stop, target1, target2, invalidation, level_family = _build_levels(
+        strategy_name=req.strategy_name,
+        direction=direction,
+        latest=latest,
+        atr=atr,
+        high20=high20,
+        low20=low20,
+        ma20=ma20,
+        ma50=ma50,
+        entry_buf=entry_buf,
+        stop_atr=stop_atr,
+        target1_atr=target1_atr,
+        target2_atr=target2_atr,
+    )
+    if req.strategy_name:
+        reasons.append(f"Entry, stop, and targets use {level_family.replace('_', ' ')} logic for {req.strategy_name}.")
 
     risk_amount = float(req.account_size) * (float(req.risk_percent) / 100.0)
     per_share_risk = abs(entry - stop) if entry is not None and stop is not None else 0.0
     position_size = int(risk_amount / per_share_risk) if per_share_risk > 0 else 0
     rr = abs(target1 - entry) / per_share_risk if target1 is not None and per_share_risk > 0 else None
-    confidence = min(0.95, scores[style] + (0.08 if direction != "wait" else 0.0))
+    backtest_boost = max(-0.08, min(0.12, backtest_sharpe * 0.03)) if req.strategy_name else 0.0
+    confidence = min(0.95, scores[style] + (0.08 if direction != "wait" else 0.0) + backtest_boost)
 
     return TradePlanResponse(
         ticker=ticker,

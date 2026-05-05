@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Bar,
   BarChart,
@@ -105,6 +106,7 @@ function monthlyReturnsFromPoints(points: StrategyTimeseriesPoint[]): Record<str
 }
 
 export default function StrategyPerformance() {
+  const [searchParams] = useSearchParams()
   const [filters, setFilters] = useState<StrategyAnalyticsFilters | null>(null)
   const [strategy, setStrategy] = useState('')
   const [variantSummary, setVariantSummary] = useState<StrategyVariantSummary | null>(null)
@@ -116,7 +118,7 @@ export default function StrategyPerformance() {
   const [objective, setObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [topN, setTopN] = useState(8)
   const [selectedTicker, setSelectedTicker] = useState(() => {
-    const t = getStoredTicker()?.trim().toUpperCase()
+    const t = searchParams.get('ticker')?.trim().toUpperCase() || getStoredTicker()?.trim().toUpperCase()
     return t || 'ALL'
   })
   const [activeParamsHash, setActiveParamsHash] = useState<string | null>(null)

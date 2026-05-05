@@ -466,6 +466,8 @@ export interface TradePlanRequest {
   signal_action?: string
   signal_confidence?: number
   signal_reason?: string
+  strategy_name?: string
+  backtest_metrics?: Record<string, number>
 }
 
 export interface TradePlanResponse {

@@ -1,14 +1,18 @@
-import React, { useState } from 'react'
-import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, Calculator, Shield, Target } from 'lucide-react'
+import React, { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Calculator, Shield, Target } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Badge } from '../components/ui/badge'
 import {
   createTradePlan,
+  getStrategyAnalyticsFilters,
+  getTickerStrategyLeaderboard,
   type TradePlanResponse,
   type TraderStyle,
 } from '../services/api'
+import type { TickerStrategyRow } from '../types'
 import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 function money(value: number | null | undefined) {
@@ -46,18 +50,67 @@ function apiErrorMessage(e: any, fallback: string) {
 }
 
 export default function TradePlan() {
-  const [ticker, setTicker] = useState(() => getStoredTicker())
+  const [searchParams] = useSearchParams()
+  const [ticker, setTicker] = useState(() => searchParams.get('ticker')?.toUpperCase() || getStoredTicker())
   const [style, setStyle] = useState<TraderStyle>('auto')
-  const [asOfDate, setAsOfDate] = useState('')
+  const [asOfDate, setAsOfDate] = useState(() => searchParams.get('date') || '')
   const [accountSize, setAccountSize] = useState(10000)
   const [riskPercent, setRiskPercent] = useState(1)
+  const [objective, setObjective] = useState<'balanced' | 'sharpe' | 'return' | 'drawdown'>('balanced')
+  const [availableStrategies, setAvailableStrategies] = useState<string[]>([])
+  const [selectedStrategy, setSelectedStrategy] = useState('')
+  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [bestBacktestStrategy, setBestBacktestStrategy] = useState<TickerStrategyRow | null>(null)
   const [plan, setPlan] = useState<TradePlanResponse | null>(null)
   const [loading, setLoading] = useState(false)
+  const [ranking, setRanking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rankError, setRankError] = useState<string | null>(null)
 
-  const loadPlan = async () => {
+  useEffect(() => {
+    let cancelled = false
+    void getStrategyAnalyticsFilters()
+      .then((filters) => {
+        if (!cancelled) setAvailableStrategies(filters.strategies || [])
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableStrategies([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const findBestBacktestStrategy = useCallback(async () => {
     const symbol = rememberTicker(ticker)
     if (!symbol) return
+    setRanking(true)
+    setRankError(null)
+    setPlan(null)
+    try {
+      const leaderboard = await getTickerStrategyLeaderboard({
+        ticker: symbol,
+        objective,
+        top_n: 1,
+      })
+      const best = leaderboard.tickers.find((bucket) => bucket.ticker === symbol)?.strategies[0] ?? null
+      setBestBacktestStrategy(best)
+      if (best) setSelectedStrategy(best.strategy)
+      if (!best) {
+        setRankError('No completed backtest found for this ticker yet. Run or train strategies first.')
+      }
+    } catch (e: any) {
+      setBestBacktestStrategy(null)
+      setRankError(e.message || 'Failed to rank completed backtests')
+    } finally {
+      setRanking(false)
+    }
+  }, [ticker, objective])
+
+  const loadPlan = useCallback(async () => {
+    const symbol = rememberTicker(ticker)
+    if (!symbol) return
+    const activeStrategy = bestBacktestStrategy?.strategy || selectedStrategy
     setLoading(true)
     setError(null)
     try {
@@ -67,6 +120,18 @@ export default function TradePlan() {
         account_size: accountSize,
         risk_percent: riskPercent,
         ...(asOfDate.trim() ? { as_of_date: `${asOfDate.trim()}T23:59:59` } : {}),
+        ...(activeStrategy ? { strategy_name: activeStrategy } : {}),
+        ...(bestBacktestStrategy && activeStrategy === bestBacktestStrategy.strategy
+          ? {
+              backtest_metrics: {
+                total_return: bestBacktestStrategy.total_return,
+                sharpe_ratio: bestBacktestStrategy.sharpe_ratio,
+                max_drawdown: bestBacktestStrategy.max_drawdown,
+                volatility: bestBacktestStrategy.volatility,
+                total_trades: bestBacktestStrategy.total_trades,
+              },
+            }
+          : {}),
       })
       setPlan(result)
     } catch (e: any) {
@@ -75,7 +140,15 @@ export default function TradePlan() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [ticker, style, accountSize, riskPercent, asOfDate, bestBacktestStrategy, selectedStrategy])
+
+  useEffect(() => {
+    if (!autoRefresh || asOfDate.trim() || !plan || loading) return
+    const interval = window.setInterval(() => {
+      void loadPlan()
+    }, 60000)
+    return () => window.clearInterval(interval)
+  }, [autoRefresh, asOfDate, plan, loading, loadPlan])
 
   const active = plan ? directionBadge(plan.direction) : null
   const ActiveIcon = active?.icon
@@ -91,27 +164,42 @@ export default function TradePlan() {
 
       <Card className="border-muted shadow-md">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Target className="h-5 w-5 text-primary" />
-            Plan Builder
-          </CardTitle>
-          <CardDescription>Choose ticker, price date, style, and risk budget before taking a signal seriously.</CardDescription>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Target className="h-5 w-5 text-primary" />
+                Plan Builder
+              </CardTitle>
+              <CardDescription>
+                Choose the market, strategy, and risk. Then build one clean entry, stop, target, and size.
+              </CardDescription>
+            </div>
+            {selectedStrategy ? (
+              <Badge variant={bestBacktestStrategy ? 'default' : 'outline'} className="w-fit">
+                {bestBacktestStrategy ? 'Best backtest selected' : 'Manual strategy'}
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="w-fit">Price action only</Badge>
+            )}
+          </div>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+        <CardContent className="space-y-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div className="space-y-2">
               <label className="text-sm font-medium">Ticker</label>
               <Input
                 value={ticker}
                 onChange={(e) => {
                   setTicker(e.target.value.toUpperCase())
+                  setBestBacktestStrategy(null)
+                  setRankError(null)
                   setPlan(null)
                 }}
                 placeholder="AAPL"
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Price date</label>
+              <label className="text-sm font-medium">Price Date</label>
               <Input
                 type="date"
                 value={asOfDate}
@@ -144,13 +232,91 @@ export default function TradePlan() {
               <label className="text-sm font-medium">Risk %</label>
               <Input type="number" min={0.1} max={10} step={0.1} value={riskPercent} onChange={(e) => setRiskPercent(Number(e.target.value) || 1)} />
             </div>
-            <div className="flex items-end">
-              <Button className="w-full" onClick={() => void loadPlan()} disabled={loading}>
-                <Calculator className="mr-2 h-4 w-4" />
-                {loading ? 'Building...' : 'Build Plan'}
-              </Button>
-            </div>
           </div>
+
+          <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_180px_auto_auto] lg:items-end">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Strategy</label>
+              <select
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={selectedStrategy}
+                onChange={(e) => {
+                  setSelectedStrategy(e.target.value)
+                  setBestBacktestStrategy((prev) => (prev?.strategy === e.target.value ? prev : null))
+                  setRankError(null)
+                  setPlan(null)
+                }}
+              >
+                <option value="">Price action only</option>
+                {availableStrategies.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Rank By</label>
+              <select
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={objective}
+                onChange={(e) => {
+                  setObjective(e.target.value as typeof objective)
+                  setBestBacktestStrategy(null)
+                  setRankError(null)
+                  setPlan(null)
+                }}
+              >
+                <option value="balanced">Balanced</option>
+                <option value="sharpe">Sharpe</option>
+                <option value="return">Return</option>
+                <option value="drawdown">Low drawdown</option>
+              </select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void findBestBacktestStrategy()}
+              disabled={ranking}
+              className="w-full lg:w-auto"
+            >
+              {ranking ? (
+                <>
+                  <Activity className="mr-2 h-4 w-4 animate-spin" />
+                  Ranking...
+                </>
+              ) : (
+                <>
+                  <BarChart3 className="mr-2 h-4 w-4" />
+                  Use best
+                </>
+              )}
+            </Button>
+            <Button className="w-full lg:w-auto" onClick={() => void loadPlan()} disabled={loading}>
+              <Calculator className="mr-2 h-4 w-4" />
+              {loading ? 'Building...' : 'Build Plan'}
+            </Button>
+          </div>
+
+          {bestBacktestStrategy && (
+            <div className="grid gap-2 rounded-md border bg-muted/20 p-3 text-sm md:grid-cols-5">
+              <Metric label="Best Strategy" value={bestBacktestStrategy.strategy} />
+              <Metric label="Return" value={`${(bestBacktestStrategy.total_return * 100).toFixed(2)}%`} />
+              <Metric label="Sharpe" value={bestBacktestStrategy.sharpe_ratio.toFixed(2)} />
+              <Metric label="Max DD" value={`${(bestBacktestStrategy.max_drawdown * 100).toFixed(2)}%`} />
+              <Metric label="Win Rate" value={`${(bestBacktestStrategy.win_rate * 100).toFixed(0)}%`} />
+            </div>
+          )}
+
+          {rankError && <p className="text-sm text-destructive">{rankError}</p>}
+
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              disabled={Boolean(asOfDate.trim())}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            Auto-refresh latest plan every 60s while no historical price date is selected.
+          </label>
           {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
         </CardContent>
       </Card>
