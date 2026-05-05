@@ -17,10 +17,18 @@ import argparse
 import sqlite3
 import time
 import requests
+
+MISSING_READABILITY_MESSAGE = (
+    "readability or its dependencies are missing. Install backend requirements or run: "
+    "pip install lxml_html_clean readability-lxml"
+)
 try:
     from readability import Document
-except Exception:
-    raise SystemExit("readability or its dependencies are missing. Please run: pip install 'lxml[html_clean]' readability-lxml or pip install lxml_html_clean readability-lxml")
+except Exception as exc:
+    Document = None  # type: ignore[assignment]
+    READABILITY_IMPORT_ERROR = exc
+else:
+    READABILITY_IMPORT_ERROR = None
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import os
@@ -44,6 +52,9 @@ def fetch_html(url: str, timeout: int = 15):
 
 
 def extract_main_text(html: str):
+    if Document is None:
+        logger.warning("%s (%s)", MISSING_READABILITY_MESSAGE, READABILITY_IMPORT_ERROR)
+        return None, None
     try:
         doc = Document(html)
         summary_html = doc.summary()
@@ -56,6 +67,10 @@ def extract_main_text(html: str):
 
 
 def scrape(db_path: str, limit: int = 100, pause: float = 1.0):
+    if Document is None:
+        logger.warning("%s (%s)", MISSING_READABILITY_MESSAGE, READABILITY_IMPORT_ERROR)
+        print(MISSING_READABILITY_MESSAGE)
+        return
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     # heuristic: content is null, very short, or appears to be a cropped preview (e.g. "... [+3030 chars]")

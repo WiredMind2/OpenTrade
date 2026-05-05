@@ -8,9 +8,11 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.services.strategy_framework import strategy_supports_signal_parameter_training
 from backend.strategies.cross_sectional_ls import CrossSectionalLSStrategy
+from backend.strategies.macd_strategy import MACDStrategy
 from backend.strategies.mean_reversion import MeanReversionStrategy
 from backend.strategies.moving_average import MovingAverageStrategy
 from backend.strategies.pairs_trading import PairsTradingStrategy
+from backend.strategies.rl_directional import RLDirectionalStrategy
 from backend.strategies.rl_portfolio_allocator import RLPortfolioAllocatorStrategy
 from backend.strategies.ts_momentum import TsMomentumStrategy
 from backend.strategies.volatility_targeting import VolatilityTargetingStrategy
@@ -20,6 +22,8 @@ class _TrainRegistry:
     def get(self, name):
         if name == "moving_average":
             return MovingAverageStrategy()
+        if name == "macd":
+            return MACDStrategy()
         if name == "mean_reversion":
             return MeanReversionStrategy()
         if name == "ts_momentum":
@@ -30,6 +34,10 @@ class _TrainRegistry:
             return CrossSectionalLSStrategy()
         if name == "rl_portfolio_allocator":
             return RLPortfolioAllocatorStrategy()
+        if name == "rl_directional":
+            return RLDirectionalStrategy()
+        if name == "volatility_targeting":
+            return VolatilityTargetingStrategy()
         return None
 
 
@@ -153,7 +161,10 @@ def test_train_strategy_optimizes_moving_average(tmp_path):
 def test_signal_parameter_training_flags():
     assert strategy_supports_signal_parameter_training("mean_reversion")
     assert strategy_supports_signal_parameter_training("pairs_trading")
-    assert not strategy_supports_signal_parameter_training("volatility_targeting")
+    assert strategy_supports_signal_parameter_training("macd")
+    assert strategy_supports_signal_parameter_training("rl_directional")
+    assert strategy_supports_signal_parameter_training("volatility_targeting")
+    assert not strategy_supports_signal_parameter_training("recursive_forecast")
 
 
 def test_train_mean_reversion_signal_optimize(tmp_path):
@@ -273,7 +284,7 @@ def test_train_rl_portfolio_allocator(tmp_path):
     assert res.status_code == 200, res.text
 
 
-def test_train_volatility_targeting_not_supported(tmp_path):
+def test_train_volatility_targeting_signal_optimize(tmp_path):
     db_path = tmp_path / "optimize_vol.db"
     _seed_optimize_db(db_path)
     client = TestClient(app)
@@ -286,5 +297,5 @@ def test_train_volatility_targeting_not_supported(tmp_path):
                 "end_date": "2025-03-01T00:00:00",
             },
         )
-    assert res.status_code == 400
-    assert "does not support training" in res.json()["detail"]
+    assert res.status_code == 200, res.text
+    assert res.json()["strategy"] == "volatility_targeting"

@@ -7,11 +7,11 @@ import { Input } from '../components/ui/input'
 import { Badge } from '../components/ui/badge'
 import {
   createTradePlan,
-  getStrategyAnalyticsFilters,
   getTickerStrategyLeaderboard,
   type TradePlanResponse,
   type TraderStyle,
 } from '../services/api'
+import { getStrategies } from '../api/strategies'
 import type { TickerStrategyRow } from '../types'
 import { getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
@@ -69,9 +69,16 @@ export default function TradePlan() {
 
   useEffect(() => {
     let cancelled = false
-    void getStrategyAnalyticsFilters()
-      .then((filters) => {
-        if (!cancelled) setAvailableStrategies(filters.strategies || [])
+    void getStrategies()
+      .then((strategies) => {
+        if (!cancelled) {
+          setAvailableStrategies(
+            strategies
+              .map((strategy) => strategy.name)
+              .filter(Boolean)
+              .sort((a, b) => a.localeCompare(b))
+          )
+        }
       })
       .catch(() => {
         if (!cancelled) setAvailableStrategies([])
