@@ -4,6 +4,16 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.strategies import strategy_registry
+
+
+class _Registry:
+    """Minimal registry wrapper that delegates to the real strategy registry."""
+    def get(self, name):
+        return strategy_registry.get(name)
+
+    def list(self, **kwargs):
+        return strategy_registry.list(**kwargs)
 
 
 def _init_prices_db(db_path: str) -> None:

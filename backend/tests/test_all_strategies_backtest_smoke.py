@@ -28,9 +28,9 @@ def _param_defaults(strategy) -> dict:
 def _seed_prices_and_predictions(path: str) -> None:
     conn = sqlite3.connect(path)
     _init_backtest_tables(conn)
-    start = datetime(2024, 1, 1)
+    start = datetime(2023, 1, 1)
     symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
-    for i in range(200):
+    for i in range(700):  # ~2 years — covers EMA(200) warm-up before the 2024-04 test window
         day = (start + timedelta(days=i)).date().isoformat()
         for j, sym in enumerate(symbols):
             px = 40.0 + i * 0.04 + j * 2.5

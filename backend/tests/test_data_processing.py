@@ -24,13 +24,11 @@ def test_database_connection_success():
 
 
 def test_database_connection_failure():
-    """Test failure with non-existent database in invalid directory."""
-    # Use a path that doesn't exist and can't be created (e.g., invalid drive on Windows)
-    invalid_path = 'Z:\\non_existent\\invalid.db'  # Assuming Z: doesn't exist
-
-    # If Z: exists, use a different invalid path
-    if os.path.exists('Z:\\'):
-        invalid_path = '/dev/null/invalid.db'  # Unix-style invalid path on Windows
+    """Test failure with a path that cannot be created."""
+    if os.name == 'nt':
+        invalid_path = 'Z:\\non_existent_drive\\invalid.db'
+    else:
+        invalid_path = '/dev/null/invalid.db'  # /dev/null is a file, not a dir
 
     with pytest.raises(sqlite3.OperationalError):
         connect_to_database(invalid_path)
