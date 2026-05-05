@@ -382,15 +382,7 @@ export const getBacktests = async (opts?: {
   const response = await instance.get('/trading/backtest', { params })
   return response.data
 }
-}) => {
-  const id = opts?.backtestId?.trim()
-  const params: Record<string, string | number> =
-    id && id.length > 0
-      ? { backtest_id: id }
-      : { page: opts?.page ?? 1, limit: opts?.limit ?? 50 }
-  const response = await instance.get('/trading/backtest', { params })
-  return response.data
-}
+
 
 export const runMonteCarloBacktest = async (data: {
   strategy_name: string
