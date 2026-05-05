@@ -220,38 +220,6 @@ export interface MonteCarloResult {
 }
 
 export async function runMonteCarloSimulation(request: MonteCarloRequest): Promise<MonteCarloResult> {
-  // Mock implementation for testing - replace with actual API call when backend is running
-  console.log('Monte Carlo request:', request)
-
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 2000))
-
-  // Generate mock Monte Carlo results
-  const mockResults = {
-    simulation_id: `mc_mock_${Date.now()}`,
-    strategy_name: request.strategy_name,
-    ticker: request.ticker,
-    num_simulations: request.num_simulations || 1000,
-    time_horizon_days: request.time_horizon_days || 252,
-    aggregated_results: {
-      mean_final_value: (request.initial_capital || 100000) * 1.08,
-      std_final_value: (request.initial_capital || 100000) * 0.15,
-      mean_total_return: 0.08,
-      std_total_return: 0.15,
-      confidence_lower_return: -0.05,
-      confidence_upper_return: 0.21,
-      worst_case_return: -0.12,
-      best_case_return: 0.35,
-      probability_positive_return: 0.68
-    },
-    risk_metrics: {
-      value_at_risk_95: -0.08,
-      expected_shortfall_95: -0.12,
-      volatility: 0.15,
-      probability_positive_return: 0.68
-    },
-    created_at: new Date().toISOString()
-  }
-
-  return mockResults
+  const response = await instance.post('/api/monte-carlo/simulate', request);
+  return response.data;
 }

@@ -47,6 +47,7 @@ class MonteCarloResult(BaseModel):
 async def run_monte_carlo_simulation(request: MonteCarloRequest):
     """Run Monte Carlo simulation for a strategy to assess risk and potential outcomes."""
     from backend.config import get_config
+    from backend.main import app_state  # Import here to avoid circular imports
     from backend.main import app_state
 
     try:
@@ -60,22 +61,25 @@ async def run_monte_carlo_simulation(request: MonteCarloRequest):
         if not strategy:
             raise HTTPException(status_code=404, detail=f"Strategy '{request.strategy_name}' not found")
 
+        # Get historical data to estimate drift and volatility
+        config = get_config()
+        db_path = app_state.get("database_path") or config.database.path
+
         # Preflight check - validate ticker and dates
-        preflight_service = StrategyPreflightService()
-        preflight_result = await preflight_service.check_strategy_readiness(
+        preflight_service = StrategyPreflightService(db_path)
+        start_dt = datetime.fromisoformat(request.start_date)
+        end_dt = datetime.fromisoformat(request.end_date)
+        preflight_result = preflight_service.evaluate(
             strategy_name=request.strategy_name,
+            strategy=strategy,
             ticker=request.ticker,
-            start_date=request.start_date,
-            end_date=request.end_date
+            start_date=start_dt,
+            end_date=end_dt
         )
 
         if not preflight_result.ready:
             issues = [issue.message for issue in preflight_result.issues]
             raise HTTPException(status_code=400, detail=f"Preflight failed: {', '.join(issues)}")
-
-        # Get historical data to estimate drift and volatility
-        config = get_config()
-        db_path = app_state.get("database_path") or config.database.path
 
         # Fetch historical prices for parameter estimation
         historical_returns = get_historical_returns(db_path, request.ticker, request.start_date, request.end_date)
@@ -86,12 +90,12 @@ async def run_monte_carlo_simulation(request: MonteCarloRequest):
         drift = np.mean(historical_returns)
         volatility = np.std(historical_returns)
 
-        # Run Monte Carlo simulations
-        generator = MonteCarloGenerator()
-        simulation_results = []
-
         # Get initial price
         initial_price = get_initial_price(db_path, request.ticker, request.start_date)
+
+        # Initialize generator
+        generator = MonteCarloGenerator()
+        simulation_results = []
 
         for i in range(request.num_simulations):
             # Generate price path
