@@ -1,16 +1,29 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   BarChart3,
+  Calendar,
   Gauge,
   Newspaper,
   RefreshCw,
+  Route,
   Search,
   Sparkles,
 } from 'lucide-react'
-import { getBacktests, getPriceHistory, type PriceHistoryRow } from '../services/api'
+import {
+  getBacktests,
+  getPriceHistory,
+  getTickerPriceOnDate,
+  getUdfQuotes,
+  getUdfSymbolInfo,
+  type PriceDailyRow,
+  type PriceHistoryRow,
+  type UdfQuote,
+  type UdfSymbolInfo,
+} from '../services/api'
 import { getNews, type NewsArticle } from '../api/news'
 import type { BacktestResult } from '../types'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
@@ -19,6 +32,8 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import ErrorMessage from '../components/ErrorMessage'
 import { Skeleton } from '../components/ui/skeleton'
+import OHLCChart from '../components/OHLCChart'
+import { NewsSidebar } from '../components/NewsSidebar'
 import { getRememberedTicker, getStoredTicker, rememberTicker } from '../utils/tickerMemory'
 
 type BriefBacktest = BacktestResult & {
@@ -42,8 +57,45 @@ type MarketMove = {
 
 const MARKET_RISK_BASKET = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'TSLA', 'AMZN', 'META']
 
+const popularSymbols = [
+  { symbol: 'AAPL', label: 'Apple' },
+  { symbol: 'MSFT', label: 'Microsoft' },
+  { symbol: 'NVDA', label: 'Nvidia' },
+  { symbol: 'TSLA', label: 'Tesla' },
+  { symbol: 'SPY', label: 'S&P 500 ETF' },
+  { symbol: 'QQQ', label: 'Nasdaq ETF' },
+  { symbol: 'BTC-USD', label: 'Bitcoin' },
+  { symbol: 'ETH-USD', label: 'Ethereum' },
+  { symbol: 'XAUUSD=X', label: 'Gold spot' },
+  { symbol: 'GC=F', label: 'Gold futures' },
+  { symbol: 'CL=F', label: 'Crude oil' },
+]
+
 function pct(value: number) {
   return `${(value * 100).toFixed(2)}%`
+}
+
+function formatQuotePrice(value: number | null | undefined, currency = 'USD') {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  const decimals = Math.abs(value) >= 100 ? 2 : 4
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(value)
+  } catch {
+    return `${value.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })} ${currency}`
+  }
+}
+
+function formatSigned(value: number | undefined, digits = 2) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return `${value > 0 ? '+' : ''}${value.toFixed(digits)}`
 }
 
 function moversLeaders(moves: MarketMove[], limit: number): MarketMove[] {
@@ -151,6 +203,17 @@ export default function MarketBrief() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Ticker analysis state (from Predictions)
+  const [symbolInfo, setSymbolInfo] = useState<UdfSymbolInfo | null>(null)
+  const [quote, setQuote] = useState<UdfQuote | null>(null)
+  const [priceOnDate, setPriceOnDate] = useState<PriceDailyRow | null>(null)
+  const [signalAsOfDate, setSignalAsOfDate] = useState('')
+
+  const chartStrategyParams = useMemo(() => ({}), [])
+  const sym = preferredTicker.trim().toUpperCase()
+  const tradePlanHref = `/trade-plan${sym ? `?ticker=${encodeURIComponent(sym)}${signalAsOfDate ? `&date=${signalAsOfDate}` : ''}` : ''}`
+  const strategyPerformanceHref = `/strategy-performance${sym ? `?ticker=${encodeURIComponent(sym)}` : ''}`
+
   const loadBrief = async () => {
     setLoading(true)
     setError(null)
@@ -193,6 +256,36 @@ export default function MarketBrief() {
   useEffect(() => {
     loadBrief()
   }, [])
+
+  useEffect(() => {
+    if (!sym) return
+    let cancelled = false
+    const loadTickerHeader = async () => {
+      try {
+        const [info, quotes, asOfPrice] = await Promise.all([
+          getUdfSymbolInfo(sym),
+          getUdfQuotes([sym]),
+          getTickerPriceOnDate(sym, signalAsOfDate.trim() || undefined),
+        ])
+        if (cancelled) return
+        setSymbolInfo(info)
+        setQuote(quotes[0] ?? null)
+        setPriceOnDate(asOfPrice)
+      } catch {
+        if (!cancelled) {
+          setSymbolInfo(null)
+          setQuote(null)
+          setPriceOnDate(null)
+        }
+      }
+    }
+    void loadTickerHeader()
+    const interval = window.setInterval(() => void loadTickerHeader(), signalAsOfDate.trim() ? 60000 : 15000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [sym, signalAsOfDate])
 
   const leaders = useMemo(() => moversLeaders(marketMoves, 4), [marketMoves])
   const laggards = useMemo(() => moversLaggards(marketMoves, 4), [marketMoves])
@@ -566,6 +659,130 @@ export default function MarketBrief() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* Ticker Analysis */}
+      <div className="space-y-4 pt-2">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight">Ticker Analysis</h2>
+          <p className="text-sm text-muted-foreground">
+            Select a ticker to view its chart, then build an entry in Trade Plan using your chosen strategy.
+          </p>
+        </div>
+
+        <Card className="border-muted shadow-md">
+          <CardContent className="p-0">
+            <div className="flex flex-col gap-3 border-b px-3 py-3 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-semibold leading-tight">{sym || 'Select ticker'}</h3>
+                  <Badge variant="outline">{symbolInfo?.exchange || 'MARKET'}</Badge>
+                  <Badge variant="secondary">{symbolInfo?.currency_code || 'USD'}</Badge>
+                </div>
+                <p className="truncate text-sm text-muted-foreground">
+                  {symbolInfo?.description || 'Loading symbol details'}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-2xl font-semibold tabular-nums">
+                  {formatQuotePrice(priceOnDate?.close ?? quote?.v?.lp, symbolInfo?.currency_code || 'USD')}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Price date: {priceOnDate?.date || 'latest available'}
+                </p>
+                {!signalAsOfDate.trim() && (
+                  <p
+                    className={`text-sm tabular-nums ${
+                      Number(quote?.v?.ch ?? 0) >= 0 ? 'text-success' : 'text-destructive'
+                    }`}
+                  >
+                    {formatSigned(quote?.v?.ch)} ({formatSigned(quote?.v?.chp)}%)
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 overflow-x-auto px-3 py-2">
+              {popularSymbols.map((item) => (
+                <Button
+                  key={item.symbol}
+                  type="button"
+                  size="sm"
+                  variant={sym === item.symbol ? 'default' : 'outline'}
+                  className="shrink-0"
+                  title={item.label}
+                  onClick={() => {
+                    const normalized = rememberTicker(item.symbol)
+                    setPreferredTicker(normalized)
+                    setSearchTicker(normalized)
+                    setSearchedMove(null)
+                  }}
+                >
+                  {item.symbol}
+                </Button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-muted shadow-md">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Route className="h-5 w-5 text-primary" />
+              Build the trading decision
+            </CardTitle>
+            <CardDescription>
+              Pick a price date to replay history, or leave it empty so Trade Plan uses the latest available market data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_auto] md:items-end">
+              <div className="space-y-2">
+                <label className="text-sm font-medium flex items-center gap-2">
+                  <Calendar className="h-4 w-4" />
+                  Price date
+                </label>
+                <Input
+                  type="date"
+                  value={signalAsOfDate}
+                  onChange={(e) => setSignalAsOfDate(e.target.value)}
+                  placeholder="Latest bar"
+                />
+                <p className="text-xs text-muted-foreground">Uses latest close on or before this date.</p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button asChild type="button" variant="outline" className="w-full sm:w-auto">
+                  <Link to={tradePlanHref}>Build trade plan</Link>
+                </Button>
+                <Button asChild type="button" variant="ghost" className="w-full sm:w-auto">
+                  <Link to={strategyPerformanceHref}>Compare strategies</Link>
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="flex flex-col lg:flex-row gap-4">
+          <div className="flex-1 min-w-0">
+            <OHLCChart
+              symbol={preferredTicker}
+              height="600px"
+              strategyName=""
+              params={chartStrategyParams}
+              horizon={30}
+              onSymbolChange={(symbol) => {
+                const normalized = rememberTicker(symbol)
+                if (normalized && normalized !== preferredTicker) {
+                  setPreferredTicker(normalized)
+                  setSearchTicker(normalized)
+                  setSearchedMove(null)
+                }
+              }}
+            />
+          </div>
+          <div className="w-full lg:w-80 xl:w-96 flex-shrink-0">
+            <NewsSidebar ticker={preferredTicker} />
+          </div>
+        </div>
       </div>
     </div>
   )

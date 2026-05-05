@@ -1,7 +1,6 @@
 import React from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import MarketBrief from './pages/MarketBrief'
-import Predictions from './pages/Predictions'
 import Backtests from './pages/Backtests'
 import Scripts from './pages/Scripts'
 import StrategyPerformance from './pages/StrategyPerformance'
@@ -36,7 +35,6 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Navigate to="/brief" replace />} />
               <Route path="/brief" element={<MarketBrief />} />
-              <Route path="/predictions" element={<Predictions />} />
               <Route path="/backtests" element={<Backtests />} />
               <Route path="/scripts" element={<Scripts />} />
               <Route path="/strategy-performance" element={<StrategyPerformance />} />

@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
-  TrendingUp,
   BarChart3,
   Menu,
   X,
@@ -22,7 +21,6 @@ interface SidebarProps {
 
 const navigation = [
   { name: 'Market Brief', href: '/brief', icon: Newspaper },
-  { name: 'Predictions', href: '/predictions', icon: TrendingUp },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
   { name: 'Strategy Performance', href: '/strategy-performance', icon: LineChart },
   { name: 'Trade Plan', href: '/trade-plan', icon: Target },
