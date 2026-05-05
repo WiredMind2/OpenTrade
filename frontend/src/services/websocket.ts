@@ -150,6 +150,13 @@ class WebSocketService {
 
     this.listeners[type].push(listener as any)
 
+    // New listeners should be able to reopen a session even if we hit max reconnect backoff earlier.
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout)
+      this.reconnectTimeout = null
+    }
+    this.reconnectAttempts = 0
+
     // Ensure connection is active
     this.connect()
 

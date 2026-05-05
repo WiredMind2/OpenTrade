@@ -4,22 +4,6 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.strategies.moving_average import MovingAverageStrategy
-from backend.strategies.recursive_forecast_strategy import RecursiveForecastStandaloneStrategy
-
-
-class _Registry:
-    def __init__(self):
-        self._strategies = {
-            "moving_average": MovingAverageStrategy(),
-            "recursive_forecast": RecursiveForecastStandaloneStrategy(),
-        }
-
-    def get(self, name):
-        return self._strategies.get(name)
-
-    def list(self):
-        return []
 
 
 def _init_prices_db(db_path: str) -> None:

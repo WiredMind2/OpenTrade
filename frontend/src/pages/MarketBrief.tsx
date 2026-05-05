@@ -10,9 +10,9 @@ import {
   Search,
   Sparkles,
 } from 'lucide-react'
-import { getBacktests, getPredictions, getPriceHistory, type PriceHistoryRow } from '../services/api'
+import { getBacktests, getPriceHistory, type PriceHistoryRow } from '../services/api'
 import { getNews, type NewsArticle } from '../api/news'
-import type { BacktestResult, PredictionResponse } from '../types'
+import type { BacktestResult } from '../types'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -27,14 +27,6 @@ type BriefBacktest = BacktestResult & {
   error?: string
   ticker?: string | null
   params?: Record<string, any>
-}
-
-type RankedPrediction = {
-  ticker: string
-  avgReturn: number
-  avgConfidence: number
-  horizons: string[]
-  count: number
 }
 
 type MarketMove = {
@@ -54,30 +46,21 @@ function pct(value: number) {
   return `${(value * 100).toFixed(2)}%`
 }
 
-function groupPredictions(predictions: PredictionResponse[]): RankedPrediction[] {
-  const grouped = new Map<string, PredictionResponse[]>()
-  for (const pred of predictions) {
-    const ticker = pred.ticker?.toUpperCase()
-    if (!ticker) continue
-    grouped.set(ticker, [...(grouped.get(ticker) ?? []), pred])
-  }
-
-  return Array.from(grouped.entries()).map(([ticker, rows]) => {
-    const avgReturn = rows.reduce((sum, row) => sum + Number(row.predicted_return || 0), 0) / rows.length
-    const avgConfidence = rows.reduce((sum, row) => sum + Number(row.confidence || 0), 0) / rows.length
-    return {
-      ticker,
-      avgReturn,
-      avgConfidence,
-      horizons: Array.from(new Set(rows.map((row) => row.horizon))).sort(),
-      count: rows.length,
-    }
-  })
+function moversLeaders(moves: MarketMove[], limit: number): MarketMove[] {
+  return [...moves].filter((m) => m.changePct > 0).sort((a, b) => b.changePct - a.changePct).slice(0, limit)
 }
 
-function signalLabel(item: RankedPrediction) {
-  if (item.avgReturn > 0.01 && item.avgConfidence >= 0.6) return 'Constructive'
-  if (item.avgReturn < -0.01 && item.avgConfidence >= 0.6) return 'Cautious'
+function moversLaggards(moves: MarketMove[], limit: number): MarketMove[] {
+  return [...moves].filter((m) => m.changePct < 0).sort((a, b) => a.changePct - b.changePct).slice(0, limit)
+}
+
+function leaderTone(move: MarketMove): 'Constructive' | 'Watch' {
+  if (move.changePct > 0.01 && move.risk !== 'elevated') return 'Constructive'
+  return 'Watch'
+}
+
+function laggardTone(move: MarketMove): 'Cautious' | 'Watch' {
+  if (move.changePct < -0.01 && move.risk !== 'elevated') return 'Cautious'
   return 'Watch'
 }
 
@@ -156,20 +139,7 @@ function backtestTicker(run: BriefBacktest | undefined | null): string {
   return String(run?.ticker || run?.params?.ticker || '').trim().toUpperCase()
 }
 
-function predictionTime(prediction: PredictionResponse | undefined | null) {
-  const time = Date.parse(String(prediction?.timestamp || ''))
-  return Number.isFinite(time) ? time : 0
-}
-
-function latestPredictionTicker(predictions: PredictionResponse[]) {
-  return predictions
-    .filter((item) => item.ticker)
-    .slice()
-    .sort((a, b) => predictionTime(b) - predictionTime(a))[0]?.ticker?.toUpperCase() || ''
-}
-
 export default function MarketBrief() {
-  const [predictions, setPredictions] = useState<PredictionResponse[]>([])
   const [backtests, setBacktests] = useState<BriefBacktest[]>([])
   const [news, setNews] = useState<NewsArticle[]>([])
   const [marketMoves, setMarketMoves] = useState<MarketMove[]>([])
@@ -185,24 +155,18 @@ export default function MarketBrief() {
     setLoading(true)
     setError(null)
     try {
-      const [predictionData, backtestData] = await Promise.all([
-        getPredictions(),
-        getBacktests(),
-      ])
-      const safePredictions = Array.isArray(predictionData) ? predictionData : []
-      setPredictions(safePredictions)
+      const backtestData = await getBacktests()
       const safeBacktests = Array.isArray(backtestData) ? backtestData : []
       setBacktests(safeBacktests)
 
       const rememberedTicker = getRememberedTicker()
       const lastBacktestTicker = backtestTicker(safeBacktests.find((item: BriefBacktest) => item.ticker || item.params?.ticker))
-      const newsTicker = rememberedTicker || lastBacktestTicker || latestPredictionTicker(safePredictions) || MARKET_RISK_BASKET[0]
+      const newsTicker = rememberedTicker || lastBacktestTicker || MARKET_RISK_BASKET[0]
       const symbols = Array.from(
         new Set([
           ...(rememberedTicker ? [rememberedTicker] : []),
           ...(lastBacktestTicker ? [lastBacktestTicker] : []),
           ...MARKET_RISK_BASKET,
-          ...safePredictions.slice(0, 10).map((item: PredictionResponse) => item.ticker?.toUpperCase()).filter(Boolean),
         ])
       ).slice(0, 8) as string[]
       const moveResults = await Promise.allSettled(
@@ -230,15 +194,8 @@ export default function MarketBrief() {
     loadBrief()
   }, [])
 
-  const ranked = useMemo(() => groupPredictions(predictions), [predictions])
-  const bullish = useMemo(
-    () => ranked.filter((item) => item.avgReturn > 0).sort((a, b) => b.avgReturn - a.avgReturn).slice(0, 4),
-    [ranked]
-  )
-  const bearish = useMemo(
-    () => ranked.filter((item) => item.avgReturn < 0).sort((a, b) => a.avgReturn - b.avgReturn).slice(0, 4),
-    [ranked]
-  )
+  const leaders = useMemo(() => moversLeaders(marketMoves, 4), [marketMoves])
+  const laggards = useMemo(() => moversLaggards(marketMoves, 4), [marketMoves])
   const completedBacktests = useMemo(
     () => backtests.filter((item) => (item.status ?? item.metrics?.status ?? 'completed') === 'completed'),
     [backtests]
@@ -252,11 +209,7 @@ export default function MarketBrief() {
     [backtests]
   )
   const lastRelevantTicker = backtestTicker(lastRelevantBacktest)
-  const lastTrainedTicker = useMemo(
-    () => latestPredictionTicker(predictions),
-    [predictions]
-  )
-  const targetTicker = searchedMove?.ticker || preferredTicker || lastRelevantTicker || lastTrainedTicker
+  const targetTicker = searchedMove?.ticker || preferredTicker || lastRelevantTicker
   const bestBacktest = useMemo(
     () => completedBacktests.slice().sort((a, b) => Number(b.total_return || 0) - Number(a.total_return || 0))[0],
     [completedBacktests]
@@ -268,9 +221,8 @@ export default function MarketBrief() {
       searchedMove ||
       marketMoves.find((move) => preferredTicker && move.ticker === preferredTicker) ||
       marketMoves.find((move) => lastRelevantTicker && move.ticker === lastRelevantTicker) ||
-      marketMoves.find((move) => lastTrainedTicker && move.ticker === lastTrainedTicker) ||
       marketMoves.slice().sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))[0],
-    [lastRelevantTicker, lastTrainedTicker, marketMoves, preferredTicker, searchedMove]
+    [lastRelevantTicker, marketMoves, preferredTicker, searchedMove]
   )
   const sortedMarketMoves = useMemo(
     () => marketMoves.slice().sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)),
@@ -289,8 +241,6 @@ export default function MarketBrief() {
     ? 'selected ticker'
     : lastRelevantTicker && leadMove?.ticker === lastRelevantTicker
     ? 'last backtest'
-    : lastTrainedTicker && leadMove?.ticker === lastTrainedTicker
-    ? 'latest trained prediction'
     : 'tracked market basket'
   const upMoves = marketMoves.filter((move) => move.changePct > 0).length
   const downMoves = marketMoves.filter((move) => move.changePct < 0).length
@@ -366,13 +316,17 @@ export default function MarketBrief() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               <Sparkles className="h-4 w-4 text-primary" />
-              Prediction Bias
+              Basket breadth
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-semibold">{bullish.length >= bearish.length ? 'Risk-On Watch' : 'Defensive Watch'}</p>
+            <p className="text-2xl font-semibold">
+              {marketMoves.length === 0 ? 'No breadth data' : upMoves >= downMoves ? 'Risk-On Watch' : 'Defensive Watch'}
+            </p>
             <p className="mt-2 text-sm text-muted-foreground">
-              {bullish.length} positive names and {bearish.length} cautious names in recent predictions.
+              {marketMoves.length === 0
+                ? 'Load price history for the basket to see how many names are up vs down on the latest bar.'
+                : `${upMoves} of ${marketMoves.length} tracked names up on the latest daily bar vs ${downMoves} down (price history only).`}
             </p>
           </CardContent>
         </Card>
@@ -433,27 +387,27 @@ export default function MarketBrief() {
               <ArrowUpRight className="h-5 w-5 text-success" />
               Constructive Watchlist
             </CardTitle>
-            <CardDescription>Names with positive predicted returns in recent signals.</CardDescription>
+            <CardDescription>Names with the largest positive daily change among the tracked set.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {bullish.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No positive prediction cluster yet.</p>
-            ) : bullish.map((item) => (
+            {leaders.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No up days in the tracked basket yet.</p>
+            ) : leaders.map((item) => (
               <div key={item.ticker} className="rounded bg-tv-bg-tertiary p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="font-mono text-lg font-semibold">{item.ticker}</p>
-                    <p className="text-xs text-muted-foreground">{item.horizons.join(', ')} horizons</p>
+                    <p className="text-xs text-muted-foreground">{item.date}</p>
                   </div>
                   <div className="text-right">
-                    <Badge variant={signalLabel(item) === 'Constructive' ? 'success' : 'secondary'}>
-                      {signalLabel(item)}
+                    <Badge variant={leaderTone(item) === 'Constructive' ? 'success' : 'secondary'}>
+                      {leaderTone(item)}
                     </Badge>
-                    <p className="mt-1 text-sm font-medium text-success">{pct(item.avgReturn)}</p>
+                    <p className="mt-1 text-sm font-medium text-success">{pct(item.changePct)}</p>
                   </div>
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Average confidence {(item.avgConfidence * 100).toFixed(0)}% across {item.count} signal{item.count > 1 ? 's' : ''}.
+                  Intraday range {pct(item.intradayRangePct)} · {item.risk} risk
                 </p>
               </div>
             ))}
@@ -466,27 +420,27 @@ export default function MarketBrief() {
               <ArrowDownRight className="h-5 w-5 text-destructive" />
               Caution Watchlist
             </CardTitle>
-            <CardDescription>Names where predictions lean negative or risk is rising.</CardDescription>
+            <CardDescription>Names with the largest negative daily change among the tracked set.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {bearish.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No negative prediction cluster yet.</p>
-            ) : bearish.map((item) => (
+            {laggards.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No down days in the tracked basket yet.</p>
+            ) : laggards.map((item) => (
               <div key={item.ticker} className="rounded bg-tv-bg-tertiary p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="font-mono text-lg font-semibold">{item.ticker}</p>
-                    <p className="text-xs text-muted-foreground">{item.horizons.join(', ')} horizons</p>
+                    <p className="text-xs text-muted-foreground">{item.date}</p>
                   </div>
                   <div className="text-right">
-                    <Badge variant={signalLabel(item) === 'Cautious' ? 'destructive' : 'secondary'}>
-                      {signalLabel(item)}
+                    <Badge variant={laggardTone(item) === 'Cautious' ? 'destructive' : 'secondary'}>
+                      {laggardTone(item)}
                     </Badge>
-                    <p className="mt-1 text-sm font-medium text-destructive">{pct(item.avgReturn)}</p>
+                    <p className="mt-1 text-sm font-medium text-destructive">{pct(item.changePct)}</p>
                   </div>
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Average confidence {(item.avgConfidence * 100).toFixed(0)}% across {item.count} signal{item.count > 1 ? 's' : ''}.
+                  Intraday range {pct(item.intradayRangePct)} · {item.risk} risk
                 </p>
               </div>
             ))}

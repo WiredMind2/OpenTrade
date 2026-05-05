@@ -90,15 +90,7 @@ def test_strategy_backtest_completes(tmp_path, strategy_name: str):
     )
 
     ws_patch = patch("backend.routes.backtest_engine.broadcast_websocket_message", new=AsyncMock())
-    if strategy_name == "recursive_forecast":
-        pred_patch = patch(
-            "backend.strategies.recursive_forecast.PredictionService.predict",
-            _fake_predict,
-        )
-        with ws_patch, pred_patch:
-            asyncio.run(run_backtest_background(**common))
-    else:
-        with ws_patch:
+    with ws_patch:
             asyncio.run(run_backtest_background(**common))
 
     conn = sqlite3.connect(db_path)

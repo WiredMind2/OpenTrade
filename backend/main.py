@@ -43,7 +43,7 @@ from backend.routes.strategies import router as strategies_router
 from backend.routes.strategy_analytics import router as strategy_analytics_router
 from backend.routes.news import router as news_router
 from backend.routes.monte_carlo import router as monte_carlo_router
-from backend.ml.storage import ensure_ml_schema
+from backend.routes.trade_plan import router as trade_plan_router
 from backend.db.variant_schema import ensure_variant_schema
 from backend.services.news_auto_ingest import (
     daily_news_auto_ingest_worker,
@@ -188,6 +188,7 @@ app.include_router(backtests_router)
 app.include_router(models_router, prefix="/api")
 app.include_router(strategies_router, prefix="/api", tags=["strategies"])
 app.include_router(strategy_analytics_router)
+app.include_router(trade_plan_router, prefix="/api")
 app.include_router(portfolio_router)
 app.include_router(data_router)
 app.include_router(scripts_router)
@@ -246,9 +247,6 @@ async def init_database():
                     )
                 raise
             conn.commit()
-
-            # Validate/patch ML schema expectations (adds missing columns if needed)
-            ensure_ml_schema(conn)
 
             # Variant / params_hash columns and artifact FK backfill
             ensure_variant_schema(conn)

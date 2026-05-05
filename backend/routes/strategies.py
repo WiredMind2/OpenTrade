@@ -4,17 +4,20 @@ Strategy listing endpoints for the Trading Backtester API.
 from typing import List, Dict, Any, Optional, Tuple
 import sqlite3
 import json
+import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List
 
+from backend.config import get_config
 from backend.logging_config import get_component_logger
 from backend.services.strategy_framework import (
     StrategyOptimizerEngine,
     StrategyPreflightService,
     strategy_supports_signal_parameter_training,
 )
+from backend.services.backtrader_engine import build_run_config, run_backtrader_once
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
@@ -359,6 +362,7 @@ def _optimize_signal_strategy(
     import uuid
 
     from backend.routes.backtest_engine import (
+        _backtrader_strategy_kwargs,
         _run_signal_execution_backtest,
         persist_optimizer_evaluation_run,
     )
@@ -379,6 +383,15 @@ def _optimize_signal_strategy(
         raise HTTPException(status_code=400, detail="optimizer_mode must be 'grid' or 'random'")
 
     optimizer = StrategyOptimizerEngine(db_path)
+    preferred_engine = (
+        str(strategy.preferred_optimizer_engine()).strip().lower()
+        if hasattr(strategy, "preferred_optimizer_engine")
+        else "backtrader"
+    )
+    configured_engine = str(get_config().trading.train_optimizer_engine or "").strip().lower()
+    optimizer_engine = str(os.getenv("TRAIN_OPT_ENGINE", configured_engine or preferred_engine)).strip().lower()
+    if optimizer_engine not in {"backtrader", "signal"}:
+        raise HTTPException(status_code=500, detail="Invalid TRAIN_OPT_ENGINE; use backtrader or signal")
     candidates = optimizer.build_candidates(
         strategy_name, mode, int(max_evals), random_seed=random_seed
     )
@@ -402,28 +415,38 @@ def _optimize_signal_strategy(
         for idx, params in enumerate(candidates):
             merged_params = {
                 **params,
-                "execution_mode": "signal",
+                "execution_mode": "backtrader" if optimizer_engine == "backtrader" else "signal",
                 "ticker": ticker.strip().upper(),
             }
             if strategy_name == "pairs_trading" and (pair_ticker or "").strip():
                 merged_params["pair_ticker"] = str(pair_ticker).strip().upper()
-            metrics = _run_signal_execution_backtest(
-                strategy=strategy,
-                strategy_name=strategy_name,
-                start_date=start_date,
-                end_date=end_date,
-                initial_capital=initial_capital,
-                parameters=merged_params,
-                price_frames=price_frames,
-                signal_db_conn=sig_conn,
-            )
-            execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
-            reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
-            no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
-            non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
-            fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
-            if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
+            if optimizer_engine == "backtrader":
+                strategy_class = strategy.create_backtrader_strategy(merged_params)
+                metrics = run_backtrader_once(
+                    strategy_class=strategy_class,
+                    strategy_kwargs=_backtrader_strategy_kwargs(strategy_class, merged_params),
+                    price_frames=price_frames,
+                    config=build_run_config(initial_capital=initial_capital, parameters=merged_params),
+                )
                 all_missing_model = False
+            else:
+                metrics = _run_signal_execution_backtest(
+                    strategy=strategy,
+                    strategy_name=strategy_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_capital=initial_capital,
+                    parameters=merged_params,
+                    price_frames=price_frames,
+                    signal_db_conn=sig_conn,
+                )
+                execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
+                reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
+                no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
+                non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
+                fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
+                if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
+                    all_missing_model = False
             summary_metrics = {
                 "total_return": float(metrics.get("total_return", 0.0) or 0.0),
                 "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
@@ -443,6 +466,7 @@ def _optimize_signal_strategy(
                 **merged_params,
                 "optimizer_mode": mode,
                 "experiment_id": experiment_id,
+                "optimizer_engine": optimizer_engine,
             }
             persist_optimizer_evaluation_run(
                 db_path,
@@ -463,7 +487,7 @@ def _optimize_signal_strategy(
 
     if not evaluations:
         raise HTTPException(status_code=500, detail="No optimization evaluations were produced")
-    if all_missing_model and strategy_name == "recursive_forecast":
+    if all_missing_model:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -488,6 +512,7 @@ def _optimize_signal_strategy(
         "end_date": end_date.date().isoformat(),
         "objective": objective,
         "optimizer_mode": mode,
+        "optimizer_engine": optimizer_engine,
         "experiment_id": experiment_id,
         "evaluations_run": len(evaluations),
         "best_params": best["params"],

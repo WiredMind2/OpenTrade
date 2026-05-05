@@ -18,7 +18,7 @@ export interface PredictionRequest {
   strategy_params?: Record<string, any>;
   /** ISO datetime: use features only through this instant (walk-forward simulation). */
   as_of?: string;
-  /** When false with as_of, skips writing to sentiment_predictions (default false if as_of set). */
+  /** Legacy field; server ML persistence was removed. */
   persist_prediction?: boolean;
   /** With as_of, request next-horizon realized daily closes in metadata for evaluation. */
   include_forward_actuals?: boolean;
@@ -309,7 +309,7 @@ export interface ProjectionResponse {
   metadata: StrategyMetadata;
 }
 
-// Prediction Projection Types
+/** Overlay paths for optional multi-model prediction fan on the chart */
 export interface PredictionProjectionPoint {
   time: number;
   price: number;
@@ -322,17 +322,12 @@ export interface PredictionProjection {
   id: string;
   ticker: string;
   strategy_name: string;
-  horizon: number; // in days
+  horizon: number;
   points: PredictionProjectionPoint[];
   confidence: number;
   color: string;
   createdAt: string;
   metadata?: Record<string, any>;
-}
-
-export interface PredictionProjectionData {
-  projections: PredictionProjection[];
-  lastUpdated: string;
 }
 
 export interface StrategyAnalyticsFilters {

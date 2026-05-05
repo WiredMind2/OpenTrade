@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { getBacktests } from '../services/api'
 import {
   preflightStrategy,
@@ -23,6 +23,7 @@ import {
   TrendingDown,
   Activity,
   Target,
+  Loader2,
 } from 'lucide-react'
 import { Separator } from '../components/ui/separator'
 import StrategySelector from '../components/StrategySelector'
@@ -45,6 +46,78 @@ type BacktestListItem = BacktestResult & {
 }
 
 type ServerWaitPhase = 'idle' | 'preflight' | 'training'
+
+function backtestCorrelationKey(b: BacktestListItem): string {
+  const k = b.metrics?.backtest_id ?? b.id
+  return k !== undefined && k !== null && String(k) !== '' ? String(k) : ''
+}
+
+/**
+ * Apply the first page from the API: server order wins for rows present in `incoming`;
+ * keep extra client rows (e.g. "load more") whose key is not on that page.
+ */
+function reconcileBacktestsFirstPage(incoming: BacktestListItem[], previous: BacktestListItem[]): BacktestListItem[] {
+  const incomingKeys = new Set(
+    incoming.map(backtestCorrelationKey).filter((k) => k !== ''),
+  )
+  const leftover = previous.filter((b) => {
+    const key = backtestCorrelationKey(b)
+    if (!key) return true
+    return !incomingKeys.has(key)
+  })
+  return [...incoming, ...leftover]
+}
+
+const BACKTEST_RESULTS_PAGE_SIZE = 10
+
+function isBacktestInFlight(b: BacktestListItem): boolean {
+  const st = (b.status ?? b.metrics?.status) as string | undefined
+  if (st === 'running') return true
+  if (st === 'failed' || st === 'completed') return false
+  const ph = b.metrics?.phase as string | undefined
+  if (typeof ph === 'string' && ph !== 'completed' && ph !== 'failed') return true
+  return false
+}
+
+/** Stable fingerprint so we can skip setState (and chart remounts) when the API returns the same logical rows. */
+function backtestRowStableSig(b: BacktestListItem): string {
+  const k = backtestCorrelationKey(b)
+  const st = (b.status ?? b.metrics?.status) ?? ''
+  const ph = (b.metrics?.phase as string | undefined) ?? ''
+  const tr = typeof b.total_return === 'number' && Number.isFinite(b.total_return) ? b.total_return : ''
+  const fv = typeof b.final_value === 'number' && Number.isFinite(b.final_value) ? b.final_value : ''
+  const eq = Array.isArray(b.equity_curve) ? b.equity_curve : []
+  const n = eq.length
+  let lastV = ''
+  if (n > 0) {
+    const tail = eq[n - 1]
+    if (tail && typeof tail === 'object' && 'value' in tail) {
+      lastV = String((tail as Record<string, unknown>).value)
+    }
+  }
+  const rid = b.id !== undefined && b.id !== null ? String(b.id) : ''
+  // Omit wall-clock `timestamp` — it can differ between WS payloads and GET rows for the same run.
+  return [k, rid, st, ph, tr, fv, n, lastV].join('\u001f')
+}
+
+function backtestsListStableSig(list: BacktestListItem[]): string {
+  return list.map(backtestRowStableSig).join('\u0002')
+}
+
+function appendUniqueByBacktestKey(
+  previous: BacktestListItem[],
+  nextSlice: BacktestListItem[],
+): BacktestListItem[] {
+  const keys = new Set(previous.map(backtestCorrelationKey).filter((k) => k !== ''))
+  const extra = nextSlice.filter((b) => {
+    const k = backtestCorrelationKey(b)
+    if (!k) return true
+    if (keys.has(k)) return false
+    keys.add(k)
+    return true
+  })
+  return [...previous, ...extra]
+}
 
 function serverWaitPhaseLabel(phase: ServerWaitPhase): string {
   switch (phase) {
@@ -81,17 +154,48 @@ export default function Backtests() {
   const [monteCarloError, setMonteCarloError] = useState<string | null>(null)
   const [numSimulations, setNumSimulations] = useState(1000)
   const [timeHorizonDays, setTimeHorizonDays] = useState(252)
+  const [resultsHasMore, setResultsHasMore] = useState(false)
+  const [resultsNextPage, setResultsNextPage] = useState(2)
+  const [loadingMoreResults, setLoadingMoreResults] = useState(false)
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
+  const backtestsRef = useRef<BacktestListItem[]>([])
+  backtestsRef.current = backtests
 
   const fetchBacktests = async () => {
     setLoading(true)
     setError(null)
+    setLoadMoreError(null)
     try {
-      const data = await getBacktests()
-      setBacktests(data as BacktestListItem[])
+      const data = await getBacktests({ page: 1, limit: BACKTEST_RESULTS_PAGE_SIZE })
+      const rows = data as BacktestListItem[]
+      setBacktests((prev) => {
+        const next = reconcileBacktestsFirstPage(rows, prev)
+        if (backtestsListStableSig(next) === backtestsListStableSig(prev)) return prev
+        return next
+      })
+      setResultsHasMore(rows.length >= BACKTEST_RESULTS_PAGE_SIZE)
+      setResultsNextPage(2)
     } catch (e: any) {
       setError(e.message || 'Failed to fetch backtests')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadMoreBacktestResults = async () => {
+    if (loadingMoreResults || !resultsHasMore) return
+    setLoadingMoreResults(true)
+    setLoadMoreError(null)
+    try {
+      const data = await getBacktests({ page: resultsNextPage, limit: BACKTEST_RESULTS_PAGE_SIZE })
+      const rows = data as BacktestListItem[]
+      setBacktests((prev) => appendUniqueByBacktestKey(prev, rows))
+      setResultsHasMore(rows.length >= BACKTEST_RESULTS_PAGE_SIZE)
+      setResultsNextPage((p) => p + 1)
+    } catch (e: any) {
+      setLoadMoreError(e.message || 'Failed to load more backtests')
+    } finally {
+      setLoadingMoreResults(false)
     }
   }
 
@@ -101,25 +205,97 @@ export default function Backtests() {
 
   const hasValidStrategySelection = strategy.trim().length > 0
 
+  /** Poll only while a run is in-flight; skip setState when data unchanged (avoids chart re-fetch / animation loops). */
   useEffect(() => {
+    const POLL_MS = 4000
+    let inFlight = false
+
+    const refreshQuiet = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!backtestsRef.current.some(isBacktestInFlight)) return
+      if (inFlight) return
+      inFlight = true
+      getBacktests({ page: 1, limit: BACKTEST_RESULTS_PAGE_SIZE })
+        .then((data) => {
+          const rows = data as BacktestListItem[]
+          setBacktests((prev) => {
+            const next = reconcileBacktestsFirstPage(rows, prev)
+            if (backtestsListStableSig(next) === backtestsListStableSig(prev)) return prev
+            return next
+          })
+          setLoading(false)
+        })
+        .catch(() => {
+          /* ignore */
+        })
+        .finally(() => {
+          inFlight = false
+        })
+    }
+
+    const id = window.setInterval(refreshQuiet, POLL_MS)
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && backtestsRef.current.some(isBacktestInFlight)) {
+        refreshQuiet()
+      }
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [])
+
+  useEffect(() => {
+    const parseMetrics = (raw: unknown): Record<string, unknown> | undefined => {
+      if (!raw) return undefined
+      if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) return raw as Record<string, unknown>
+      if (typeof raw === 'string') {
+        try {
+          const p = JSON.parse(raw) as unknown
+          if (p && typeof p === 'object' && !Array.isArray(p)) return p as Record<string, unknown>
+        } catch {
+          return undefined
+        }
+      }
+      return undefined
+    }
+
     const handleBacktestStatus = (message: any) => {
-      const backtestResult = message.data as BacktestListItem
-      const chartData = buildBacktestEquitySeries(backtestResult).map((p) => ({
-        day: p.day,
-        value: p.value,
-        ...(p.dateKey ? { date: p.dateKey } : {}),
-      }))
+      const payload = message?.data
+      if (!payload || typeof payload !== 'object') return
+
+      const metricsObj = parseMetrics((payload as BacktestListItem).metrics) ?? {}
+      const backtestResult: BacktestListItem = {
+        ...(payload as BacktestListItem),
+        metrics: metricsObj as BacktestListItem['metrics'],
+      }
+
+      let chartData: BacktestListItem['chart_data']
+      try {
+        chartData = buildBacktestEquitySeries(backtestResult).map((p) => ({
+          day: p.day,
+          value: p.value,
+          ...(p.dateKey ? { date: p.dateKey } : {}),
+        }))
+      } catch {
+        chartData = []
+      }
+
       const normalizedResult: BacktestListItem = {
         ...backtestResult,
         chart_data: chartData,
-        status: backtestResult.metrics?.status ?? backtestResult.status,
-        error: backtestResult.metrics?.error ?? backtestResult.error,
+        status: (metricsObj.status as string | undefined) ?? backtestResult.status,
+        error: (metricsObj.error as string | undefined) ?? backtestResult.error,
       }
 
-      // Update the backtests list with the new status
-      setBacktests(prev => {
-        const backtestId = normalizedResult.metrics?.backtest_id
-        const existingIndex = prev.findIndex(b => {
+      const backtestId = metricsObj.backtest_id
+
+      setLoading(false)
+      setError(null)
+
+      setBacktests((prev) => {
+        const existingIndex = prev.findIndex((b) => {
           const existingId = b.metrics?.backtest_id ?? b.id
           return (
             backtestId != null &&
@@ -129,15 +305,16 @@ export default function Backtests() {
           )
         })
 
+        let next: BacktestListItem[]
         if (existingIndex >= 0) {
-          // Update existing backtest
           const updated = [...prev]
           updated[existingIndex] = normalizedResult
-          return updated
+          next = updated
         } else {
-          // Add new backtest at the beginning
-          return [normalizedResult, ...prev]
+          next = [normalizedResult, ...prev]
         }
+        if (backtestsListStableSig(next) === backtestsListStableSig(prev)) return prev
+        return next
       })
     }
 
@@ -279,47 +456,40 @@ export default function Backtests() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Strategy Name</label>
-                <StrategySelector
-                  onStrategyChange={(selectedStrategy, params) => {
-                    setStrategy(selectedStrategy)
-                    setStrategyParams(params)
-                    setTrainResult(null)
-                    setTrainedParams(null)
-                    setTrainError(null)
-                    setPreflight(null)
-                  }}
-                />
-              </div>
-              
+          <div className="flex flex-col gap-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Strategy Name</label>
+              <StrategySelector
+                onStrategyChange={(selectedStrategy, params) => {
+                  setStrategy(selectedStrategy)
+                  setStrategyParams(params)
+                  setTrainResult(null)
+                  setTrainedParams(null)
+                  setTrainError(null)
+                  setPreflight(null)
+                }}
+              />
+            </div>
+
+            <Separator />
+
+            <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium flex items-center gap-2">
-                  <Calendar className="h-4 w-4" />
+                  <Calendar className="h-4 w-4 shrink-0" />
                   Start Date
                 </label>
-                <Input 
-                  type="date" 
-                  value={startDate} 
-                  onChange={e => setStartDate(e.target.value)} 
-                />
+                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
               </div>
-              
+
               <div className="space-y-2">
                 <label className="text-sm font-medium flex items-center gap-2">
-                  <Calendar className="h-4 w-4" />
+                  <Calendar className="h-4 w-4 shrink-0" />
                   End Date
                 </label>
-                <Input 
-                  type="date" 
-                  value={endDate} 
-                  onChange={e => setEndDate(e.target.value)} 
-                />
+                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
               </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+
               <div className="space-y-2">
                 <label className="text-sm font-medium">Training Ticker</label>
                 <TickerSearch
@@ -328,10 +498,11 @@ export default function Backtests() {
                   placeholder="Search a ticker"
                 />
               </div>
+
               <div className="space-y-2">
                 <label className="text-sm font-medium">Objective</label>
                 <select
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   value={trainObjective}
                   onChange={(e) => setTrainObjective(e.target.value as typeof trainObjective)}
                 >
@@ -341,23 +512,26 @@ export default function Backtests() {
                   <option value="drawdown">Drawdown</option>
                 </select>
               </div>
-              <div className="space-y-2">
+
+              <div className="space-y-2 sm:col-span-2 lg:col-span-1">
                 <label className="text-sm font-medium">Max Evaluations</label>
                 <Input
                   type="number"
                   min={1}
                   max={50}
+                  className="h-10"
                   value={maxEvals}
                   onChange={(e) => setMaxEvals(Math.max(1, Math.min(50, Number(e.target.value || 8))))}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Higher values improve search quality but can take several minutes.
+                <p className="text-xs leading-snug text-muted-foreground">
+                  Higher values improve search quality but take longer.
                 </p>
               </div>
+
               <div className="space-y-2">
                 <label className="text-sm font-medium">Optimizer mode</label>
                 <select
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   value={optimizerMode}
                   onChange={(e) => setOptimizerMode(e.target.value as 'grid' | 'random')}
                 >
@@ -365,10 +539,12 @@ export default function Backtests() {
                   <option value="random">Random (shuffled grid)</option>
                 </select>
               </div>
+
               <div className="space-y-2">
                 <label className="text-sm font-medium">Random seed (optional)</label>
                 <Input
                   type="number"
+                  className="h-10"
                   value={randomSeed}
                   onChange={(e) => setRandomSeed(e.target.value)}
                   placeholder="e.g. 42"
@@ -590,7 +766,9 @@ export default function Backtests() {
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Backtest Results</h3>
-          <Badge variant="secondary">{backtests.length} Total</Badge>
+          <Badge variant="secondary">
+            {backtests.length} {resultsHasMore ? 'loaded' : 'total'}
+          </Badge>
         </div>
 
         {loading ? (
@@ -624,6 +802,7 @@ export default function Backtests() {
         ) : (
           <div className="grid gap-4">
             {backtests.map((b, i) => {
+              const rowKey = backtestCorrelationKey(b) || `idx-${i}`
               const returnPercent = b.total_return * 100
               const returnColor = getReturnColor(returnPercent)
               const returnBadge = getReturnBadge(returnPercent)
@@ -632,7 +811,7 @@ export default function Backtests() {
               const isFailed = status === 'failed'
               return (
                 <Card 
-                  key={i}
+                  key={rowKey}
                   className="hover:shadow-lg transition-all border-muted hover:border-primary/50"
                 >
                   <CardHeader>
@@ -729,6 +908,28 @@ export default function Backtests() {
                 </Card>
               )
             })}
+            {resultsHasMore && (
+              <div className="flex flex-col items-center gap-2 pt-2">
+                {loadMoreError && (
+                  <p className="text-sm text-destructive text-center max-w-md">{loadMoreError}</p>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={loadingMoreResults}
+                  onClick={loadMoreBacktestResults}
+                >
+                  {loadingMoreResults ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                      Loading…
+                    </>
+                  ) : (
+                    'Load more'
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>

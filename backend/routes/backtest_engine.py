@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from backend.domain.trading import ExecutionConfig, OrderIntent, TargetAllocation
 from backend.logging_config import get_component_logger
+from backend.services.backtrader_engine import build_run_config, run_backtrader_once
 from backend.storage.backtest_repository import BacktestRepository
 from backend.utils.backtest_variants import compute_params_hash, variant_label_from_params
 from .websocket import broadcast_websocket_message
@@ -462,6 +463,11 @@ def persist_optimizer_evaluation_run(
     volatility = float(execution.get("volatility", 0.0) or 0.0)
     annualized_return = float(execution.get("annualized_return", 0.0) or 0.0)
     execution_summary = execution.get("execution_summary") or {}
+    raw_markers = execution.get("decision_markers")
+    if isinstance(raw_markers, list):
+        decision_markers = _normalize_bt_decision_markers(raw_markers)
+    else:
+        decision_markers = _decision_markers_from_signal_execution(execution)
 
     conn = sqlite3.connect(database_path)
     try:
@@ -508,6 +514,8 @@ def persist_optimizer_evaluation_run(
                         "objective": objective,
                         "evaluation_score": evaluation_score,
                         "params_hash": params_hash,
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
                         "sharpe_ratio": sharpe_ratio,
                         "max_drawdown": max_drawdown,
                         "win_rate": win_rate,
@@ -515,6 +523,7 @@ def persist_optimizer_evaluation_run(
                         "avg_trade_return": avg_trade_return,
                         "volatility": volatility,
                         "execution_summary": execution_summary,
+                        "decision_markers": decision_markers,
                     }
                 ),
             ),
@@ -536,7 +545,7 @@ def insert_pending_backtest_run(
     parameters: Dict[str, Any],
     backtest_id: str,
 ) -> int:
-    """Insert a queued row so clients can poll ``GET /backtest/{id}`` before work finishes."""
+    """Insert a queued row for a background run (used when ``pending_run_id`` is passed to ``run_backtest_background``)."""
     parameters = parameters or {}
     ph = compute_params_hash(parameters)
     vl = (parameters or {}).get("variant_label") or variant_label_from_params(parameters)
@@ -849,76 +858,30 @@ async def run_backtest_background(
             order_intents = execution["order_intents"]
             order_fills = execution["order_fills"]
             decision_markers = _decision_markers_from_signal_execution(execution)
-            if strategy_name == "recursive_forecast":
-                reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
-                no_model_count = int(reason_counts.get("no_model_available", 0) or 0)
-                non_missing_count = int(
-                    sum(v for k, v in reason_counts.items() if k != "no_model_available")
-                ) if isinstance(reason_counts, dict) else 0
-                if no_model_count > 0 and non_missing_count == 0 and len(order_fills) == 0:
-                    raise ValueError(
-                        "No recursive forecast models/predictions available for requested period. "
-                        "Run the ML pipeline to generate model predictions before backtesting."
-                    )
         else:
-            # Set up Backtrader
-            cerebro = bt.Cerebro()
-            cerebro.addstrategy(
-                strategy_class, **_backtrader_strategy_kwargs(strategy_class, parameters)
-            )
-            for ticker, df in price_frames.items():
-                data = bt.feeds.PandasData(
-                    dataname=df,
-                    datetime=0,
-                    open=1,
-                    high=2,
-                    low=3,
-                    close=4,
-                    volume=5,
-                    name=ticker,
-                )
-                cerebro.adddata(data)
-            # Set broker parameters
-            cerebro.broker.setcash(initial_capital)
-            cerebro.broker.setcommission(commission=parameters.get('commission_per_share', 0.005))
-            cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
-            cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-            cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
-            cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
             logger.info(f"Starting Backtrader execution for {strategy_name}")
-            results = cerebro.run()
-            if not results:
-                raise RuntimeError("Backtest engine returned no strategy results")
-            strat = results[0]
-            final_value = cerebro.broker.getvalue()
-            total_return = (final_value - initial_capital) / initial_capital
-            sharpe_ratio = strat.analyzers.sharpe.get_analysis().get('sharperatio', 0)
-            max_drawdown = strat.analyzers.drawdown.get_analysis().get('max', {}).get('drawdown', 0)
-            annualized_return = strat.analyzers.returns.get_analysis().get('rnorm100', 0)
-            trade_analysis = strat.analyzers.trades.get_analysis()
-            total_trades = trade_analysis.get('total', {}).get('total', 0)
-            win_trades = trade_analysis.get('won', {}).get('total', 0)
-            win_rate = win_trades / total_trades if total_trades > 0 else 0
-            trades = getattr(strat, "trades", []) or []
-            pnl_comm = [t.get('pnlcomm', 0.0) for t in trades if isinstance(t, dict)]
-            avg_trade_return = np.mean(pnl_comm) if pnl_comm else 0
-            equity_curve = getattr(strat, "equity_curve", []) or []
-            equity_values = [point.get('value') for point in equity_curve if isinstance(point, dict) and point.get('value') is not None]
-            if len(equity_values) > 1:
-                returns = np.diff(equity_values) / equity_values[:-1]
-                volatility = np.std(returns) * np.sqrt(252)
-            else:
-                volatility = 0
-            execution_summary = {
-                "engine": "backtrader",
-                "signals_emitted": 0,
-                "order_intents": 0,
-                "order_fills": 0,
-            }
+            execution = run_backtrader_once(
+                strategy_class=strategy_class,
+                strategy_kwargs=_backtrader_strategy_kwargs(strategy_class, parameters),
+                price_frames=price_frames,
+                config=build_run_config(initial_capital=initial_capital, parameters=parameters),
+            )
+            final_value = execution["final_value"]
+            total_return = execution["total_return"]
+            annualized_return = execution["annualized_return"]
+            sharpe_ratio = execution["sharpe_ratio"]
+            max_drawdown = execution["max_drawdown"]
+            win_rate = execution["win_rate"]
+            total_trades = execution["total_trades"]
+            avg_trade_return = execution["avg_trade_return"]
+            volatility = execution["volatility"]
+            equity_curve = execution["equity_curve"]
+            trades = execution["trades"]
+            execution_summary = execution["execution_summary"]
             signal_records = []
             order_intents = []
             order_fills = []
-            decision_markers = _normalize_bt_decision_markers(getattr(strat, "decision_markers", None))
+            decision_markers = execution.get("decision_markers") or []
 
         # Store results in database
         params_hash = compute_params_hash(parameters)
@@ -1127,3 +1090,90 @@ async def run_backtest_background(
                 metrics_conn.close()
             except Exception:
                 pass
+
+
+async def evaluate_strategy_runtime_once(
+    *,
+    strategy_name: str,
+    ticker: str,
+    parameters: Dict[str, Any],
+    start_date: datetime,
+    end_date: datetime,
+    initial_capital: float,
+    app_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Execute one fresh strategy run and return metrics/curve.
+
+    This reuses run_backtest_background() for execution parity, then removes the
+    temporary persisted run to avoid relying on stale historical backtest rows.
+    """
+    evaluation_id = f"runtime_eval_{compute_params_hash({**parameters, 'ticker': ticker})[:12]}_{int(datetime.utcnow().timestamp())}"
+    runtime_params = {**(parameters or {}), "ticker": ticker.upper()}
+    await run_backtest_background(
+        backtest_id=evaluation_id,
+        strategy_name=strategy_name,
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=initial_capital,
+        parameters=runtime_params,
+        app_state=app_state,
+        pending_run_id=None,
+    )
+
+    db_path = app_state["database_path"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, name, params_hash, metrics, equity_curve, final_value, total_return, annualized_return,
+                   sharpe_ratio, max_drawdown, win_rate, total_trades, avg_trade_return, volatility
+            FROM backtest_runs
+            WHERE client_backtest_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (evaluation_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {
+                "status": "failed",
+                "error": "Runtime evaluation did not produce a backtest row",
+                "strategy_name": strategy_name,
+                "ticker": ticker.upper(),
+                "params_hash": compute_params_hash(runtime_params),
+                "metrics": {},
+                "equity_curve": [],
+            }
+
+        metrics = json.loads(row["metrics"] or "{}") if row["metrics"] else {}
+        equity_curve = json.loads(row["equity_curve"] or "[]") if row["equity_curve"] else []
+        result = {
+            "status": str(metrics.get("status", "completed")),
+            "error": metrics.get("error"),
+            "strategy_name": row["name"],
+            "ticker": ticker.upper(),
+            "params_hash": row["params_hash"] or compute_params_hash(runtime_params),
+            "metrics": {
+                "final_value": row["final_value"],
+                "total_return": row["total_return"],
+                "annualized_return": row["annualized_return"],
+                "sharpe_ratio": row["sharpe_ratio"],
+                "max_drawdown": row["max_drawdown"],
+                "win_rate": row["win_rate"],
+                "total_trades": row["total_trades"],
+                "avg_trade_return": row["avg_trade_return"],
+                "volatility": row["volatility"],
+                **metrics,
+            },
+            "equity_curve": equity_curve if isinstance(equity_curve, list) else [],
+        }
+
+        cur.execute("DELETE FROM backtest_runs WHERE id = ?", (row["id"],))
+        conn.commit()
+        return result
+    finally:
+        conn.close()

@@ -93,6 +93,10 @@ class SymbolInfo(BaseModel):
     has_daily: bool = True
     has_weekly_and_monthly: bool = True
     data_status: str = "streaming"
+    currency_code: Optional[str] = None
+    original_currency_code: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
 
 
 class HistoricalDataResponse(BaseModel):

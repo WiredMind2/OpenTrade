@@ -160,7 +160,8 @@ export default function BacktestEquityCompareChart({
         start_date: backtest.start_date,
         end_date: backtest.end_date,
       }),
-    [sig, ms, me, backtest.start_date, backtest.end_date, equityCurve, chartData, m?.phase, m?.status],
+    // Prefer `sig` over raw array refs so parent re-renders with identical equity data do not rebuild series.
+    [sig, ms, me, backtest.start_date, backtest.end_date, m?.phase, m?.status],
   )
 
   const ticker =
@@ -202,7 +203,7 @@ export default function BacktestEquityCompareChart({
     return () => {
       cancelled = true
     }
-  }, [isFailed, ticker, initialCap, baseSeries, ms, me, equityCurve, backtest.start_date, backtest.end_date])
+  }, [isFailed, ticker, initialCap, baseSeries, ms, me, sig, backtest.start_date, backtest.end_date])
 
   const rawData = series.length > 0 ? series : baseSeries
   const data = attachDecisionMarkers(rawData, m?.decision_markers)
@@ -212,6 +213,8 @@ export default function BacktestEquityCompareChart({
   const hasOverlay = data.some((p) => typeof p.tickerValue === 'number' && Number.isFinite(p.tickerValue))
   const hasBuyMarkers = data.some((p) => typeof p.buyMarker === 'number' && Number.isFinite(p.buyMarker))
   const hasSellMarkers = data.some((p) => typeof p.sellMarker === 'number' && Number.isFinite(p.sellMarker))
+  /** Recharts 3: Scatter shares the default Y-axis with Line; the axis inherits dataKey "value", so Scatter ignored buyMarker/sellMarker. Use a separate hidden Y-scale for markers only. */
+  const markerYAxisId = 'decision_markers'
 
   if (data.length === 0) return null
 
@@ -222,16 +225,27 @@ export default function BacktestEquityCompareChart({
           <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
           <XAxis dataKey="day" className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
           <YAxis
+            yAxisId={0}
             className="text-xs"
             tick={{ fill: 'hsl(var(--muted-foreground))' }}
             domain={yDomain}
             tickFormatter={(v) => `$${(Number(v) / 1000).toFixed(0)}k`}
           />
+          {(hasBuyMarkers || hasSellMarkers) && yDomain ? (
+            <YAxis
+              yAxisId={markerYAxisId}
+              hide
+              orientation="right"
+              domain={yDomain}
+              width={0}
+            />
+          ) : null}
           <Tooltip content={<EquityCompareTooltip />} cursor={{ strokeDasharray: '3 3' }} />
           {(hasOverlay && ticker) || hasBuyMarkers || hasSellMarkers ? (
             <Legend wrapperStyle={{ fontSize: 12 }} />
           ) : null}
           <Line
+            yAxisId={0}
             type="monotone"
             dataKey="value"
             name="Strategy equity"
@@ -241,6 +255,7 @@ export default function BacktestEquityCompareChart({
           />
           {hasOverlay && ticker ? (
             <Line
+              yAxisId={0}
               type="monotone"
               dataKey="tickerValue"
               name={`${ticker} (buy & hold)`}
@@ -251,10 +266,22 @@ export default function BacktestEquityCompareChart({
             />
           ) : null}
           {hasBuyMarkers ? (
-            <Scatter name="Buy signal" dataKey="buyMarker" fill="hsl(142, 76%, 38%)" shape={BuyTriangle} />
+            <Scatter
+              yAxisId={markerYAxisId}
+              name="Buy signal"
+              dataKey="buyMarker"
+              fill="hsl(142, 76%, 38%)"
+              shape={BuyTriangle}
+            />
           ) : null}
           {hasSellMarkers ? (
-            <Scatter name="Sell signal" dataKey="sellMarker" fill="hsl(0, 72%, 48%)" shape={SellTriangle} />
+            <Scatter
+              yAxisId={markerYAxisId}
+              name="Sell signal"
+              dataKey="sellMarker"
+              fill="hsl(0, 72%, 48%)"
+              shape={SellTriangle}
+            />
           ) : null}
         </ComposedChart>
       </ResponsiveContainer>

@@ -142,6 +142,28 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
   metrics JSON
 );
 
+-- User-persisted strategy configurations (params + ticker) for reuse and runtime evaluation
+CREATE TABLE IF NOT EXISTS saved_models (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  strategy_name TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  params_json TEXT NOT NULL,
+  params_hash TEXT NOT NULL,
+  objective TEXT NOT NULL DEFAULT 'balanced',
+  baseline_metrics_json TEXT,
+  latest_metrics_json TEXT,
+  latest_equity_curve_json TEXT,
+  degrade_status TEXT NOT NULL DEFAULT 'healthy',
+  degrade_reason TEXT,
+  last_evaluated_at TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_saved_models_ticker_active ON saved_models(ticker, is_active);
+CREATE INDEX IF NOT EXISTS idx_saved_models_strategy_ticker ON saved_models(strategy_name, ticker);
+
 -- Trades recorded during backtests
 CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

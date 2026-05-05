@@ -84,6 +84,7 @@ class TradingConfig:
     risk_free_rate: float = 0.02
     stop_loss_pct: float = 0.05
     take_profit_pct: float = 0.15
+    train_optimizer_engine: str = "backtrader"
 
 
 @dataclass
@@ -270,6 +271,9 @@ class ConfigManager:
         slippage_pct = os.getenv('SLIPPAGE_PCT')
         if slippage_pct:
             config.trading.slippage_pct = float(slippage_pct)
+        train_optimizer_engine = os.getenv('TRAIN_OPT_ENGINE')
+        if train_optimizer_engine:
+            config.trading.train_optimizer_engine = train_optimizer_engine.strip().lower()
         
         # External services
         config.newsapi_key = os.getenv('NEWSAPI_KEY')
@@ -381,7 +385,8 @@ class ConfigManager:
                 'max_total_exposure': config.trading.max_total_exposure,
                 'risk_free_rate': config.trading.risk_free_rate,
                 'stop_loss_pct': config.trading.stop_loss_pct,
-                'take_profit_pct': config.trading.take_profit_pct
+                'take_profit_pct': config.trading.take_profit_pct,
+                'train_optimizer_engine': config.trading.train_optimizer_engine
             },
             'security': {
                 'secret_key': config.security.secret_key,

@@ -42,21 +42,18 @@ class TestScriptEndpoints:
         script_executions.clear()
 
     @patch('backend.routes.scripts.run_script_async')
-    def test_execute_script_train_sentiment_model(self, mock_run_script):
-        """Test executing train_sentiment_model script."""
+    def test_execute_script_run_pipeline(self, mock_run_script):
+        """Test executing run_pipeline script."""
         mock_run_script.return_value = None
 
         payload = {
-            "script_name": "train_sentiment_model",
-            "parameters": {
-                "csv": "data/training_labels_1d_top10.csv",
-                "outdir": "models"
-            }
+            "script_name": "run_pipeline",
+            "parameters": {},
         }
         response = self.client.post("/scripts/execute", json=payload)
         assert response.status_code == 200
         data = response.json()
-        assert data["script_name"] == "train_sentiment_model"
+        assert data["script_name"] == "run_pipeline"
         assert data["status"] == "running"
         assert "execution_id" in data
         assert "start_time" in data
@@ -91,7 +88,7 @@ class TestScriptEndpoints:
     def test_execute_script_missing_parameters(self):
         """Test executing script without required parameters."""
         payload = {
-            "script_name": "train_sentiment_model"
+            "script_name": "run_pipeline"
             # Missing parameters
         }
         response = self.client.post("/scripts/execute", json=payload)
@@ -104,8 +101,8 @@ class TestScriptEndpoints:
         
         # First execute a script
         payload = {
-            "script_name": "train_sentiment_model",
-            "parameters": {"csv": "data/training.csv"}
+            "script_name": "backtest_runner",
+            "parameters": {"start": "2023-01-01", "end": "2023-12-31"},
         }
         exec_response = self.client.post("/scripts/execute", json=payload)
         assert exec_response.status_code == 200
@@ -119,7 +116,7 @@ class TestScriptEndpoints:
         # The status should be "running" since we mocked the async function
         data = response.json()
         assert data["status"] == "running"
-        assert data["script_name"] == "train_sentiment_model"
+        assert data["script_name"] == "backtest_runner"
 
     def test_get_script_status_running(self):
         """Test getting status of running script from script_executions."""
@@ -155,7 +152,7 @@ class TestScriptEndpoints:
         # Populate the real dictionary with test data
         script_executions.clear()
         script_executions["exec_1"] = {
-            "script_name": "train_sentiment_model",
+            "script_name": "run_pipeline",
             "status": "completed",
             "start_time": datetime.utcnow(),
             "end_time": datetime.utcnow(),
@@ -173,7 +170,7 @@ class TestScriptEndpoints:
         assert len(data["executions"]) == 2
         # executions can be in any order, so just check that both are present
         script_names = {e["script_name"] for e in data["executions"]}
-        assert "train_sentiment_model" in script_names
+        assert "run_pipeline" in script_names
         assert "backtest_runner" in script_names
 
     @patch('backend.routes.scripts.run_pipeline_async')
@@ -270,12 +267,12 @@ class TestScriptEndpoints:
     @patch('backend.routes.scripts.run_script_async')
     def test_script_execution_with_file_validation(self, mock_run_script, mock_get_path): 
         """Test that script execution validates script file exists."""
-        mock_get_path.return_value = "/path/to/train_sentiment_model.py"
+        mock_get_path.return_value = "/path/to/run_pipeline.py"
         mock_run_script.return_value = None
 
         payload = {
-            "script_name": "train_sentiment_model",
-            "parameters": {"csv": "data/training.csv"}
+            "script_name": "run_pipeline",
+            "parameters": {},
         }
         response = self.client.post("/scripts/execute", json=payload)
         assert response.status_code == 200
@@ -284,7 +281,7 @@ class TestScriptEndpoints:
         # In the real implementation, get_script_path would be called during async execution
         # For this test, we just verify the endpoint accepts the request
         data = response.json()
-        assert data["script_name"] == "train_sentiment_model"
+        assert data["script_name"] == "run_pipeline"
         assert data["status"] == "running"
         assert "execution_id" in data
 
@@ -307,8 +304,8 @@ class TestScriptEndpoints:
         
         # Execute a script
         payload = {
-            "script_name": "train_sentiment_model",
-            "parameters": {}
+            "script_name": "backtest_runner",
+            "parameters": {},
         }
         exec_response = self.client.post("/scripts/execute", json=payload)
         assert exec_response.status_code == 200

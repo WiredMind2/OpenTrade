@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
@@ -10,7 +11,6 @@ from backend.strategies.cross_sectional_ls import CrossSectionalLSStrategy
 from backend.strategies.mean_reversion import MeanReversionStrategy
 from backend.strategies.moving_average import MovingAverageStrategy
 from backend.strategies.pairs_trading import PairsTradingStrategy
-from backend.strategies.recursive_forecast_strategy import RecursiveForecastStandaloneStrategy
 from backend.strategies.rl_portfolio_allocator import RLPortfolioAllocatorStrategy
 from backend.strategies.ts_momentum import TsMomentumStrategy
 from backend.strategies.volatility_targeting import VolatilityTargetingStrategy
@@ -20,8 +20,6 @@ class _TrainRegistry:
     def get(self, name):
         if name == "moving_average":
             return MovingAverageStrategy()
-        if name == "recursive_forecast":
-            return RecursiveForecastStandaloneStrategy()
         if name == "mean_reversion":
             return MeanReversionStrategy()
         if name == "ts_momentum":
@@ -150,25 +148,6 @@ def test_train_strategy_optimizes_moving_average(tmp_path):
     assert "best_params" in body
     assert "best_metrics" in body
 
-
-def test_train_strategy_recursive_forecast_fails_without_loaded_models(tmp_path):
-    db_path = tmp_path / "optimize_recursive.db"
-    _seed_optimize_db(db_path)
-    client = TestClient(app)
-    with patch("backend.main.app_state", {"database_path": str(db_path), "strategy_registry": _TrainRegistry(), "models_loaded": {}}):
-        res = client.post(
-            "/api/strategies/recursive_forecast/train",
-            json={
-                "ticker": "AAPL",
-                "start_date": "2024-06-01T00:00:00",
-                "end_date": "2024-07-31T00:00:00",
-                "objective": "balanced",
-                "max_evals": 1,
-            },
-        )
-    assert res.status_code == 400
-    body = res.json()
-    assert "No recursive forecast models available" in body["detail"]
 
 
 def test_signal_parameter_training_flags():

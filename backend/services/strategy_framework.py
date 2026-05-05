@@ -164,11 +164,6 @@ class StrategyOptimizerEngine:
                 for s, l, p in itertools.product([5, 10, 15, 20], [30, 50, 80, 120], [0.05, 0.08, 0.1])
                 if s < l
             ]
-        if strategy_name == "recursive_forecast":
-            return [
-                {"prediction_threshold": t, "forecast_horizon_days": h, "max_position_pct": p}
-                for t, h, p in itertools.product([0.0005, 0.001, 0.002, 0.003], [1, 3, 5, 7], [0.05, 0.08, 0.1])
-            ]
         if strategy_name == "mean_reversion":
             out: List[Dict[str, Any]] = []
             for s, l, ez, xz, p in itertools.product(

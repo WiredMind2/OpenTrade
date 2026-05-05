@@ -32,9 +32,18 @@ class BaseStrategy(ABC):
             "required_prediction_horizons": [],
             "supports_signal_execution": True,
             "supports_backtrader_execution": True,
+            "preferred_optimizer_engine": "backtrader",
             "min_history_bars": 30,
             "supported_objectives": ["balanced", "sharpe", "return", "drawdown"],
         }
+
+    def preferred_optimizer_engine(self) -> str:
+        """
+        Canonical optimizer engine selector.
+
+        Strategies can override when they still need the legacy signal simulator.
+        """
+        return "backtrader"
 
     @abstractmethod
     def create_backtrader_strategy(self, parameters: Dict[str, Any]) -> Type[bt.Strategy]:

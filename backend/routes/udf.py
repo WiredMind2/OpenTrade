@@ -49,6 +49,44 @@ YAHOO_1M_MAX_CHUNK_DAYS = 6
 # Yahoo only serves 1-minute bars for a rolling recent window (~30 days from "now").
 YAHOO_1M_RETENTION_DAYS = 29
 
+YAHOO_QUOTE_TYPE_TO_UDF = {
+    "EQUITY": "stock",
+    "ETF": "fund",
+    "MUTUALFUND": "fund",
+    "FUTURE": "futures",
+    "CURRENCY": "forex",
+    "CRYPTOCURRENCY": "crypto",
+    "INDEX": "index",
+}
+
+
+def _normalize_symbol(symbol: str) -> str:
+    normalized = str(symbol or "").upper().strip()
+    if ":" in normalized:
+        normalized = normalized.split(":")[-1]
+    if normalized.endswith(".US"):
+        normalized = normalized[:-3]
+    return normalized
+
+
+def _infer_currency(symbol: str, quote_type: str = "") -> str:
+    upper = symbol.upper()
+    qtype = quote_type.upper()
+    if upper.endswith("=X"):
+        pair = upper[:-2]
+        return pair[-3:] if len(pair) >= 6 else "USD"
+    if upper.endswith("-USD") or qtype == "CRYPTOCURRENCY":
+        return "USD"
+    return "USD"
+
+
+def _infer_pricescale(symbol: str, quote_type: str = "") -> int:
+    upper = symbol.upper()
+    qtype = quote_type.upper()
+    if qtype in {"CURRENCY", "CRYPTOCURRENCY"} or upper.endswith("=X") or upper.endswith("-USD"):
+        return 100000
+    return 100
+
 
 def invalidate_symbol_cache(symbol: str) -> None:
     """Invalidate cache entries for a specific symbol.
@@ -223,9 +261,15 @@ def fetch_external_data(symbol: str, table: str, from_date: datetime, to_date: d
             }
 
             # Ensure ticker exists in tickers table
+            metadata = _search_yahoo_symbols(symbol.upper(), "", 1)
+            meta = metadata[0] if metadata else {}
             cur.execute(
                 "INSERT OR IGNORE INTO tickers (ticker, name, exchange) VALUES (?, ?, ?)",
-                (symbol.upper(), None, None),
+                (
+                    symbol.upper(),
+                    meta.get("description") if meta else None,
+                    meta.get("exchange") if meta else None,
+                ),
             )
 
             inserted = 0
@@ -376,7 +420,7 @@ def _maybe_refresh_latest_data(symbol: str, table: str, to_date: datetime, from_
 
 def _ensure_symbol_available(db_path: str, symbol: str) -> bool:
     """Ensure a symbol exists in DB, bootstrapping via external fetch when needed."""
-    normalized_symbol = symbol.upper().strip()
+    normalized_symbol = _normalize_symbol(symbol)
     validator = DataValidator(db_path)
     if validator.validate_symbol_exists(normalized_symbol):
         return True
@@ -428,7 +472,7 @@ def _search_yahoo_symbols(q: str, exchange: str, limit: int) -> List[Dict[str, A
             continue
 
         quote_type = str(item.get("quoteType") or "").upper()
-        if quote_type and quote_type not in {"EQUITY", "ETF"}:
+        if quote_type and quote_type not in YAHOO_QUOTE_TYPE_TO_UDF:
             continue
 
         exchange_code = str(item.get("exchange") or "").upper().strip()
@@ -447,7 +491,9 @@ def _search_yahoo_symbols(q: str, exchange: str, limit: int) -> List[Dict[str, A
             "description": short_name or f"{symbol} Stock",
             "exchange": display_exchange,
             "ticker": symbol,
-            "type": "stock",
+            "type": YAHOO_QUOTE_TYPE_TO_UDF.get(quote_type, "stock"),
+            "currency_code": _infer_currency(symbol, quote_type),
+            "pricescale": _infer_pricescale(symbol, quote_type),
         })
         seen.add(symbol)
         if len(results) >= max_results:
@@ -457,17 +503,19 @@ def _search_yahoo_symbols(q: str, exchange: str, limit: int) -> List[Dict[str, A
         return results
 
     # Last-resort fallback: allow exact ticker-like queries even when upstream search is throttled.
-    ticker_like = cleaned.replace(".", "").replace("-", "").isalnum() and len(cleaned) <= 10
+    ticker_like = all(ch.isalnum() or ch in ".-=^/" for ch in cleaned) and len(cleaned) <= 16
     if ticker_like:
         fallback_symbol = cleaned.upper()
         display_exchange = wanted_exchange or "UNKNOWN"
         return [{
             "symbol": fallback_symbol,
             "full_name": f"{display_exchange}:{fallback_symbol}",
-            "description": f"{fallback_symbol} Stock",
+            "description": fallback_symbol,
             "exchange": display_exchange,
             "ticker": fallback_symbol,
             "type": "stock",
+            "currency_code": _infer_currency(fallback_symbol),
+            "pricescale": _infer_pricescale(fallback_symbol),
         }]
 
     return []
@@ -602,11 +650,8 @@ async def search_symbols(
             query += " AND exchange = ?"
             params.append(exchange.upper())
 
-        # Add type filter (for now, we only support 'stock' type)
-        if type and type.lower() != 'stock':
-            # Return empty results for unsupported types
-            conn.close()
-            return []
+        # Local DB does not store asset class yet. Keep local matches for any
+        # requested type; Yahoo fallback supplies futures/forex/crypto metadata.
 
         # Add ordering for relevance (exact ticker matches first, then fuzzy matches)
         if q:
@@ -687,11 +732,7 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
         validator = DataValidator(db_path)
 
         # Normalize symbol (uppercase, remove common suffixes/prefixes if needed)
-        normalized_symbol = symbol.upper().strip()
-
-        # Remove common TradingView suffixes that might be added
-        if normalized_symbol.endswith('.US'):
-            normalized_symbol = normalized_symbol[:-3]
+        normalized_symbol = _normalize_symbol(symbol)
 
         # Validate symbol exists (bootstrap fetch for empty DBs).
         if not _ensure_symbol_available(db_path, normalized_symbol):
@@ -722,6 +763,20 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
             }
 
         ticker, name, exchange, sector = row
+        needs_remote_meta = (
+            not name
+            or not exchange
+            or any(ch in str(ticker) for ch in ("=", "-", "^"))
+        )
+        yahoo_meta = _search_yahoo_symbols(ticker, "", 1) if needs_remote_meta else []
+        exact_meta = next((item for item in yahoo_meta if item.get("ticker") == ticker), None)
+        symbol_type = str((exact_meta or {}).get("type") or "stock")
+        currency_code = str((exact_meta or {}).get("currency_code") or _infer_currency(ticker))
+        pricescale = int((exact_meta or {}).get("pricescale") or _infer_pricescale(ticker))
+        if (not name or name == f"{ticker} Stock") and exact_meta and exact_meta.get("description"):
+            name = str(exact_meta["description"])
+        if (not exchange or exchange == "UNKNOWN") and exact_meta and exact_meta.get("exchange"):
+            exchange = str(exact_meta["exchange"])
 
         # Enhanced description with sector information
         if name and sector:
@@ -748,18 +803,21 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
             name=ticker,
             ticker=ticker,
             description=description,
-            type="stock",
+            type=symbol_type,
             session=session,
             timezone="America/New_York",
             exchange=exchange or "UNKNOWN",
             listed_exchange=exchange or "UNKNOWN",
             minmov=1,
-            pricescale=100,
+            pricescale=pricescale,
             has_intraday=True,
             supported_resolutions=supported_resolutions,
             has_daily=True,
             has_weekly_and_monthly=True,
-            data_status="streaming"
+            data_status="streaming",
+            currency_code=currency_code,
+            original_currency_code=currency_code,
+            sector=sector,
         )
 
         logger.info(f"UDF symbol info resolved for {symbol} -> {normalized_symbol}")
@@ -918,6 +976,7 @@ async def get_historical_data(
         config = get_config()
         db_path = app_state.get('database_path') or config.database.path
         logger.info(f"UDF history: using database path {db_path}")
+        symbol = _normalize_symbol(symbol)
 
         # Initialize data validator
         validator = DataValidator(db_path)
@@ -1354,7 +1413,7 @@ async def get_quotes(symbols: str = Query(..., description="Comma-separated list
         config = get_config()
         db_path = app_state.get('database_path') or config.database.path
 
-        symbol_list = [s.strip().upper() for s in symbols.split(',')]
+        symbol_list = [_normalize_symbol(s) for s in symbols.split(',') if _normalize_symbol(s)]
 
         conn = sqlite3.connect(db_path)
 

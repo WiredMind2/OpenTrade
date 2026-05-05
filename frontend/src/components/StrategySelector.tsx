@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from './ui/select'
 import { Switch } from './ui/switch'
+import { ChevronDown } from 'lucide-react'
 
 interface ParameterSchema {
   type: string
@@ -34,8 +35,11 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
   const [selectedStrategy, setSelectedStrategy] = useState<string>('')
   const [params, setParams] = useState<Record<string, unknown>>({})
   const [error, setError] = useState<string | null>(null)
+  const [parametersOpen, setParametersOpen] = useState(false)
   const onStrategyChangeRef = useRef(onStrategyChange)
-  useEffect(() => { onStrategyChangeRef.current = onStrategyChange })
+  useEffect(() => {
+    onStrategyChangeRef.current = onStrategyChange
+  })
 
   useEffect(() => {
     getStrategies()
@@ -185,27 +189,57 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {selectedStrategy ? (
-        <div className="min-w-0 space-y-4 border-t border-border pt-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Parameters</p>
-          {Object.entries(
-            strategies.find((s) => s.name === selectedStrategy)?.parameters_schema || {}
-          ).map(([key, schema]) => (
-            <div key={key} className="min-w-0 space-y-2">
-              <Label htmlFor={`param-${key}`} className="block min-w-0 break-words capitalize">
-                {key}
-              </Label>
-              <div
-                className={
-                  schema.type === 'bool' || schema.type === 'boolean' ? 'min-w-0' : 'min-w-0 w-full max-w-full'
-                }
-              >
-                {renderParamInput(key, schema)}
-              </div>
-              {schema.type !== 'bool' && schema.type !== 'boolean' ? (
-                <p className="min-w-0 break-words text-xs text-muted-foreground">{schema.description}</p>
-              ) : null}
-            </div>
-          ))}
+        <div className="min-w-0 border-t border-border pt-3">
+          {(() => {
+            const entries = Object.entries(
+              strategies.find((s) => s.name === selectedStrategy)?.parameters_schema || {}
+            )
+            if (entries.length === 0) return null
+            return (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setParametersOpen((o) => !o)}
+                  className="flex w-full items-center justify-between gap-2 rounded-md py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+                  aria-expanded={parametersOpen}
+                >
+                  <span>
+                    Parameters
+                    <span className="ml-1.5 normal-case font-normal text-muted-foreground/80">
+                      ({entries.length})
+                    </span>
+                  </span>
+                  <ChevronDown
+                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${parametersOpen ? 'rotate-180' : ''}`}
+                    aria-hidden
+                  />
+                </button>
+                {parametersOpen ? (
+                  <div className="mt-3 grid min-w-0 grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                    {entries.map(([key, schema]) => (
+                      <div key={key} className="min-w-0 space-y-2">
+                        <Label htmlFor={`param-${key}`} className="block min-w-0 break-words capitalize">
+                          {key}
+                        </Label>
+                        <div
+                          className={
+                            schema.type === 'bool' || schema.type === 'boolean'
+                              ? 'min-w-0'
+                              : 'min-w-0 w-full max-w-full'
+                          }
+                        >
+                          {renderParamInput(key, schema)}
+                        </div>
+                        {schema.type !== 'bool' && schema.type !== 'boolean' ? (
+                          <p className="min-w-0 break-words text-xs text-muted-foreground">{schema.description}</p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            )
+          })()}
         </div>
       ) : null}
     </div>

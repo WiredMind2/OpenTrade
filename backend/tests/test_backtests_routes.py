@@ -1,10 +1,10 @@
-import sqlite3
 import json
+import sqlite3
+from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
-
-from backend.main import app
 
 
 def _init_backtest_runs_table(db_path: str) -> None:
@@ -12,7 +12,7 @@ def _init_backtest_runs_table(db_path: str) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS backtest_runs (
-            id TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             started_at TEXT,
             completed_at TEXT,
@@ -36,27 +36,19 @@ def _init_backtest_runs_table(db_path: str) -> None:
     conn.close()
 
 
-def test_run_backtest_rejects_too_large_date_range(tmp_path):
-    db_path = tmp_path / "backtests_route.db"
-    _init_backtest_runs_table(str(db_path))
+@pytest.fixture()
+def client():
+    import sys
 
-    client = TestClient(app)
-    payload = {
-        "strategy_name": "moving_average",
-        "start_date": "2015-01-01T00:00:00",
-        "end_date": "2023-01-01T00:00:00",
-        "initial_capital": 100000.0,
-        "parameters": {},
-    }
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from backend.main import app
 
-    with patch("backend.main.app_state", {"database_path": str(db_path), "strategy_registry": object()}):
-        response = client.post("/backtest", json=payload)
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Date range too large (max 5 years)"
+    return TestClient(app)
 
 
-def test_get_backtest_result_resolves_string_backtest_id_from_metrics(tmp_path):
+def test_trading_backtest_resolves_string_backtest_id_from_metrics(tmp_path, client):
     db_path = tmp_path / "backtests_route_lookup.db"
     _init_backtest_runs_table(str(db_path))
     conn = sqlite3.connect(db_path)
@@ -90,11 +82,12 @@ def test_get_backtest_result_resolves_string_backtest_id_from_metrics(tmp_path):
     conn.commit()
     conn.close()
 
-    client = TestClient(app)
     with patch("backend.main.app_state", {"database_path": str(db_path), "strategy_registry": object()}):
-        response = client.get("/backtest/bt_lookup_test")
+        response = client.get("/trading/backtest", params={"backtest_id": "bt_lookup_test"})
 
     assert response.status_code == 200
     body = response.json()
-    assert body["strategy_name"] == "moving_average"
-    assert body["metrics"]["backtest_id"] == "bt_lookup_test"
+    assert len(body) == 1
+    assert body[0]["strategy_name"] == "moving_average"
+    assert body[0]["metrics"]["backtest_id"] == "bt_lookup_test"
+    assert body[0]["annualized_return"] == 0.12

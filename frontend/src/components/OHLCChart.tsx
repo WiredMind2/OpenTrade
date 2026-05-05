@@ -10,6 +10,10 @@ import { projectStrategy } from "../api/strategies";
 import type { ProjectionPoint, PredictionProjection } from "../types";
 import type { NewsArticle } from "@/api/news";
 
+/** Stable defaults so default props are not new references every render (avoids useEffect loops). */
+const EMPTY_PARAMS: Record<string, any> = {};
+const EMPTY_PREDICTION_PROJECTIONS: PredictionProjection[] = [];
+
 /**
  * Candle data point
  */
@@ -47,9 +51,9 @@ interface OHLCChartProps {
    horizon?: number;
    /** Projection mode */
    mode?: string;
-   /** Show prediction projections */
+   /** Show server-generated prediction projection overlays */
    showPredictionProjections?: boolean;
-   /** Prediction projection data */
+   /** Prediction projection polylines (e.g. from batch forecast API) */
    predictionProjections?: PredictionProjection[];
    /** Callback when symbol changes in TradingView */
    onSymbolChange?: (symbol: string) => void;
@@ -95,11 +99,11 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
      bullishColor = "#10b981",
      bearishColor = "#ef4444",
      strategyName = "moving_average",
-     params = {},
+     params = EMPTY_PARAMS,
      horizon = 30,
      mode = "price",
      showPredictionProjections = false,
-     predictionProjections = [],
+     predictionProjections = EMPTY_PREDICTION_PROJECTIONS,
      onSymbolChange,
    }, ref) => {
        const { theme } = useTheme();
@@ -126,19 +130,13 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
          mode,
        });
 
-       // State for prediction projections
        const [predictionSettings, setPredictionSettings] = useState({
          showPredictionProjections,
          predictionProjections,
        });
 
-       /**
-        * Render prediction projections on the chart
-        */
        const renderPredictionProjections = () => {
          if (!widgetRef.current) return;
-
-          
 
         let chart;
         try {
@@ -149,7 +147,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
         }
         if (!chart) return;
 
-         // Clear existing prediction entities
          predictionEntitiesRef.current.forEach(entityId => {
            try {
              chart.removeEntity(entityId);
@@ -161,8 +158,6 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
 
          if (!predictionSettings.showPredictionProjections) return;
 
-         // Filter projections for current symbol — normalize both sides to handle
-         // "NASDAQ:AAPL" vs "AAPL" and possible undefined ticker fields.
          const symbolBase = (symbol || '').split(':').pop()?.toUpperCase() ?? ''
          const relevantProjections = predictionSettings.predictionProjections.filter(
            p => (p.ticker?.toUpperCase() ?? '') === symbolBase
@@ -197,27 +192,25 @@ const OHLCChart = forwardRef<OHLCChartRef, OHLCChartProps>(
             }
           };
 
-          // Draw explicit line segments to avoid any closed polygon behavior.
           drawProjectionLine('price', {
-            linestyle: 0, // SOLID
+            linestyle: 0,
             linewidth: 2,
             linecolor: projection.color,
             transparency: 0
           });
           drawProjectionLine('upperBound', {
-            linestyle: 2, // DASHED
+            linestyle: 2,
             linewidth: 1,
             linecolor: projection.color,
             transparency: 35
           });
           drawProjectionLine('lowerBound', {
-            linestyle: 2, // DASHED
+            linestyle: 2,
             linewidth: 1,
             linecolor: projection.color,
             transparency: 35
           });
 
-           // Add start marker for each projection
            if (projection.points.length > 0) {
              const startPoint = projection.points[0];
              const startMarkerId = chart.createShape({
@@ -478,8 +471,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
             };
 
             attachProjectionManager(widgetRef.current, projectionOptions);
-
-            // Render prediction projections if enabled
             renderPredictionProjections();
           });
 
@@ -533,22 +524,24 @@ widgetRef.current = new TradingView.widget(widgetOptions);
       }
     }, [isDark])
 
-    // Update prediction settings when props change
     useEffect(() => {
-      setPredictionSettings({
-        showPredictionProjections,
-        predictionProjections,
+      setPredictionSettings((prev) => {
+        if (
+          prev.showPredictionProjections === showPredictionProjections &&
+          prev.predictionProjections === predictionProjections
+        ) {
+          return prev;
+        }
+        return { showPredictionProjections, predictionProjections };
       });
     }, [showPredictionProjections, predictionProjections]);
 
-    // Re-render prediction projections when settings change
     useEffect(() => {
-     if (!widgetRef.current) return;
-
-  const timeout = setTimeout(() => {
-    renderPredictionProjections();
-    }, 300);
-    return () => clearTimeout(timeout);
+      if (!widgetRef.current) return;
+      const timeout = setTimeout(() => {
+        renderPredictionProjections();
+      }, 300);
+      return () => clearTimeout(timeout);
     }, [predictionSettings, symbol]);
 
     // Expose public API via ref
@@ -562,7 +555,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
         });
       },
       clearProjections: () => {
-        // Clear interactive projections
         if (projectionEntitiesRef.current.length > 0 && widgetRef.current) {
           const chart = widgetRef.current.chart();
           if (chart) {
@@ -576,8 +568,6 @@ widgetRef.current = new TradingView.widget(widgetOptions);
             projectionEntitiesRef.current = [];
           }
         }
-
-        // Clear prediction projections
         if (predictionEntitiesRef.current.length > 0 && widgetRef.current) {
           const chart = widgetRef.current.chart();
           if (chart) {

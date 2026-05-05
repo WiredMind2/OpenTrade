@@ -493,7 +493,7 @@ class TestAPIScriptEndpoints:
 
         # Mock execution record
         mock_execution = {
-            "script_name": "train_sentiment_model",
+            "script_name": "backtest_runner",
             "status": "running",
             "output": "",
             "error": ""
@@ -508,18 +508,21 @@ class TestAPIScriptEndpoints:
 
         # Test with parameters
         params = {
-            "csv": "test.csv",
-            "outdir": "/tmp/output"
+            "db": "/tmp/test.db",
+            "start": "2023-01-01",
+            "end": "2023-12-31",
         }
-        await run_script_async("test_id", "train_sentiment_model", params, {})
+        await run_script_async("test_id", "backtest_runner", params, {})
 
         # Verify subprocess was called with correct parameters
         mock_subprocess.assert_called_once()
         call_args = mock_subprocess.call_args[0]
-        assert "--csv" in call_args
-        assert "test.csv" in call_args
-        assert "--outdir" in call_args
-        assert "/tmp/output" in call_args
+        assert "--db" in call_args
+        assert "/tmp/test.db" in call_args
+        assert "--start" in call_args
+        assert "2023-01-01" in call_args
+        assert "--end" in call_args
+        assert "2023-12-31" in call_args
 
     def test_get_script_path_unknown_script(self):
         """Test get_script_path with unknown script name."""
