@@ -233,7 +233,7 @@ class TradingViewUDFDatafeed implements IDatafeedChartApi {
 
         const symbols: SearchSymbolResultItem[] = (response.data || []).map((sym: any) => ({
           symbol: sym.ticker || sym.name,
-          full_name: `${sym.exchange}:${sym.ticker || sym.name}`,
+          full_name: sym.full_name || `${sym.exchange}:${sym.ticker || sym.name}`,
           description: sym.description,
           exchange: sym.exchange,
           ticker: sym.ticker,

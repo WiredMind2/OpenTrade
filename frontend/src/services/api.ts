@@ -24,6 +24,8 @@ const instance = axios.create({
   timeout: 30000,
 })
 
+const LONG_RUNNING_REQUEST_TIMEOUT_MS = 5 * 60 * 1000
+
 
 // Add response interceptor for logging
 instance.interceptors.response.use(
@@ -93,6 +95,8 @@ export interface UdfSearchSymbol {
   exchange: string
   ticker: string
   type: string
+  currency_code?: string
+  pricescale?: number
 }
 
 export const searchUdfSymbols = async (
@@ -103,7 +107,7 @@ export const searchUdfSymbols = async (
   const response = await instance.get('/udf/search', {
     params: {
       q: query,
-      type: 'stock',
+      type: '',
       exchange,
       limit,
     },
@@ -111,6 +115,50 @@ export const searchUdfSymbols = async (
   if (response.data?.s === 'error') {
     return []
   }
+  return Array.isArray(response.data) ? response.data : []
+}
+
+export interface UdfSymbolInfo {
+  name: string
+  ticker?: string
+  description: string
+  type: string
+  exchange: string
+  listed_exchange?: string
+  currency_code?: string
+  original_currency_code?: string
+  pricescale?: number
+}
+
+export interface UdfQuote {
+  s: 'ok' | 'error'
+  n: string
+  v: {
+    lp?: number
+    open_price?: number
+    high_price?: number
+    low_price?: number
+    volume?: number
+    ch?: number
+    chp?: number
+    prev_close_price?: number
+  }
+}
+
+export const getUdfSymbolInfo = async (symbol: string): Promise<UdfSymbolInfo | null> => {
+  const response = await instance.get('/udf/symbols', {
+    params: { symbol: symbol.toUpperCase() },
+  })
+  if (response.data?.s === 'error') return null
+  return response.data
+}
+
+export const getUdfQuotes = async (symbols: string[]): Promise<UdfQuote[]> => {
+  const cleaned = symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)
+  if (cleaned.length === 0) return []
+  const response = await instance.get('/udf/quotes', {
+    params: { symbols: cleaned.join(',') },
+  })
   return Array.isArray(response.data) ? response.data : []
 }
 
@@ -160,6 +208,20 @@ export const getTickerPricesForRange = async (
 
   tickerPricesForRangeInflight.set(key, promise)
   return promise
+}
+
+export const getTickerPriceOnDate = async (
+  ticker: string,
+  asOfDate?: string,
+): Promise<PriceDailyRow | null> => {
+  const response = await instance.get(`/data/prices/${ticker.toUpperCase()}`, {
+    params: {
+      ...(asOfDate ? { end_date: `${asOfDate.slice(0, 10)}T23:59:59` } : {}),
+      limit: 1,
+    },
+  })
+  const rows = response.data?.data
+  return Array.isArray(rows) && rows.length > 0 ? rows[0] : null
 }
 
 export interface PriceHistoryRow {
@@ -389,6 +451,51 @@ export const getStrategyVariantDistribution = async (
 ): Promise<StrategyDistributionResponse> => {
   const response = await instance.get(`/api/strategy-analytics/variants/distributions/${strategy}`, {
     params: { params_hash, objective: objective ?? 'balanced', ticker },
+  })
+  return response.data
+}
+
+export type TraderStyle = 'auto' | 'short' | 'swing' | 'long'
+
+export interface TradePlanRequest {
+  ticker: string
+  style: TraderStyle
+  account_size: number
+  risk_percent: number
+  as_of_date?: string
+  signal_action?: string
+  signal_confidence?: number
+  signal_reason?: string
+}
+
+export interface TradePlanResponse {
+  ticker: string
+  style: 'short' | 'swing' | 'long'
+  trader_type: string
+  direction: 'long' | 'short' | 'wait' | 'exit'
+  confidence: number
+  entry: number | null
+  stop_loss: number | null
+  take_profit_1: number | null
+  take_profit_2: number | null
+  trailing_stop: number | null
+  invalidation: string
+  time_exit: string
+  risk_reward: number | null
+  risk_amount: number
+  position_size: number
+  latest_close: number
+  price_date: string
+  strategy: string
+  reasons: string[]
+  warnings: string[]
+  indicators: Record<string, number | null>
+  style_scores: Record<'short' | 'swing' | 'long', number>
+}
+
+export const createTradePlan = async (payload: TradePlanRequest): Promise<TradePlanResponse> => {
+  const response = await instance.post('/api/trade-plan', payload, {
+    timeout: LONG_RUNNING_REQUEST_TIMEOUT_MS,
   })
   return response.data
 }
