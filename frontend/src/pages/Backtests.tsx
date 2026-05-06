@@ -455,12 +455,6 @@ export default function Backtests() {
     <>
     <div className="space-y-6">
       {/* Header */}
-      <div className="space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">Backtests</h2>
-        <p className="text-muted-foreground">
-          Test and analyze your trading strategies
-        </p>
-      </div>
 
       {/* Backtest Form */}
       <Card className="border-muted shadow-md">

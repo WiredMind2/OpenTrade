@@ -467,13 +467,6 @@ export default function StrategyPerformance() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">Strategy Performance</h2>
-        <p className="text-muted-foreground">
-          Each leaderboard row is a model: a strategy script plus one fixed parameter set. Compare models per ticker
-          across strategy families and drill in from the table.
-        </p>
-      </div>
 
       <Card>
         <CardHeader>

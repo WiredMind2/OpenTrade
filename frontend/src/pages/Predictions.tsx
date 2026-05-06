@@ -257,21 +257,6 @@ export default function Predictions() {
 
   return (
     <div className="space-y-4">
-      <div className="border-b pb-3">
-        <div className="max-w-3xl space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-2xl font-bold tracking-tight">Predictions</h2>
-            <Badge variant="outline">{symbolInfo?.exchange || 'MARKET'}</Badge>
-            <Badge variant="secondary">{symbolInfo?.currency_code || 'USD'}</Badge>
-          </div>
-
-          <p className="text-sm text-muted-foreground">
-            Chart and news at the top, then build a trade plan. Saved models ranked with the same objective as in the
-            plan builder produce buy / sell / hold signals at the anchor date — set in the plan builder — or latest when
-            empty. Save models from Strategy Performance or Backtests.
-          </p>
-        </div>
-      </div>
 
       <div className="space-y-4">
         <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_21rem] xl:grid-cols-[minmax(0,1fr)_23rem]">
