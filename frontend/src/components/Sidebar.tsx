@@ -18,6 +18,8 @@ import { ThemeToggle } from './ThemeToggle'
 
 interface SidebarProps {
   className?: string
+  collapsed?: boolean
+  onCollapsedChange?: (collapsed: boolean) => void
 }
 
 const navigation = [
@@ -29,9 +31,19 @@ const navigation = [
   { name: 'Recommendations', href: '/recommendations', icon: BookOpen },
 ]
 
-export function Sidebar({ className }: SidebarProps) {
+export function Sidebar({
+  className,
+  collapsed: collapsedProp,
+  onCollapsedChange,
+}: SidebarProps) {
   const location = useLocation()
-  const [collapsed, setCollapsed] = useState(false)
+  const [uncontrolledCollapsed, setUncontrolledCollapsed] = useState(false)
+
+  const collapsed = collapsedProp ?? uncontrolledCollapsed
+  const setCollapsed = (next: boolean) => {
+    if (collapsedProp === undefined) setUncontrolledCollapsed(next)
+    onCollapsedChange?.(next)
+  }
 
   return (
     <aside
