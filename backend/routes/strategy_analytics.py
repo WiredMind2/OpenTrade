@@ -158,12 +158,55 @@ def _backtest_runs_columns(conn: sqlite3.Connection) -> set:
     return {row[1] for row in cur.execute("PRAGMA table_info(backtest_runs)").fetchall()}
 
 
+def _metric_float(value: Any, default: float = 0.0) -> float:
+    try:
+        v = float(value)
+        return v if math.isfinite(v) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalized_return_metrics(row: pd.Series | Dict[str, Any]) -> Dict[str, float]:
+    initial = _metric_float(row.get("initial_capital"), 0.0)
+    final = _metric_float(row.get("final_value"), 0.0)
+    total_return = _metric_float(row.get("total_return"), 0.0)
+    if initial > 0 and final > 0:
+        total_return = (final - initial) / initial
+    elif abs(total_return) > 20:
+        total_return /= 100.0
+
+    annualized_return = _metric_float(row.get("annualized_return"), 0.0)
+    if (abs(annualized_return) > 5 or annualized_return < -1) and abs(total_return) <= 5:
+        annualized_return /= 100.0
+
+    max_drawdown = abs(_metric_float(row.get("max_drawdown"), 0.0))
+    if max_drawdown > 1:
+        max_drawdown /= 100.0
+
+    volatility = abs(_metric_float(row.get("volatility"), 0.0))
+    if volatility > 5:
+        volatility /= 100.0
+
+    win_rate = _metric_float(row.get("win_rate"), 0.0)
+    if win_rate > 1:
+        win_rate /= 100.0
+
+    return {
+        "total_return": total_return,
+        "annualized_return": annualized_return,
+        "max_drawdown": max_drawdown,
+        "volatility": volatility,
+        "win_rate": max(0.0, min(1.0, win_rate)),
+    }
+
+
 def _variant_row_score(engine: StrategyOptimizerEngine, objective: str, row: pd.Series) -> float:
+    normalized = _normalized_return_metrics(row)
     return engine.score(
         {
-            "sharpe_ratio": float(row.get("sharpe_ratio") or 0.0),
-            "total_return": float(row.get("total_return") or 0.0),
-            "max_drawdown": float(row.get("max_drawdown") or 0.0),
+            "sharpe_ratio": _metric_float(row.get("sharpe_ratio"), 0.0),
+            "total_return": normalized["total_return"],
+            "max_drawdown": normalized["max_drawdown"],
         },
         objective,
     )
@@ -219,7 +262,7 @@ def _load_all_variant_runs_df(conn: sqlite3.Connection) -> pd.DataFrame:
         """
         SELECT rowid AS id, name, params_hash, variant_label, params, sharpe_ratio,
                total_return, max_drawdown, win_rate, total_trades, volatility,
-               annualized_return, completed_at, final_value
+               annualized_return, completed_at, initial_capital, equity_curve, final_value
         FROM backtest_runs
         WHERE params_hash IS NOT NULL
           AND TRIM(params_hash) != ''
@@ -329,6 +372,7 @@ def _sync_ticker_strategy_leaderboard(
             for _, row in top_rows.iterrows():
                 params_obj = _params_dict(row.get("params"))
                 strategy = str(row.get("strategy") or row.get("name") or "")
+                metrics = _normalized_return_metrics(row)
                 strategy_rows.append(
                     TickerStrategyRow(
                         ticker=str(ticker_value),
@@ -337,13 +381,13 @@ def _sync_ticker_strategy_leaderboard(
                         variant_label=row.get("variant_label"),
                         representative_run_id=int(row["id"]),
                         run_count=int(run_counts.get((str(ticker_value), strategy), 1)),
-                        total_return=float(row.get("total_return") or 0.0),
-                        annualized_return=float(row.get("annualized_return") or 0.0),
-                        sharpe_ratio=float(row.get("sharpe_ratio") or 0.0),
-                        max_drawdown=float(row.get("max_drawdown") or 0.0),
-                        win_rate=float(row.get("win_rate") or 0.0),
+                        total_return=metrics["total_return"],
+                        annualized_return=metrics["annualized_return"],
+                        sharpe_ratio=_metric_float(row.get("sharpe_ratio"), 0.0),
+                        max_drawdown=metrics["max_drawdown"],
+                        win_rate=metrics["win_rate"],
                         total_trades=int(row.get("total_trades") or 0),
-                        volatility=float(row.get("volatility") or 0.0),
+                        volatility=metrics["volatility"],
                         params=params_obj,
                         last_completed_at=str(row["completed_at"]) if row.get("completed_at") is not None else None,
                     )
@@ -410,6 +454,7 @@ def _sync_variant_summary(
             elif isinstance(raw_p, dict):
                 params_obj = raw_p
 
+            metrics = _normalized_return_metrics(row)
             variants.append(
                 StrategyVariantRow(
                     params_hash=ph,
@@ -417,13 +462,13 @@ def _sync_variant_summary(
                     strategy=strategy,
                     representative_run_id=int(row["id"]),
                     run_count=int(counts.get(ph, 1)),
-                    total_return=float(row.get("total_return") or 0.0),
-                    annualized_return=float(row.get("annualized_return") or 0.0),
-                    sharpe_ratio=float(row.get("sharpe_ratio") or 0.0),
-                    max_drawdown=float(row.get("max_drawdown") or 0.0),
-                    win_rate=float(row.get("win_rate") or 0.0),
+                    total_return=metrics["total_return"],
+                    annualized_return=metrics["annualized_return"],
+                    sharpe_ratio=_metric_float(row.get("sharpe_ratio"), 0.0),
+                    max_drawdown=metrics["max_drawdown"],
+                    win_rate=metrics["win_rate"],
                     total_trades=int(row.get("total_trades") or 0),
-                    volatility=float(row.get("volatility") or 0.0),
+                    volatility=metrics["volatility"],
                     params=params_obj,
                     last_completed_at=str(row["completed_at"]) if row.get("completed_at") is not None else None,
                 )

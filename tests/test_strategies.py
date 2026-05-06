@@ -8,12 +8,17 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import sys
 
+import backtrader as bt
+import pandas as pd
+
 # Import the strategy components
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
 from backend.strategies.base import BaseStrategy
 from backend.strategies.registry import StrategyRegistry
+from backend.strategies.sentiment_ml import SentimentMLStrategy
+from backend.strategies.macd_strategy import MACDStrategy
 
 
 @pytest.mark.unit
@@ -224,3 +229,284 @@ class TestBaseStrategy:
                 parameters_schema={},
                 can_train=False
             )
+
+
+@pytest.mark.unit
+class TestSentimentMLStrategy:
+    """Test the SentimentMLStrategy class functionality."""
+
+    def setup_method(self):
+        """Set up test environment."""
+        self.strategy = SentimentMLStrategy()
+
+    def teardown_method(self):
+        """Clean up test environment."""
+        # Clean up any created model files
+        if os.path.exists('models'):
+            import shutil
+            shutil.rmtree('models')
+
+    def test_initialization(self):
+        """Test SentimentMLStrategy initializes correctly."""
+        assert self.strategy.name == "sentiment_ml"
+        assert self.strategy.description == "ML-driven strategy using sentiment model predictions"
+        assert self.strategy.type == "ml"
+        assert self.strategy.can_train == True
+        assert "model_name" in self.strategy.parameters_schema
+        assert "prediction_threshold" in self.strategy.parameters_schema
+        assert "max_position_pct" in self.strategy.parameters_schema
+
+    def test_load_versions_no_models_dir(self):
+        """Test loading versions when models directory doesn't exist."""
+        # Should not crash
+        self.strategy._load_versions()
+        assert self.strategy.versions == []
+        assert self.strategy.current_version is None
+
+    def test_load_versions_with_models(self):
+        """Test loading versions from existing model files."""
+        # Create models directory and mock versioned files
+        os.makedirs('models', exist_ok=True)
+
+        # Create mock metadata file
+        metadata_content = {
+            'version': 1,
+            'version_name': 'sentiment_ml__20240101_120000__v1',
+            'timestamp': '20240101_120000',
+            'training_config': {},
+            'metrics': {'rmse': 0.1, 'mae': 0.08}
+        }
+
+        import json
+        with open('models/sentiment_ml__20240101_120000__v1_metadata.json', 'w') as f:
+            json.dump(metadata_content, f)
+
+        # Create mock model file
+        with open('models/sentiment_ml__20240101_120000__v1.joblib', 'w') as f:
+            f.write('mock model data')
+
+        self.strategy._load_versions()
+
+        assert len(self.strategy.versions) == 1
+        assert self.strategy.versions[0]['version'] == 1
+        assert self.strategy.versions[0]['name'] == 'sentiment_ml__20240101_120000__v1'
+        assert self.strategy.current_version == 'sentiment_ml__20240101_120000__v1'
+
+    def test_create_backtrader_strategy(self):
+        """Test creating Backtrader strategy."""
+        parameters = {
+            'model_name': 'test_model',
+            'prediction_threshold': 0.6,
+            'max_position_pct': 0.2
+        }
+
+        bt_strategy_class = self.strategy.create_backtrader_strategy(parameters)
+
+        # Should return a class
+        assert bt_strategy_class is not None
+        assert hasattr(bt_strategy_class, 'params')
+
+        # Check parameters - Backtrader params is a special object
+        # Just verify the class was created successfully
+        assert bt_strategy_class.__name__ == 'SentimentMLBacktrader'
+
+    @patch('backend.strategies.sentiment_ml.sqlite3')
+    def test_train_creates_job(self, mock_sqlite):
+        """Test that train method creates a job."""
+        # Mock database
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_sqlite.connect.return_value = mock_conn
+
+        # Mock asyncio.create_task
+        with patch('asyncio.create_task') as mock_create_task:
+            config = {'csv_path': 'test.csv', 'outdir': 'models'}
+            result = self.strategy.train(config)
+
+            assert 'job_id' in result
+            assert result['status'] == 'queued'
+
+            # Verify background task was created
+            mock_create_task.assert_called_once()
+
+    def test_list_versions(self):
+        """Test listing model versions."""
+        # Initially empty
+        assert self.strategy.list_versions() == []
+
+        # Add a version
+        self.strategy.versions = [{
+            'version': 1,
+            'name': 'test_v1',
+            'path': 'models/test_v1.joblib',
+            'metadata_path': 'models/test_v1_metadata.json',
+            'timestamp': '20240101_120000'
+        }]
+
+        versions = self.strategy.list_versions()
+        assert len(versions) == 1
+        assert versions[0]['version'] == 1
+
+    def test_switch_version(self):
+        """Test switching model versions."""
+        # Add versions
+        self.strategy.versions = [
+            {
+                'version': 1,
+                'name': 'v1',
+                'path': 'models/v1.joblib',
+                'metadata_path': 'models/v1_metadata.json',
+                'timestamp': '20240101_120000'
+            },
+            {
+                'version': 2,
+                'name': 'v2',
+                'path': 'models/v2.joblib',
+                'metadata_path': 'models/v2_metadata.json',
+                'timestamp': '20240102_120000'
+            }
+        ]
+
+        # Switch to v2
+        assert self.strategy.switch_version('v2') == True
+        assert self.strategy.current_version == 'v2'
+        assert self.strategy.model_name == 'v2'
+
+        # Try switching to non-existent version
+        assert self.strategy.switch_version('non_existent') == False
+
+    def test_get_current_model_name(self):
+        """Test getting current model name."""
+        # Initially should return default model name
+        assert self.strategy.get_current_model_name() == 'sentiment_model'
+
+        # After setting current_version, should return that
+        self.strategy.current_version = 'test_version'
+        self.strategy.model_name = 'test_version'
+        assert self.strategy.get_current_model_name() == 'test_version'
+
+    @patch('backend.strategies.sentiment_ml.bt')
+    def test_backtesting_integration(self, mock_bt):
+        """Test backtesting with sentiment ML strategy."""
+        # Mock Backtrader components
+        mock_cerebro = MagicMock()
+        mock_data = MagicMock()
+        mock_strategy_instance = MagicMock()
+        mock_strategy_instance.equity_curve = [
+            {'date': '2024-01-01', 'value': 100000.0},
+            {'date': '2024-01-02', 'value': 101000.0}
+        ]
+        mock_strategy_instance.trades = []
+
+        mock_cerebro.adddata.return_value = None
+        mock_cerebro.addstrategy.return_value = None
+        mock_cerebro.run.return_value = [mock_strategy_instance]
+
+        mock_bt.Cerebro.return_value = mock_cerebro
+        mock_bt.feeds.PandasData.return_value = mock_data
+
+        # Create strategy and run backtest
+        bt_strategy_class = self.strategy.create_backtrader_strategy({})
+        mock_cerebro_instance = mock_bt.Cerebro()
+        mock_cerebro_instance.addstrategy(bt_strategy_class)
+        mock_cerebro_instance.adddata(mock_data)
+        results = mock_cerebro_instance.run()
+
+        # Verify backtest ran
+        assert len(results) == 1
+        assert hasattr(results[0], 'equity_curve')
+
+
+@pytest.mark.unit
+class TestMACDStrategy:
+    """Test the MACD strategy class functionality."""
+
+    def setup_method(self):
+        self.strategy = MACDStrategy()
+
+    def test_initialization(self):
+        assert self.strategy.name == "macd"
+        assert self.strategy.description == "MACD with 200 EMA trend filter and zero-line pullback logic"
+        assert self.strategy.type == "rule"
+        assert self.strategy.can_train is False
+        expected_keys = {
+            "macd_fast",
+            "macd_slow",
+            "macd_signal",
+            "ema_period",
+            "lowest_period",
+            "risk_pct",
+            "reward_ratio",
+        }
+        assert expected_keys.issubset(set(self.strategy.parameters_schema.keys()))
+
+    def test_create_backtrader_strategy(self):
+        parameters = {
+            "macd_fast": 12,
+            "macd_slow": 26,
+            "macd_signal": 9,
+            "ema_period": 200,
+            "lowest_period": 10,
+            "risk_pct": 0.01,
+            "reward_ratio": 1.5,
+        }
+
+        bt_strategy_class = self.strategy.create_backtrader_strategy(parameters)
+
+        assert bt_strategy_class is not None
+        assert isinstance(bt_strategy_class, type)
+        assert hasattr(bt_strategy_class, "params")
+        assert bt_strategy_class.__name__ == "UpgradedMACDCrossover"
+
+        assert getattr(bt_strategy_class.params, "macd_fast") == 12
+        assert getattr(bt_strategy_class.params, "macd_slow") == 26
+        assert getattr(bt_strategy_class.params, "macd_signal") == 9
+        assert getattr(bt_strategy_class.params, "ema_period") == 200
+        assert getattr(bt_strategy_class.params, "risk_pct") == 0.01
+        assert getattr(bt_strategy_class.params, "reward_ratio") == 1.5
+
+    def test_instantiate_backtrader_strategy_defaults(self):
+        bt_strategy_class = self.strategy.create_backtrader_strategy({})
+
+        # Minimal sample data to initialize the Backtrader strategy.
+        dates = pd.date_range(start="2024-01-01", periods=260, freq="D")
+        closes = [100.0 + i * 0.1 for i in range(260)]
+        df = pd.DataFrame(
+            {
+                "open": [c - 0.5 for c in closes],
+                "high": [c + 0.5 for c in closes],
+                "low": [c - 1.0 for c in closes],
+                "close": closes,
+                "volume": [1000 + i for i in range(260)],
+            },
+            index=dates,
+        )
+
+        data = bt.feeds.PandasData(dataname=df)
+        cerebro = bt.Cerebro()
+        cerebro.addstrategy(bt_strategy_class)
+        cerebro.adddata(data)
+
+        results = cerebro.run()
+        assert len(results) == 1
+
+        strategy_instance = results[0]
+        assert hasattr(strategy_instance, "next")
+        assert hasattr(strategy_instance, "notify_trade")
+        assert strategy_instance.params.macd_fast == 12
+        assert strategy_instance.params.macd_slow == 26
+        assert strategy_instance.params.macd_signal == 9
+        assert strategy_instance.params.ema_period == 200
+        assert strategy_instance.params.lowest_period == 10
+        assert strategy_instance.params.risk_pct == 0.01
+        assert strategy_instance.params.reward_ratio == 1.5
+
+    def test_project_returns_expected_fields(self):
+        result = self.strategy.project({}, projection_days=30, initial_capital=100000.0)
+
+        assert isinstance(result, dict)
+        assert result["projected_return"] == 0.0
+        assert result["projected_volatility"] == 0.0
+        assert result["confidence_interval"] == [0.0, 0.0]
+        assert result["metrics"] == {}

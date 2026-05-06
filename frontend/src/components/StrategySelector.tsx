@@ -189,11 +189,12 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {selectedStrategy ? (
-        <div className="min-w-0 border-t border-border pt-3">
+        <div className="min-w-0 border-t border-border pt-3 space-y-3">
           {(() => {
+            const hidden = new Set(['pair_ticker', 'ticker'])
             const entries = Object.entries(
               strategies.find((s) => s.name === selectedStrategy)?.parameters_schema || {}
-            )
+            ).filter(([key]) => !hidden.has(key))
             if (entries.length === 0) return null
             return (
               <>
@@ -204,7 +205,7 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ onStrategyChange })
                   aria-expanded={parametersOpen}
                 >
                   <span>
-                    Parameters
+                    Advanced parameters
                     <span className="ml-1.5 normal-case font-normal text-muted-foreground/80">
                       ({entries.length})
                     </span>

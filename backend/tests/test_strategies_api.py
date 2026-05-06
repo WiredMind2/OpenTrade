@@ -427,9 +427,9 @@ class TestStrategyProjectionLogic:
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         mock_cursor.fetchall.return_value = [
-            ('AAPL', 0.1, '2023-01-01', 0.02, 0.8),
-            ('MSFT', 0.15, '2023-01-02', 0.025, 0.7),
-            ('GOOGL', 0.08, '2023-01-03', 0.015, 0.9),
+            (0.1,),
+            (0.15,),
+            (0.08,),
         ]
 
         with patch('backend.main.app_state', {'database_path': 'data/backtest.db'}), \

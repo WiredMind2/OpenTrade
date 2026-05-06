@@ -30,6 +30,102 @@ logger = get_component_logger(__file__)
 limiter = Limiter(key_func=get_remote_address)
 
 
+def _metric_float(value: Any, default: float = 0.0) -> float:
+    try:
+        v = float(value)
+        return v if v == v and v not in (float("inf"), float("-inf")) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_training_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize strategy-training metrics to API decimal units."""
+    out = dict(metrics or {})
+    max_drawdown = abs(_metric_float(out.get("max_drawdown"), 0.0))
+    annualized_return = _metric_float(out.get("annualized_return"), 0.0)
+    volatility = abs(_metric_float(out.get("volatility"), 0.0))
+    win_rate = _metric_float(out.get("win_rate"), 0.0)
+
+    if max_drawdown > 1:
+        max_drawdown /= 100.0
+    if abs(annualized_return) > 5:
+        annualized_return /= 100.0
+    if volatility > 5:
+        volatility /= 100.0
+    if win_rate > 1:
+        win_rate /= 100.0
+
+    out["total_return"] = _metric_float(out.get("total_return"), 0.0)
+    out["sharpe_ratio"] = _metric_float(out.get("sharpe_ratio"), 0.0)
+    out["max_drawdown"] = max_drawdown
+    out["annualized_return"] = annualized_return
+    out["volatility"] = volatility
+    out["win_rate"] = max(0.0, min(1.0, win_rate))
+    out["total_trades"] = int(_metric_float(out.get("total_trades"), 0.0))
+    return out
+
+
+def _median(values: List[float]) -> float:
+    clean = sorted(v for v in values if v == v and v not in (float("inf"), float("-inf")))
+    if not clean:
+        return 0.0
+    mid = len(clean) // 2
+    if len(clean) % 2:
+        return clean[mid]
+    return (clean[mid - 1] + clean[mid]) / 2.0
+
+
+def _training_quality_summary(evaluations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    metrics = [e.get("metrics", {}) for e in evaluations]
+    returns = [_metric_float(m.get("total_return"), 0.0) for m in metrics]
+    sharpes = [_metric_float(m.get("sharpe_ratio"), 0.0) for m in metrics]
+    drawdowns = [abs(_metric_float(m.get("max_drawdown"), 0.0)) for m in metrics]
+    profitable = sum(1 for value in returns if value > 0)
+    count = len(metrics)
+
+    best_return = max(returns) if returns else 0.0
+    worst_return = min(returns) if returns else 0.0
+    median_return = _median(returns)
+    best_sharpe = max(sharpes) if sharpes else 0.0
+    median_sharpe = _median(sharpes)
+    best_drawdown = min(drawdowns) if drawdowns else 0.0
+    median_drawdown = _median(drawdowns)
+    profitable_ratio = profitable / count if count else 0.0
+    return_spread = best_return - worst_return
+
+    warnings: List[str] = []
+    overfit_risk = "low"
+    if best_return > 0.50 and median_return < 0.05:
+        overfit_risk = "high"
+        warnings.append("Best return is far above the median evaluation; the winner may be overfit.")
+    if best_sharpe - median_sharpe > 2.0 and profitable_ratio < 0.4:
+        overfit_risk = "high"
+        warnings.append("Only a minority of parameter sets were profitable while the best Sharpe is extreme.")
+    if overfit_risk == "low" and best_return > 0.30 and return_spread > 0.40:
+        overfit_risk = "medium"
+        warnings.append("Parameter results vary widely; validate this strategy before trusting the best run.")
+    if median_drawdown > 0.25:
+        warnings.append("Median drawdown is above 25%, so risk is high across many parameter sets.")
+    if best_return > 0.75:
+        warnings.append("Return above 75% should be checked against fees, slippage, leverage, and benchmark.")
+
+    return {
+        "evaluations": count,
+        "profitable_evaluations": profitable,
+        "profitable_ratio": profitable_ratio,
+        "best_return": best_return,
+        "median_return": median_return,
+        "worst_return": worst_return,
+        "return_spread": return_spread,
+        "best_sharpe": best_sharpe,
+        "median_sharpe": median_sharpe,
+        "best_drawdown": best_drawdown,
+        "median_drawdown": median_drawdown,
+        "overfit_risk": overfit_risk,
+        "warnings": warnings,
+    }
+
+
 class TrainRequest(BaseModel):
     """Request model for training configuration."""
     dataset_path: Optional[str] = None
@@ -463,6 +559,7 @@ def _optimize_signal_strategy(
         reverse=True,
     )
     best = evaluations[0]
+    training_summary = _training_quality_summary(evaluations)
     return {
         "strategy": strategy_name,
         "ticker": ticker.upper(),
@@ -475,6 +572,7 @@ def _optimize_signal_strategy(
         "evaluations_run": len(evaluations),
         "best_params": best["params"],
         "best_metrics": best["metrics"],
+        "training_summary": training_summary,
         "top_candidates": evaluations[:5],
     }
 

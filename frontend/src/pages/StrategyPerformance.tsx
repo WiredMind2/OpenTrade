@@ -83,6 +83,19 @@ function defaultSavedModelName(row: Pick<TickerStrategyRow, 'strategy' | 'ticker
   return `Perf ${row.strategy} ${shortHash(row.params_hash)} @ ${row.ticker}`
 }
 
+function performanceQuality(row: TickerStrategyRow): { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' } {
+  const totalReturn = safeNumber(row.total_return, 0)
+  const maxDrawdown = safeNumber(row.max_drawdown, 0)
+  const sharpe = safeNumber(row.sharpe_ratio, 0)
+  const trades = safeNumber(row.total_trades, 0)
+
+  if (totalReturn >= 0.75 && maxDrawdown >= 0.25) return { label: 'High risk', variant: 'destructive' }
+  if (totalReturn >= 0.50 && trades < 30) return { label: 'Thin sample', variant: 'secondary' }
+  if (sharpe < 0 || totalReturn < 0) return { label: 'Weak', variant: 'outline' }
+  if (totalReturn > 0.30 && maxDrawdown < 0.15 && sharpe > 1) return { label: 'Clean', variant: 'default' }
+  return { label: 'Review', variant: 'secondary' }
+}
+
 function monthlyReturnsFromPoints(points: StrategyTimeseriesPoint[]): Record<string, Record<string, number>> {
   if (!points?.length) return {}
   const byYm = new Map<string, number>()
@@ -646,50 +659,57 @@ export default function StrategyPerformance() {
                       <th className="text-right py-2 px-2">Vol</th>
                       <th className="text-right py-2 px-2">Max DD</th>
                       <th className="text-right py-2 px-2">Win rate</th>
+                      <th className="text-left py-2 px-2">Quality</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {tickerStrategyRows.map((row) => (
-                      <tr
-                        key={`${row.ticker}-${row.strategy}-${row.params_hash}`}
-                        className={`border-b border-border/50 ${
-                          strategy === row.strategy && activeParamsHash === row.params_hash ? 'bg-muted/30' : ''
-                        }`}
-                        onClick={() => {
-                          strategyRef.current = row.strategy
-                          activeParamsHashRef.current = row.params_hash
-                          setStrategy(row.strategy)
-                          setActiveParamsHash(row.params_hash)
-                          void loadDashboard()
-                        }}
-                      >
-                        <td
-                          className="text-center py-2 px-1"
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => e.stopPropagation()}
+                    {tickerStrategyRows.map((row) => {
+                      const quality = performanceQuality(row)
+                      return (
+                        <tr
+                          key={`${row.ticker}-${row.strategy}-${row.params_hash}`}
+                          className={`border-b border-border/50 ${
+                            strategy === row.strategy && activeParamsHash === row.params_hash ? 'bg-muted/30' : ''
+                          }`}
+                          onClick={() => {
+                            strategyRef.current = row.strategy
+                            activeParamsHashRef.current = row.params_hash
+                            setStrategy(row.strategy)
+                            setActiveParamsHash(row.params_hash)
+                            void loadDashboard()
+                          }}
                         >
-                          <input
-                            type="checkbox"
-                            checked={selectedLeaderboardKeys.has(leaderboardRowKey(row))}
-                            onChange={() => toggleLeaderboardRowSelected(row)}
-                            disabled={saveBusy}
-                            aria-label={`Select ${row.ticker} ${row.strategy}`}
-                          />
-                        </td>
-                        <td className="py-2 pr-3 font-medium">{row.ticker}</td>
-                        <td className="text-right py-2 px-2">{row.rank}</td>
-                        <td className="py-2 px-2">{row.strategy}</td>
-                        <td className="py-2 px-2 font-mono text-xs">{shortHash(row.params_hash)}</td>
-                        <td className="text-right py-2 px-2">{row.run_count}</td>
-                        <td className="text-right py-2 px-2">{row.total_trades}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(row.total_return)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(row.annualized_return)}</td>
-                        <td className="text-right py-2 px-2">{fmtNum(row.sharpe_ratio)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(row.volatility)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(row.max_drawdown)}</td>
-                        <td className="text-right py-2 px-2">{fmtPct(row.win_rate)}</td>
-                      </tr>
-                    ))}
+                          <td
+                            className="text-center py-2 px-1"
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedLeaderboardKeys.has(leaderboardRowKey(row))}
+                              onChange={() => toggleLeaderboardRowSelected(row)}
+                              disabled={saveBusy}
+                              aria-label={`Select ${row.ticker} ${row.strategy}`}
+                            />
+                          </td>
+                          <td className="py-2 pr-3 font-medium">{row.ticker}</td>
+                          <td className="text-right py-2 px-2">{row.rank}</td>
+                          <td className="py-2 px-2">{row.strategy}</td>
+                          <td className="py-2 px-2 font-mono text-xs">{shortHash(row.params_hash)}</td>
+                          <td className="text-right py-2 px-2">{row.run_count}</td>
+                          <td className="text-right py-2 px-2">{row.total_trades}</td>
+                          <td className="text-right py-2 px-2">{fmtPct(row.total_return)}</td>
+                          <td className="text-right py-2 px-2">{fmtPct(row.annualized_return)}</td>
+                          <td className="text-right py-2 px-2">{fmtNum(row.sharpe_ratio)}</td>
+                          <td className="text-right py-2 px-2">{fmtPct(row.volatility)}</td>
+                          <td className="text-right py-2 px-2">{fmtPct(row.max_drawdown)}</td>
+                          <td className="text-right py-2 px-2">{fmtPct(row.win_rate)}</td>
+                          <td className="py-2 px-2">
+                            <Badge variant={quality.variant}>{quality.label}</Badge>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -53,7 +53,6 @@ class WebSocketService {
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
-        console.log('[WebSocket] Connected to', url)
         this.isConnecting = false
         this.reconnectAttempts = 0
         this.reconnectDelay = 1000
@@ -69,7 +68,6 @@ class WebSocketService {
       }
 
       this.ws.onclose = (event) => {
-        console.log('[WebSocket] Connection closed', event.code, event.reason)
         this.isConnecting = false
         this.ws = null
 
@@ -108,14 +106,12 @@ class WebSocketService {
 
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('[WebSocket] Max reconnection attempts reached')
       return
     }
 
     this.reconnectAttempts++
     const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), this.maxReconnectDelay)
 
-    console.log(`[WebSocket] Scheduling reconnection in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`)
 
     this.reconnectTimeout = setTimeout(() => {
       this.connect()

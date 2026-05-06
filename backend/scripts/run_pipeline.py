@@ -238,7 +238,7 @@ def run_download_kaggle(args):
     if download_kaggle.KAGGLE_USERNAME and download_kaggle.KAGGLE_KEY:
         download_kaggle.write_kaggle_json(download_kaggle.KAGGLE_USERNAME, download_kaggle.KAGGLE_KEY)
     else:
-        print('KAGGLE_USERNAME and KAGGLE_KEY not set in environment. If you have a kaggle.json in ~/.kaggle, the script will use it. Otherwise, set credentials in .env or download manually from the Kaggle web UI.')
+        logger.warning('KAGGLE_USERNAME and KAGGLE_KEY not set in environment. If you have a kaggle.json in ~/.kaggle, the script will use it. Otherwise, set credentials in .env or download manually from the Kaggle web UI.')
     download_kaggle.download_dataset(args.kaggle_dataset, args.csv_dir)
 
 
@@ -252,7 +252,7 @@ def run_ingest_prices(args):
             if f.lower().endswith('.csv'):
                 paths.append(os.path.join(root, f))
     if not paths:
-        print('No CSV files found under', args.csv_dir)
+        logger.warning(f'No CSV files found under {args.csv_dir}')
         return
     for p in paths:
         ingest_prices.ingest_csv_to_db(args.db, p, None)
@@ -266,7 +266,7 @@ def run_scan_csvs(args):
 def run_ingest_news(args):
     from backend.scripts import ingest_news
     if not ingest_news.NEWSAPI_KEY:
-        print('NEWSAPI_KEY not set in environment. Export it or add to .env file.')
+        logger.warning('NEWSAPI_KEY not set in environment. Export it or add to .env file.')
         return
     conn = ingest_news.NewsAPIConnector(api_key=ingest_news.NEWSAPI_KEY)
     articles = conn.fetch_headlines(query=args.news_query, from_dt=getattr(args, 'news_from', None), to_dt=getattr(args, 'news_to', None))
@@ -284,11 +284,11 @@ def run_map_articles_to_tickers(args):
     conn = sqlite3.connect(args.db)
     tickers = map_articles_to_tickers.load_tickers(conn)
     if not tickers:
-        print('No tickers found in DB. Run scripts/scan_csvs.py first to register tickers from your CSVs.')
+        logger.warning('No tickers found in DB. Run scripts/scan_csvs.py first to register tickers from your CSVs.')
     else:
-        print(f'Loaded {len(tickers)} tickers from the DB')
+        logger.info(f'Loaded {len(tickers)} tickers from the DB')
         mapped = map_articles_to_tickers.map_articles(conn, tickers)
-        print(f'Inserted {mapped} article->ticker mappings')
+        logger.info(f'Inserted {mapped} article->ticker mappings')
     conn.close()
 
 
@@ -312,8 +312,8 @@ def run_ingest_minute_prices(args):
         '--interval', '1m'
     ], capture_output=True, text=True)
     if result.returncode != 0:
-        print("STDOUT:", result.stdout)
-        print("STDERR:", result.stderr)
+        logger.error(f"STDOUT: {result.stdout}")
+        logger.error(f"STDERR: {result.stderr}")
         raise Exception(f"ingest_minute_prices failed with code {result.returncode}")
 
 

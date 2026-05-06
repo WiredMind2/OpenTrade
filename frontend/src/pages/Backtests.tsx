@@ -135,13 +135,13 @@ export default function Backtests() {
   const [detailBacktest, setDetailBacktest] = useState<BacktestListItem | null>(null)
   const [backtests, setBacktests] = useState<BacktestListItem[]>([])
   const [strategy, setStrategy] = useState('')
-  const [strategyParams, setStrategyParams] = useState<Record<string, any>>({})
   const [startDate, setStartDate] = useState(() => `${new Date().getFullYear() - 1}-01-01`)
   const [endDate, setEndDate] = useState(() => `${new Date().getFullYear() - 1}-12-31`)
   const [training, setTraining] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ticker, setTicker] = useState(() => getStoredTicker())
+  const [pairTicker, setPairTicker] = useState('')
   const [trainObjective, setTrainObjective] = useState<'sharpe' | 'return' | 'drawdown' | 'balanced'>('balanced')
   const [maxEvals, setMaxEvals] = useState(8)
   const [optimizerMode, setOptimizerMode] = useState<'grid' | 'random'>('grid')
@@ -343,6 +343,11 @@ export default function Backtests() {
       alert('Please provide a ticker for training')
       return
     }
+    const pt = pairTicker.trim().toUpperCase() || undefined
+    if (strategy === 'pairs_trading' && !pt) {
+      alert('pairs_trading requires a second ticker — fill in the "Second ticker" field next to Ticker')
+      return
+    }
     setTraining(true)
     setTrainError(null)
     setServerWaitPhase('preflight')
@@ -352,6 +357,7 @@ export default function Backtests() {
         ticker: normalizedTicker,
         start_date: startDate,
         end_date: endDate,
+        ...(pt ? { pair_ticker: pt } : {}),
       })
       setPreflight(check)
       if (!check.ready) {
@@ -369,6 +375,7 @@ export default function Backtests() {
         max_evals: maxEvals,
         optimizer_mode: optimizerMode,
         ...(Number.isFinite(seedNum as number) ? { random_seed: seedNum } : {}),
+        ...(pt ? { pair_ticker: pt } : {}),
       })
       if (
         response &&
@@ -472,9 +479,8 @@ export default function Backtests() {
             <div className="space-y-2">
               <label className="text-sm font-medium">Strategy Name</label>
               <StrategySelector
-                onStrategyChange={(selectedStrategy, params) => {
+                onStrategyChange={(selectedStrategy) => {
                   setStrategy(selectedStrategy)
-                  setStrategyParams(params)
                   setTrainResult(null)
                   setTrainedParams(null)
                   setTrainError(null)
@@ -503,13 +509,26 @@ export default function Backtests() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Training Ticker</label>
+                <label className="text-sm font-medium">Ticker</label>
                 <TickerSearch
                   value={ticker}
                   onChange={(t) => setTicker(rememberTicker(t))}
                   placeholder="Search a ticker"
                 />
               </div>
+
+              {strategy === 'pairs_trading' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Second ticker <span className="text-destructive">*</span>
+                  </label>
+                  <TickerSearch
+                    value={pairTicker}
+                    onChange={(t) => setPairTicker(t.toUpperCase())}
+                    placeholder="e.g. MSFT"
+                  />
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-sm font-medium">Objective</label>
@@ -627,7 +646,22 @@ export default function Backtests() {
             )}
             {trainResult && (
               <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1">
-                <p className="font-medium">Training result ({trainResult.strategy})</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-medium">Training result ({trainResult.strategy})</p>
+                  {trainResult.training_summary && (
+                    <Badge
+                      variant={
+                        trainResult.training_summary.overfit_risk === 'high'
+                          ? 'destructive'
+                          : trainResult.training_summary.overfit_risk === 'medium'
+                            ? 'secondary'
+                            : 'outline'
+                      }
+                    >
+                      {trainResult.training_summary.overfit_risk} overfit risk
+                    </Badge>
+                  )}
+                </div>
                 <p>
                   Best params: <code>{JSON.stringify(trainResult.best_params)}</code>
                 </p>
@@ -635,6 +669,25 @@ export default function Backtests() {
                   Metrics: Sharpe {trainResult.best_metrics.sharpe_ratio.toFixed(3)} | Return {(trainResult.best_metrics.total_return * 100).toFixed(2)}% | Max DD {(trainResult.best_metrics.max_drawdown * 100).toFixed(2)}% | Trades {trainResult.best_metrics.total_trades}
                 </p>
                 <p>Evaluations: {trainResult.evaluations_run}</p>
+                {trainResult.training_summary && (
+                  <div className="grid gap-1 rounded-md border bg-background/70 p-2 text-xs text-muted-foreground sm:grid-cols-3">
+                    <span>Best: {(trainResult.training_summary.best_return * 100).toFixed(2)}%</span>
+                    <span>Median: {(trainResult.training_summary.median_return * 100).toFixed(2)}%</span>
+                    <span>Worst: {(trainResult.training_summary.worst_return * 100).toFixed(2)}%</span>
+                    <span>
+                      Profitable: {trainResult.training_summary.profitable_evaluations}/{trainResult.training_summary.evaluations}
+                    </span>
+                    <span>Median Sharpe: {trainResult.training_summary.median_sharpe.toFixed(2)}</span>
+                    <span>Median DD: {(trainResult.training_summary.median_drawdown * 100).toFixed(2)}%</span>
+                  </div>
+                )}
+                {trainResult.training_summary?.warnings?.length ? (
+                  <div className="rounded-md border border-amber-400/40 bg-amber-100/20 p-2 text-xs">
+                    {trainResult.training_summary.warnings.slice(0, 2).map((warning) => (
+                      <p key={warning}>- {warning}</p>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

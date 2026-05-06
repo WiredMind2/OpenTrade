@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from contextlib import contextmanager
 import psutil
 import traceback
-import logging
 
 
 # Component to category mapping

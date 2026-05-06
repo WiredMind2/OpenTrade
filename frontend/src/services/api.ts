@@ -27,16 +27,9 @@ const instance = axios.create({
 const LONG_RUNNING_REQUEST_TIMEOUT_MS = 5 * 60 * 1000
 
 
-// Add response interceptor for logging
 instance.interceptors.response.use(
-  (response) => {
-    console.log(`API ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`)
-    return response
-  },
-  (error) => {
-    console.error(`API Error: ${error.config?.method?.toUpperCase()} ${error.config?.url} - ${error.response?.status || 'Network Error'}`, error)
-    return Promise.reject(error)
-  }
+  (response) => response,
+  (error) => Promise.reject(error)
 )
 
 export default instance
