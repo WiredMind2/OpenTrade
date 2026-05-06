@@ -4,7 +4,6 @@ Strategy listing endpoints for the Trading Backtester API.
 from typing import List, Dict, Any, Optional, Tuple
 import sqlite3
 import json
-import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -363,7 +362,6 @@ def _optimize_signal_strategy(
 
     from backend.routes.backtest_engine import (
         _backtrader_strategy_kwargs,
-        _run_signal_execution_backtest,
         persist_optimizer_evaluation_run,
     )
 
@@ -383,15 +381,7 @@ def _optimize_signal_strategy(
         raise HTTPException(status_code=400, detail="optimizer_mode must be 'grid' or 'random'")
 
     optimizer = StrategyOptimizerEngine(db_path)
-    preferred_engine = (
-        str(strategy.preferred_optimizer_engine()).strip().lower()
-        if hasattr(strategy, "preferred_optimizer_engine")
-        else "backtrader"
-    )
-    configured_engine = str(get_config().trading.train_optimizer_engine or "").strip().lower()
-    optimizer_engine = str(os.getenv("TRAIN_OPT_ENGINE", configured_engine or preferred_engine)).strip().lower()
-    if optimizer_engine not in {"backtrader", "signal"}:
-        raise HTTPException(status_code=500, detail="Invalid TRAIN_OPT_ENGINE; use backtrader or signal")
+    optimizer_engine = "backtrader"
     candidates = optimizer.build_candidates(
         strategy_name, mode, int(max_evals), random_seed=random_seed
     )
@@ -408,93 +398,61 @@ def _optimize_signal_strategy(
         universe_limit=int(universe_limit),
     )
     evaluations: List[Dict[str, Any]] = []
-    all_missing_model = True
     experiment_id = str(uuid.uuid4())
-    sig_conn = sqlite3.connect(db_path)
-    try:
-        for idx, params in enumerate(candidates):
-            merged_params = {
-                **params,
-                "execution_mode": "backtrader" if optimizer_engine == "backtrader" else "signal",
-                "ticker": ticker.strip().upper(),
+    for idx, params in enumerate(candidates):
+        merged_params = {
+            **params,
+            "execution_mode": "backtrader",
+            "ticker": ticker.strip().upper(),
+            "backtest_start_date": start_date.date().isoformat(),
+        }
+        if strategy_name == "pairs_trading" and (pair_ticker or "").strip():
+            merged_params["pair_ticker"] = str(pair_ticker).strip().upper()
+        strategy_class = strategy.create_backtrader_strategy(merged_params)
+        metrics = run_backtrader_once(
+            strategy_class=strategy_class,
+            strategy_kwargs=_backtrader_strategy_kwargs(strategy_class, merged_params),
+            price_frames=price_frames,
+            config=build_run_config(initial_capital=initial_capital, parameters=merged_params),
+        )
+        summary_metrics = {
+            "total_return": float(metrics.get("total_return", 0.0) or 0.0),
+            "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
+            "max_drawdown": float(metrics.get("max_drawdown", 0.0) or 0.0),
+            "volatility": float(metrics.get("volatility", 0.0) or 0.0),
+            "total_trades": int(metrics.get("total_trades", 0) or 0),
+        }
+        score = optimizer.score(summary_metrics, objective)
+        evaluations.append(
+            {
+                "params": params,
+                "metrics": summary_metrics,
+                "score": score,
             }
-            if strategy_name == "pairs_trading" and (pair_ticker or "").strip():
-                merged_params["pair_ticker"] = str(pair_ticker).strip().upper()
-            if optimizer_engine == "backtrader":
-                strategy_class = strategy.create_backtrader_strategy(merged_params)
-                metrics = run_backtrader_once(
-                    strategy_class=strategy_class,
-                    strategy_kwargs=_backtrader_strategy_kwargs(strategy_class, merged_params),
-                    price_frames=price_frames,
-                    config=build_run_config(initial_capital=initial_capital, parameters=merged_params),
-                )
-                all_missing_model = False
-            else:
-                metrics = _run_signal_execution_backtest(
-                    strategy=strategy,
-                    strategy_name=strategy_name,
-                    start_date=start_date,
-                    end_date=end_date,
-                    initial_capital=initial_capital,
-                    parameters=merged_params,
-                    price_frames=price_frames,
-                    signal_db_conn=sig_conn,
-                )
-                execution_summary = metrics.get("execution_summary", {}) if isinstance(metrics, dict) else {}
-                reason_counts = execution_summary.get("signal_reason_counts", {}) if isinstance(execution_summary, dict) else {}
-                no_model_count = int(reason_counts.get("no_model_available", 0) or 0) if isinstance(reason_counts, dict) else 0
-                non_missing_count = int(sum(v for k, v in reason_counts.items() if k != "no_model_available")) if isinstance(reason_counts, dict) else 0
-                fills = int(execution_summary.get("order_fills", 0) or 0) if isinstance(execution_summary, dict) else 0
-                if not (no_model_count > 0 and non_missing_count == 0 and fills == 0):
-                    all_missing_model = False
-            summary_metrics = {
-                "total_return": float(metrics.get("total_return", 0.0) or 0.0),
-                "sharpe_ratio": float(metrics.get("sharpe_ratio", 0.0) or 0.0),
-                "max_drawdown": float(metrics.get("max_drawdown", 0.0) or 0.0),
-                "volatility": float(metrics.get("volatility", 0.0) or 0.0),
-                "total_trades": int(metrics.get("total_trades", 0) or 0),
-            }
-            score = optimizer.score(summary_metrics, objective)
-            evaluations.append(
-                {
-                    "params": params,
-                    "metrics": summary_metrics,
-                    "score": score,
-                }
-            )
-            store_params = {
-                **merged_params,
-                "optimizer_mode": mode,
-                "experiment_id": experiment_id,
-                "optimizer_engine": optimizer_engine,
-            }
-            persist_optimizer_evaluation_run(
-                db_path,
-                strategy_name=strategy_name,
-                parameters=store_params,
-                client_backtest_id=f"opt_{experiment_id}_{idx}",
-                experiment_id=experiment_id,
-                optimizer_mode=mode,
-                start_date=start_date,
-                end_date=end_date,
-                initial_capital=initial_capital,
-                execution=metrics,
-                objective=objective,
-                evaluation_score=float(score),
-            )
-    finally:
-        sig_conn.close()
+        )
+        store_params = {
+            **merged_params,
+            "optimizer_mode": mode,
+            "experiment_id": experiment_id,
+            "optimizer_engine": optimizer_engine,
+        }
+        persist_optimizer_evaluation_run(
+            db_path,
+            strategy_name=strategy_name,
+            parameters=store_params,
+            client_backtest_id=f"opt_{experiment_id}_{idx}",
+            experiment_id=experiment_id,
+            optimizer_mode=mode,
+            start_date=start_date,
+            end_date=end_date,
+            initial_capital=initial_capital,
+            execution=metrics,
+            objective=objective,
+            evaluation_score=float(score),
+        )
 
     if not evaluations:
         raise HTTPException(status_code=500, detail="No optimization evaluations were produced")
-    if all_missing_model:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "No recursive forecast models available for the requested ticker and date range. "
-                "Load horizon models (for example lightgbm_1d) into the running API, then retry."
-            ),
-        )
     evaluations.sort(
         key=lambda e: (
             float(e["score"]),

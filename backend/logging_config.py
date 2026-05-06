@@ -29,7 +29,6 @@ COMPONENT_LOGGER_MAPPING = {
     "backend.routes.models_endpoints": "routes",
     "backend.routes.monitoring": "routes",
     "backend.routes.portfolio": "routes",
-    "backend.routes.predictions": "routes",
     "backend.routes.scripts": "routes",
     "backend.routes.udf": "routes",
     "backend.routes.websocket": "routes",

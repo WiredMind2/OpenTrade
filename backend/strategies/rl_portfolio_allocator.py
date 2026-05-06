@@ -180,6 +180,11 @@ class RLPortfolioAllocatorStrategy(BaseStrategy):
         lookbacks = int(norm["lookbacks"])
         max_gross = float(norm["max_gross"])
         temperature = float(norm["temperature"])
+        raw_backtest_start_date = (
+            str(parameters.get("backtest_start_date")).strip()
+            if isinstance(parameters, dict) and parameters.get("backtest_start_date") is not None
+            else None
+        )
         min_bars = max(lookbacks, long_window + 1, short_window + 1)
 
         class RLPortfolioAllocator(DecisionRecordingStrategy):
@@ -189,6 +194,7 @@ class RLPortfolioAllocatorStrategy(BaseStrategy):
                 ("lookbacks", lookbacks),
                 ("max_gross", max_gross),
                 ("temperature", temperature),
+                ("backtest_start_date", raw_backtest_start_date),
             )
 
             def __init__(self):
@@ -196,8 +202,21 @@ class RLPortfolioAllocatorStrategy(BaseStrategy):
                 self.trades: List[Dict[str, Any]] = []
                 self._w_prev: Optional[np.ndarray] = None
                 self._min_bars = min_bars
+                self._backtest_start_date = None
+                raw_start_date = getattr(self.p, "backtest_start_date", None)
+                if isinstance(raw_start_date, str) and raw_start_date:
+                    try:
+                        self._backtest_start_date = datetime.fromisoformat(raw_start_date).date()
+                    except ValueError:
+                        self._backtest_start_date = None
 
             def next(self):
+                current_dt = self.datas[0].datetime.date(0)
+                if (
+                    self._backtest_start_date is not None
+                    and current_dt < self._backtest_start_date
+                ):
+                    return
                 if len(self) < self._min_bars:
                     return
                 n = len(self.datas)
@@ -238,7 +257,7 @@ class RLPortfolioAllocatorStrategy(BaseStrategy):
                         if shares_to_sell > 0:
                             self.sell(data=data, size=shares_to_sell)
 
-                current_date = self.datas[0].datetime.date(0).isoformat()
+                current_date = current_dt.isoformat()
                 self.equity_curve.append({"date": current_date, "value": self.broker.getvalue()})
 
             def notify_trade(self, trade):

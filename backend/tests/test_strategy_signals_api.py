@@ -6,6 +6,15 @@ from fastapi.testclient import TestClient
 from backend.main import app
 
 
+class _Registry:
+    def get(self, strategy_name: str):
+        if strategy_name == "moving_average":
+            from backend.strategies.moving_average import MovingAverageStrategy
+
+            return MovingAverageStrategy()
+        return None
+
+
 def _init_prices_db(db_path: str) -> None:
     conn = sqlite3.connect(db_path)
     conn.executescript(

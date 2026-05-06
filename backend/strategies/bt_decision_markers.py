@@ -12,7 +12,31 @@ from typing import Any
 
 import backtrader as bt
 
-_MAX_MARKERS = 500
+_MAX_MARKERS: int | None = None
+
+
+def _agent_log(message: str, data: dict[str, Any]) -> None:
+    try:
+        import json
+        import time
+
+        payload = {
+            "sessionId": "2acb83",
+            "runId": "post-fix",
+            "hypothesisId": "H5",
+            "location": "bt_decision_markers.py",
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(
+            r"c:\Users\willi\Documents\Python\Trading\backtesting\.cursor\debug-2acb83.log",
+            "a",
+            encoding="utf-8",
+        ) as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
 
 
 def record_bt_decision(strategy: Any, *, ticker: str, side: str, reason: str) -> None:
@@ -20,7 +44,8 @@ def record_bt_decision(strategy: Any, *, ticker: str, side: str, reason: str) ->
     if not hasattr(strategy, "decision_markers") or strategy.decision_markers is None:
         strategy.decision_markers = []
     markers = strategy.decision_markers
-    if len(markers) >= _MAX_MARKERS:
+    if _MAX_MARKERS is not None and len(markers) >= _MAX_MARKERS:
+        _agent_log("Marker cap hit; dropping marker", {"maxMarkers": _MAX_MARKERS, "currentMarkers": len(markers)})
         return
     s = (side or "").strip().lower()
     if s not in ("buy", "sell"):
@@ -32,6 +57,8 @@ def record_bt_decision(strategy: Any, *, ticker: str, side: str, reason: str) ->
         return
     day = datas[0].datetime.date(0).isoformat()[:10]
     markers.append({"date": day, "side": s, "ticker": tkr, "reason": r})
+    if len(markers) in (1, 100, 500, 1000, 2000, 5000):
+        _agent_log("Marker count milestone", {"markers": len(markers), "day": day, "side": s, "ticker": tkr})
 
 
 class DecisionRecordingStrategy(bt.Strategy):

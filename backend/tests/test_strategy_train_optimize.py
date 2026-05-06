@@ -91,17 +91,6 @@ def _seed_optimize_db(path):
         )
         """
     )
-    conn.execute(
-        """
-        CREATE TABLE trading_model_predictions (
-          ticker TEXT,
-          dt TEXT,
-          predicted_return REAL,
-          enter_prob REAL,
-          suggested_position_pct REAL
-        )
-        """
-    )
     start = datetime(2024, 1, 1)
     for i in range(420):
         day = (start + timedelta(days=i)).date().isoformat()
@@ -164,7 +153,6 @@ def test_signal_parameter_training_flags():
     assert strategy_supports_signal_parameter_training("macd")
     assert strategy_supports_signal_parameter_training("rl_directional")
     assert strategy_supports_signal_parameter_training("volatility_targeting")
-    assert not strategy_supports_signal_parameter_training("recursive_forecast")
 
 
 def test_train_mean_reversion_signal_optimize(tmp_path):

@@ -34,7 +34,6 @@ class TestAPIDataEndpoints:
         
         # Drop existing tables to ensure clean state
         conn.execute("DROP TABLE IF EXISTS sentiment_predictions")
-        conn.execute("DROP TABLE IF EXISTS trading_model_predictions")
         
         conn.execute("""
             CREATE TABLE sentiment_predictions (
@@ -49,15 +48,6 @@ class TestAPIDataEndpoints:
                 metadata TEXT,
                 produced_at TEXT DEFAULT (datetime('now')),
                 training_run_id TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE trading_model_predictions (
-                id INTEGER PRIMARY KEY,
-                ticker TEXT,
-                suggested_position_pct REAL,
-                dt TEXT,
-                enter_prob REAL
             )
         """)
         conn.execute("""

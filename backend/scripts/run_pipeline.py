@@ -33,7 +33,6 @@ DEFAULT_STEPS = [
     'scrape_articles',
     'map_articles_to_tickers',
     'labeling',
-    'backtest_runner',
 ]
 
 

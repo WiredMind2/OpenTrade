@@ -75,12 +75,6 @@ def _init_backtest_tables(conn: sqlite3.Connection) -> None:
           FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE
         );
 
-        CREATE TABLE trading_model_predictions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          ticker TEXT,
-          dt TEXT
-        );
-
         CREATE TABLE price_daily (
           ticker TEXT,
           date TEXT,
@@ -196,9 +190,6 @@ def test_run_backtest_background_handles_empty_backtrader_results(tmp_path):
     db_path = tmp_path / "backtest_engine_empty_results.db"
     conn = sqlite3.connect(db_path)
     _init_backtest_tables(conn)
-    conn.execute(
-        "INSERT INTO trading_model_predictions (ticker, dt) VALUES ('AAPL', '2023-01-10')"
-    )
     for day in range(1, 36):
         date = f"2023-01-{day:02d}" if day <= 31 else f"2023-02-{day - 31:02d}"
         conn.execute(
@@ -375,13 +366,7 @@ def test_run_backtest_background_skips_insufficient_price_history_for_indicators
     conn = sqlite3.connect(db_path)
     _init_backtest_tables(conn)
 
-    # Both tickers are eligible from predictions; only MSFT has enough rows for long_window=30.
-    conn.execute(
-        "INSERT INTO trading_model_predictions (ticker, dt) VALUES ('AAPL', '2023-01-10')"
-    )
-    conn.execute(
-        "INSERT INTO trading_model_predictions (ticker, dt) VALUES ('MSFT', '2023-01-10')"
-    )
+    # Both tickers are eligible from price history; only MSFT has enough rows for long_window=30.
     conn.execute(
         """
         INSERT INTO price_daily (ticker, date, open, high, low, close, volume)
@@ -436,9 +421,6 @@ def test_run_backtest_background_auto_refreshes_missing_daily_bars(tmp_path):
     db_path = tmp_path / "backtest_engine_auto_refresh.db"
     conn = sqlite3.connect(db_path)
     _init_backtest_tables(conn)
-    conn.execute(
-        "INSERT INTO trading_model_predictions (ticker, dt) VALUES ('AAPL', '2023-01-10')"
-    )
     for day in range(1, 6):
         conn.execute(
             """

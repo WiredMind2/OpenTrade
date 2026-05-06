@@ -16,6 +16,17 @@ export type BacktestChartPoint = {
   signalTicker?: string
 }
 
+export type BacktestDecisionMarker = {
+  dateKey: string
+  side: 'buy' | 'sell'
+  reason?: string
+  ticker?: string
+  value: number
+  day: number
+  stackIndex: number
+  stackCount: number
+}
+
 function toChartNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
@@ -260,6 +271,126 @@ export function attachDecisionMarkers(
     }
     return next
   })
+}
+
+function normalizeDecisionMarkerRows(markers: unknown): Array<{
+  dateKey: string
+  side: 'buy' | 'sell'
+  reason?: string
+  ticker?: string
+}> {
+  if (!Array.isArray(markers) || markers.length === 0) return []
+  const out: Array<{ dateKey: string; side: 'buy' | 'sell'; reason?: string; ticker?: string }> = []
+  for (const raw of markers) {
+    if (!raw || typeof raw !== 'object') continue
+    const row = raw as Record<string, unknown>
+    const d = typeof row.date === 'string' ? row.date.slice(0, 10) : ''
+    const s = String(row.side ?? '').toLowerCase()
+    if (!d || (s !== 'buy' && s !== 'sell')) continue
+    out.push({
+      dateKey: d,
+      side: s,
+      reason: typeof row.reason === 'string' ? row.reason : undefined,
+      ticker: typeof row.ticker === 'string' ? row.ticker : undefined,
+    })
+  }
+  return out
+}
+
+function nearestPointDate(dateKeys: string[], target: string): string | undefined {
+  if (dateKeys.length === 0) return undefined
+  let lo = 0
+  let hi = dateKeys.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    const cur = dateKeys[mid]
+    if (cur === target) return cur
+    if (cur < target) lo = mid + 1
+    else hi = mid - 1
+  }
+  // Prefer next trading day to keep signals forward-aligned on non-trading dates.
+  if (lo < dateKeys.length) return dateKeys[lo]
+  if (hi >= 0) return dateKeys[hi]
+  return undefined
+}
+
+export function buildDecisionMarkers(
+  points: BacktestChartPoint[],
+  markers: unknown,
+): BacktestDecisionMarker[] {
+  const rows = normalizeDecisionMarkerRows(markers)
+  if (rows.length === 0 || points.length === 0) return []
+
+  const pointsByDate = new Map<string, BacktestChartPoint>()
+  const dateKeys: string[] = []
+  for (const p of points) {
+    if (!p.dateKey) continue
+    pointsByDate.set(p.dateKey, p)
+    dateKeys.push(p.dateKey)
+  }
+  if (dateKeys.length === 0) return []
+
+  const uniqueDateKeys = Array.from(new Set(dateKeys)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  const provisional: BacktestDecisionMarker[] = []
+  let exactDateMatches = 0
+  let snappedDateMatches = 0
+  let droppedRows = 0
+  for (const row of rows) {
+    const resolvedDate = pointsByDate.has(row.dateKey)
+      ? row.dateKey
+      : nearestPointDate(uniqueDateKeys, row.dateKey)
+    if (!resolvedDate) {
+      droppedRows += 1
+      continue
+    }
+    if (resolvedDate === row.dateKey) exactDateMatches += 1
+    else snappedDateMatches += 1
+    const point = pointsByDate.get(resolvedDate)
+    if (!point || !Number.isFinite(point.value)) {
+      droppedRows += 1
+      continue
+    }
+    provisional.push({
+      dateKey: resolvedDate,
+      side: row.side,
+      reason: row.reason,
+      ticker: row.ticker,
+      value: point.value,
+      day: point.day,
+      stackIndex: 0,
+      stackCount: 1,
+    })
+  }
+  if (provisional.length === 0) {
+    // #region agent log
+    fetch('http://127.0.0.1:7890/ingest/7a986f88-766d-4a84-b0c1-2f37c1070edb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2acb83'},body:JSON.stringify({sessionId:'2acb83',runId:'pre-fix',hypothesisId:'H3',location:'backtestChart.ts:buildDecisionMarkers:zero-provisional',message:'All decision markers dropped during normalization/resolution',data:{rows:rows.length,points:points.length,exactDateMatches,snappedDateMatches,droppedRows},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    return []
+  }
+
+  provisional.sort((a, b) => {
+    if (a.dateKey < b.dateKey) return -1
+    if (a.dateKey > b.dateKey) return 1
+    return a.day - b.day
+  })
+
+  const counts = new Map<string, number>()
+  for (const m of provisional) counts.set(m.dateKey, (counts.get(m.dateKey) ?? 0) + 1)
+  const offsets = new Map<string, number>()
+
+  const out = provisional.map((m) => {
+    const idx = offsets.get(m.dateKey) ?? 0
+    offsets.set(m.dateKey, idx + 1)
+    return {
+      ...m,
+      stackIndex: idx,
+      stackCount: counts.get(m.dateKey) ?? 1,
+    }
+  })
+  // #region agent log
+  fetch('http://127.0.0.1:7890/ingest/7a986f88-766d-4a84-b0c1-2f37c1070edb',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2acb83'},body:JSON.stringify({sessionId:'2acb83',runId:'pre-fix',hypothesisId:'H3',location:'backtestChart.ts:buildDecisionMarkers:summary',message:'Decision marker mapping summary',data:{rows:rows.length,points:points.length,exactDateMatches,snappedDateMatches,droppedRows,output:out.length,firstOutputDate:out[0]?.dateKey??null,lastOutputDate:out[out.length-1]?.dateKey??null},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+  return out
 }
 
 /**
