@@ -1,14 +1,16 @@
 import React from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import MarketBrief from './pages/MarketBrief'
-import Backtests from './pages/Backtests'
-import Scripts from './pages/Scripts'
-import StrategyPerformance from './pages/StrategyPerformance'
-import Recommendations from './pages/Recommendations'
-import TradePlan from './pages/TradePlan'
-import Predictions from './pages/Predictions'
 import { ThemeProvider } from './components/ThemeProvider'
 import { Sidebar, MobileSidebar } from './components/Sidebar'
+import {
+  MarketBriefPage,
+  BacktestsPage,
+  PredictionsPage,
+  ScriptsPage,
+  StrategyPerformancePage,
+  TradePlanPage,
+  RecommendationsPage,
+} from './routes'
 
 export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false)
@@ -43,16 +45,24 @@ export default function App() {
 
           {/* Page Content */}
           <main className="p-3 md:p-4 animate-fade-in">
-            <Routes>
-              <Route path="/" element={<Navigate to="/predictions" replace />} />
-              <Route path="/brief" element={<MarketBrief />} />
-              <Route path="/backtests" element={<Backtests />} />
-              <Route path="/predictions" element={<Predictions />} />
-              <Route path="/scripts" element={<Scripts />} />
-              <Route path="/strategy-performance" element={<StrategyPerformance />} />
-              <Route path="/trade-plan" element={<TradePlan />} />
-              <Route path="/recommendations" element={<Recommendations />} />
-            </Routes>
+            <React.Suspense
+              fallback={
+                <div className="py-10 text-center text-sm text-tv-text-tertiary">
+                  Loading…
+                </div>
+              }
+            >
+              <Routes>
+                <Route path="/" element={<Navigate to="/predictions" replace />} />
+                <Route path="/brief" element={<MarketBriefPage />} />
+                <Route path="/backtests" element={<BacktestsPage />} />
+                <Route path="/predictions" element={<PredictionsPage />} />
+                <Route path="/scripts" element={<ScriptsPage />} />
+                <Route path="/strategy-performance" element={<StrategyPerformancePage />} />
+                <Route path="/trade-plan" element={<TradePlanPage />} />
+                <Route path="/recommendations" element={<RecommendationsPage />} />
+              </Routes>
+            </React.Suspense>
           </main>
         </div>
       </div>
