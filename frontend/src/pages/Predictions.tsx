@@ -257,7 +257,7 @@ export default function Predictions() {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 border-b pb-3 lg:grid-cols-[minmax(0,1fr)_21rem] xl:grid-cols-[minmax(0,1fr)_23rem]">
+      <div className="border-b pb-3">
         <div className="max-w-3xl space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-2xl font-bold tracking-tight">Predictions</h2>
@@ -270,68 +270,6 @@ export default function Predictions() {
             plan builder produce buy / sell / hold signals at the anchor date — set in the plan builder — or latest when
             empty. Save models from Strategy Performance or Backtests.
           </p>
-        </div>
-
-        <div className="space-y-2">
-          <div className="rounded-md border bg-background p-2 shadow-sm">
-            <label className="mb-1 block text-xs font-medium uppercase text-muted-foreground">
-              Search ticker
-            </label>
-            <div className="space-y-2">
-              <Input
-                value={selectedTicker}
-                onChange={(e) => setSelectedTicker(e.target.value.toUpperCase())}
-                onBlur={() => {
-                  const normalized = rememberTicker(selectedTicker)
-                  setSelectedTicker(normalized)
-                }}
-                placeholder="Ticker"
-                className="h-9 font-mono"
-              />
-
-              <div className="flex min-h-14 items-center justify-between gap-3 rounded-md border bg-muted/10 px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-lg font-semibold leading-none tabular-nums">
-                    {formatQuotePrice(priceOnDate?.close ?? quote?.v?.lp, symbolInfo?.currency_code || 'USD')}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {priceOnDate?.date || 'latest available'}
-                  </p>
-                </div>
-
-                <div className="shrink-0 text-right">
-                  {!priceDate.trim() && (
-                    <p
-                      className={`text-xs font-medium tabular-nums ${
-                        Number(quote?.v?.ch ?? 0) >= 0 ? 'text-success' : 'text-destructive'
-                      }`}
-                    >
-                      {formatSigned(quote?.v?.ch)} ({formatSigned(quote?.v?.chp)}%)
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex gap-1 overflow-x-auto pb-1">
-            {popularSymbols.map((item) => (
-              <Button
-                key={item.symbol}
-                type="button"
-                size="sm"
-                variant={sym === item.symbol ? 'default' : 'outline'}
-                className="h-7 shrink-0 px-3 text-xs"
-                title={item.label}
-                onClick={() => {
-                  const normalized = rememberTicker(item.symbol)
-                  setSelectedTicker(normalized)
-                }}
-              >
-                {item.symbol}
-              </Button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -355,7 +293,67 @@ export default function Predictions() {
           </div>
 
           <div className="min-h-0 overflow-hidden rounded-md" style={{ height: PREDICTIONS_CHART_HEIGHT }}>
-            <NewsSidebar ticker={selectedTicker} />
+            <div className="flex h-full min-h-0 flex-col gap-3">
+              <div className="rounded-md border bg-background p-2 shadow-sm">
+                <label className="mb-1 block text-xs font-medium uppercase text-muted-foreground">Search ticker</label>
+                <div className="space-y-2">
+                  <Input
+                    value={selectedTicker}
+                    onChange={(e) => setSelectedTicker(e.target.value.toUpperCase())}
+                    onBlur={() => {
+                      const normalized = rememberTicker(selectedTicker)
+                      setSelectedTicker(normalized)
+                    }}
+                    placeholder="Ticker"
+                    className="h-9 font-mono"
+                  />
+
+                  <div className="flex min-h-14 items-center justify-between gap-3 rounded-md border bg-muted/10 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-lg font-semibold leading-none tabular-nums">
+                        {formatQuotePrice(priceOnDate?.close ?? quote?.v?.lp, symbolInfo?.currency_code || 'USD')}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">{priceOnDate?.date || 'latest available'}</p>
+                    </div>
+
+                    <div className="shrink-0 text-right">
+                      {!priceDate.trim() && (
+                        <p
+                          className={`text-xs font-medium tabular-nums ${
+                            Number(quote?.v?.ch ?? 0) >= 0 ? 'text-success' : 'text-destructive'
+                          }`}
+                        >
+                          {formatSigned(quote?.v?.ch)} ({formatSigned(quote?.v?.chp)}%)
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-2 flex gap-1 overflow-x-auto pb-1">
+                  {popularSymbols.map((item) => (
+                    <Button
+                      key={item.symbol}
+                      type="button"
+                      size="sm"
+                      variant={sym === item.symbol ? 'default' : 'outline'}
+                      className="h-7 shrink-0 px-3 text-xs"
+                      title={item.label}
+                      onClick={() => {
+                        const normalized = rememberTicker(item.symbol)
+                        setSelectedTicker(normalized)
+                      }}
+                    >
+                      {item.symbol}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <NewsSidebar ticker={selectedTicker} />
+              </div>
+            </div>
           </div>
         </div>
 

@@ -763,9 +763,14 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
             }
 
         ticker, name, exchange, sector = row
+        # Treat placeholder exchanges as missing so we can rehydrate metadata from Yahoo.
+        # Previously `exchange == "UNKNOWN"` was considered "present", so we skipped Yahoo
+        # enrichment and kept returning UNKNOWN forever.
+        exchange_norm = str(exchange or "").strip().upper()
         needs_remote_meta = (
             not name
-            or not exchange
+            or not exchange_norm
+            or exchange_norm == "UNKNOWN"
             or any(ch in str(ticker) for ch in ("=", "-", "^"))
         )
         yahoo_meta = _search_yahoo_symbols(ticker, "", 1) if needs_remote_meta else []
@@ -775,7 +780,7 @@ async def get_symbol_info(symbol: str = Query(..., description="Symbol name")):
         pricescale = int((exact_meta or {}).get("pricescale") or _infer_pricescale(ticker))
         if (not name or name == f"{ticker} Stock") and exact_meta and exact_meta.get("description"):
             name = str(exact_meta["description"])
-        if (not exchange or exchange == "UNKNOWN") and exact_meta and exact_meta.get("exchange"):
+        if (not exchange_norm or exchange_norm == "UNKNOWN") and exact_meta and exact_meta.get("exchange"):
             exchange = str(exact_meta["exchange"])
 
         # Enhanced description with sector information
