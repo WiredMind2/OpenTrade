@@ -110,11 +110,10 @@ interface FocusArea {
 function deriveFocusAreas(profile: UserProfile): FocusArea[] {
   const areas: FocusArea[] = []
 
-  // Threshold aligned with the displayed rule: "if drawdown exceeds 10%, reduce positions"
   if (profile.avgDrawdown < -0.10) {
     areas.push({
       categoryId: 'risk',
-      reason: `Your average max drawdown is ${fmtPct(profile.avgDrawdown)} — above the recommended threshold of −10%.`,
+      reason: `Max drawdown at ${fmtPct(profile.avgDrawdown)} — reduce your position sizes now and stop increasing exposure until you recover.`,
       severity: profile.avgDrawdown < -0.20 ? 'high' : 'medium',
     })
   }
@@ -122,7 +121,7 @@ function deriveFocusAreas(profile: UserProfile): FocusArea[] {
   if (profile.avgSharpe < 1.0) {
     areas.push({
       categoryId: 'diversification',
-      reason: `A Sharpe ratio of ${profile.avgSharpe.toFixed(2)} suggests poor risk-adjusted returns. Diversifying strategies could help.`,
+      reason: `Sharpe ratio of ${profile.avgSharpe.toFixed(2)} — you're taking too much risk for what you're making. Add uncorrelated strategies.`,
       severity: profile.avgSharpe < 0.5 ? 'high' : 'medium',
     })
   }
@@ -130,7 +129,7 @@ function deriveFocusAreas(profile: UserProfile): FocusArea[] {
   if (profile.avgWinRate < 0.45) {
     areas.push({
       categoryId: 'entries',
-      reason: `Your win rate is ${fmtPct(profile.avgWinRate)}. Tightening entry criteria could improve trade quality.`,
+      reason: `Only ${fmtPct(profile.avgWinRate)} of your trades are winners — be more selective before entering a position.`,
       severity: profile.avgWinRate < 0.35 ? 'high' : 'medium',
     })
   }
@@ -138,17 +137,15 @@ function deriveFocusAreas(profile: UserProfile): FocusArea[] {
   if (profile.avgReturn < 0) {
     areas.push({
       categoryId: 'backtesting',
-      reason: `Average return across your backtests is negative (${fmtPct(profile.avgReturn)}). Review your validation methodology.`,
+      reason: `Your backtests are losing money on average (${fmtPct(profile.avgReturn)}). Do not trade this live until you understand why.`,
       severity: 'high',
     })
   }
 
-  // Discipline is flagged only when drawdown is severe AND returns are negative — a clear sign
-  // of systematic issues rather than a low-frequency or conservative strategy.
   if (profile.avgDrawdown < -0.20 && profile.avgReturn < 0) {
     areas.push({
       categoryId: 'discipline',
-      reason: `Severe drawdown (${fmtPct(profile.avgDrawdown)}) combined with negative returns suggests a systematic execution problem.`,
+      reason: `Drawdown at ${fmtPct(profile.avgDrawdown)} and returns in the red — step back, stop trading, and review what went wrong before continuing.`,
       severity: 'high',
     })
   }
@@ -188,16 +185,6 @@ const levelConfig: Record<string, { label: string; variant: 'destructive' | 'def
   critical:  { label: 'Critical',  variant: 'destructive' },
   important: { label: 'Important', variant: 'default' },
   note:      { label: 'Note',      variant: 'secondary' },
-}
-
-function MetricTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-base font-semibold text-foreground tabular-nums">{value}</span>
-      {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
-    </div>
-  )
 }
 
 function ProfileSnapshot({ profile }: { profile: UserProfile }) {
