@@ -34,7 +34,7 @@ export default function App() {
           {/* Page Content */}
           <main className="p-3 md:p-4 animate-fade-in">
             <Routes>
-              <Route path="/" element={<Navigate to="/brief" replace />} />
+              <Route path="/" element={<Navigate to="/predictions" replace />} />
               <Route path="/brief" element={<MarketBrief />} />
               <Route path="/backtests" element={<Backtests />} />
               <Route path="/predictions" element={<Predictions />} />
