@@ -6,6 +6,7 @@ import Scripts from './pages/Scripts'
 import StrategyPerformance from './pages/StrategyPerformance'
 import Recommendations from './pages/Recommendations'
 import TradePlan from './pages/TradePlan'
+import Predictions from './pages/Predictions'
 import { ThemeProvider } from './components/ThemeProvider'
 import { Sidebar, MobileSidebar } from './components/Sidebar'
 
@@ -36,6 +37,7 @@ export default function App() {
               <Route path="/" element={<Navigate to="/brief" replace />} />
               <Route path="/brief" element={<MarketBrief />} />
               <Route path="/backtests" element={<Backtests />} />
+              <Route path="/predictions" element={<Predictions />} />
               <Route path="/scripts" element={<Scripts />} />
               <Route path="/strategy-performance" element={<StrategyPerformance />} />
               <Route path="/trade-plan" element={<TradePlan />} />
