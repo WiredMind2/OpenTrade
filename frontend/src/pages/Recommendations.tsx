@@ -39,7 +39,7 @@ const categories: Category[] = [
     icon: ShieldAlert,
     rules: [
       { text: 'Never put more than 1–2% of your total capital on a single trade.', level: 'critical' },
-      { text: 'Always set a stop-loss before entering a trade — not after.', level: 'critical' },
+      { text: 'Always set a stop-loss before entering a trade, not after.', level: 'critical' },
       { text: 'If you have lost more than 10% of your capital, halve your position sizes until you recover.', level: 'important' },
     ],
   },
@@ -49,7 +49,7 @@ const categories: Category[] = [
     icon: PieChart,
     rules: [
       { text: 'Don\'t put more than 20% of your money into one asset or one sector.', level: 'critical' },
-      { text: 'Use several different strategies — they won\'t all lose at the same time.', level: 'important' },
+      { text: 'Use several different strategies. They won\'t all lose at the same time.', level: 'important' },
       { text: 'Keep 10–20% of your capital in cash so you can act when opportunities appear.', level: 'note' },
     ],
   },
@@ -58,7 +58,7 @@ const categories: Category[] = [
     title: 'Backtesting',
     icon: FlaskConical,
     rules: [
-      { text: 'Always test your strategy on data it has never seen — not the data you used to build it.', level: 'critical' },
+      { text: 'Always test your strategy on data it has never seen, not the data you used to build it.', level: 'critical' },
       { text: 'Include transaction fees in your backtest. They eat into profits more than you think.', level: 'critical' },
       { text: 'A profitable backtest does not guarantee real profits. The market changes.', level: 'important' },
     ],
@@ -80,7 +80,7 @@ const categories: Category[] = [
       { text: 'Don\'t change your stop-loss once a trade is open.', level: 'critical' },
       { text: 'If you lose 3 trades in a row, stop and review what went wrong before continuing.', level: 'important' },
       { text: 'Write down every trade: why you entered and why you exited.', level: 'important' },
-      { text: 'A winning streak doesn\'t mean you should bet bigger — it usually ends badly.', level: 'note' },
+      { text: 'A winning streak doesn\'t mean you should bet bigger. It usually ends badly.', level: 'note' },
     ],
   },
 ]
