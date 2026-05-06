@@ -85,6 +85,24 @@ def _format_backtest_list_item(
         except (TypeError, ValueError):
             return default
 
+    initial = _f(initial_capital, 100000.0)
+    final = _f(final_value)
+    ret = _f(total_return)
+    if initial > 0 and final > 0:
+        ret = (final - initial) / initial
+    ann_ret = _f(annualized_return)
+    if (abs(ann_ret) > 5 or ann_ret < -1) and abs(ret) <= 5:
+        ann_ret /= 100.0
+    dd = abs(_f(max_drawdown))
+    if dd > 1:
+        dd /= 100.0
+    vol = abs(_f(volatility))
+    if vol > 5:
+        vol /= 100.0
+    wr = _f(win_rate)
+    if wr > 1:
+        wr /= 100.0
+
     return {
         "id": bt_id,
         "strategy_name": name,
@@ -92,16 +110,16 @@ def _format_backtest_list_item(
         "ticker": run_ticker,
         "start_date": started_at,
         "end_date": completed_at,
-        "initial_capital": _f(initial_capital, 100000.0),
-        "final_value": _f(final_value),
-        "total_return": _f(total_return),
-        "annualized_return": _f(annualized_return),
+        "initial_capital": initial,
+        "final_value": final,
+        "total_return": ret,
+        "annualized_return": ann_ret,
         "sharpe_ratio": _f(sharpe_ratio),
-        "max_drawdown": _f(max_drawdown),
-        "win_rate": _f(win_rate),
+        "max_drawdown": dd,
+        "win_rate": max(0.0, min(1.0, wr)),
         "total_trades": int(total_trades or 0),
         "avg_trade_return": _f(avg_trade_return),
-        "volatility": _f(volatility),
+        "volatility": vol,
         "status": metrics.get("status", "completed") if isinstance(metrics, dict) else "completed",
         "error": metrics.get("error") if isinstance(metrics, dict) else None,
         "metrics": metrics,

@@ -87,7 +87,10 @@ def extract_run_metrics(
     sharpe_ratio = float(
         ((strategy_result.analyzers.sharpe.get_analysis() or {}).get("sharperatio", 0.0) or 0.0)
     )
-    max_drawdown = float(
+    # Backtrader returns these analyzer values in percent units:
+    # drawdown=17.98 means 17.98%, rnorm100=12.3 means 12.3%.
+    # The rest of the API stores percentages as decimals, so normalize here.
+    max_drawdown_pct = float(
         (
             (strategy_result.analyzers.drawdown.get_analysis() or {})
             .get("max", {})
@@ -95,9 +98,11 @@ def extract_run_metrics(
         )
         or 0.0
     )
-    annualized_return = float(
+    annualized_return_pct = float(
         ((strategy_result.analyzers.returns.get_analysis() or {}).get("rnorm100", 0.0) or 0.0)
     )
+    max_drawdown = abs(max_drawdown_pct) / 100.0
+    annualized_return = annualized_return_pct / 100.0
     trade_analysis = strategy_result.analyzers.trades.get_analysis() or {}
     total_trades = int((trade_analysis.get("total", {}) or {}).get("total", 0) or 0)
     win_trades = int((trade_analysis.get("won", {}) or {}).get("total", 0) or 0)
