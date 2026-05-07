@@ -20,7 +20,6 @@ export default defineConfig({
       open: true,
       proxy: {
         '/udf': httpProxy,
-        '/predictions': httpProxy,
         '/predict': httpProxy,
         '/scripts': httpProxy,
         '/portfolio': httpProxy,

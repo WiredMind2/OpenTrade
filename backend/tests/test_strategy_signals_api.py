@@ -16,6 +16,15 @@ class _Registry:
         return strategy_registry.list(**kwargs)
 
 
+class _Registry:
+    def get(self, strategy_name: str):
+        if strategy_name == "moving_average":
+            from backend.strategies.moving_average import MovingAverageStrategy
+
+            return MovingAverageStrategy()
+        return None
+
+
 def _init_prices_db(db_path: str) -> None:
     conn = sqlite3.connect(db_path)
     conn.executescript(

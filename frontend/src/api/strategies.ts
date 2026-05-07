@@ -40,6 +40,21 @@ export interface StrategyTrainResponse {
     volatility: number
     total_trades: number
   }
+  training_summary?: {
+    evaluations: number
+    profitable_evaluations: number
+    profitable_ratio: number
+    best_return: number
+    median_return: number
+    worst_return: number
+    return_spread: number
+    best_sharpe: number
+    median_sharpe: number
+    best_drawdown: number
+    median_drawdown: number
+    overfit_risk: 'low' | 'medium' | 'high' | string
+    warnings: string[]
+  }
   top_candidates: Array<{
     params: Record<string, any>
     metrics: Record<string, number>

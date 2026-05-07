@@ -455,12 +455,6 @@ export default function Backtests() {
     <>
     <div className="space-y-6">
       {/* Header */}
-      <div className="space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">Backtests</h2>
-        <p className="text-muted-foreground">
-          Test and analyze your trading strategies
-        </p>
-      </div>
 
       {/* Backtest Form */}
       <Card className="border-muted shadow-md">
@@ -646,7 +640,22 @@ export default function Backtests() {
             )}
             {trainResult && (
               <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1">
-                <p className="font-medium">Training result ({trainResult.strategy})</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-medium">Training result ({trainResult.strategy})</p>
+                  {trainResult.training_summary && (
+                    <Badge
+                      variant={
+                        trainResult.training_summary.overfit_risk === 'high'
+                          ? 'destructive'
+                          : trainResult.training_summary.overfit_risk === 'medium'
+                            ? 'secondary'
+                            : 'outline'
+                      }
+                    >
+                      {trainResult.training_summary.overfit_risk} overfit risk
+                    </Badge>
+                  )}
+                </div>
                 <p>
                   Best params: <code>{JSON.stringify(trainResult.best_params)}</code>
                 </p>
@@ -654,6 +663,25 @@ export default function Backtests() {
                   Metrics: Sharpe {trainResult.best_metrics.sharpe_ratio.toFixed(3)} | Return {(trainResult.best_metrics.total_return * 100).toFixed(2)}% | Max DD {(trainResult.best_metrics.max_drawdown * 100).toFixed(2)}% | Trades {trainResult.best_metrics.total_trades}
                 </p>
                 <p>Evaluations: {trainResult.evaluations_run}</p>
+                {trainResult.training_summary && (
+                  <div className="grid gap-1 rounded-md border bg-background/70 p-2 text-xs text-muted-foreground sm:grid-cols-3">
+                    <span>Best: {(trainResult.training_summary.best_return * 100).toFixed(2)}%</span>
+                    <span>Median: {(trainResult.training_summary.median_return * 100).toFixed(2)}%</span>
+                    <span>Worst: {(trainResult.training_summary.worst_return * 100).toFixed(2)}%</span>
+                    <span>
+                      Profitable: {trainResult.training_summary.profitable_evaluations}/{trainResult.training_summary.evaluations}
+                    </span>
+                    <span>Median Sharpe: {trainResult.training_summary.median_sharpe.toFixed(2)}</span>
+                    <span>Median DD: {(trainResult.training_summary.median_drawdown * 100).toFixed(2)}%</span>
+                  </div>
+                )}
+                {trainResult.training_summary?.warnings?.length ? (
+                  <div className="rounded-md border border-amber-400/40 bg-amber-100/20 p-2 text-xs">
+                    {trainResult.training_summary.warnings.slice(0, 2).map((warning) => (
+                      <p key={warning}>- {warning}</p>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

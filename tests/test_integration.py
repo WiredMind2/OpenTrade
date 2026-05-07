@@ -142,19 +142,7 @@ class TestIntegrationWorkflow:
                 error TEXT
             )
         """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS trading_model_predictions (
-                id INTEGER PRIMARY KEY,
-                ticker TEXT,
-                suggested_position_pct REAL,
-                dt TEXT,
-                confidence REAL,
-                predicted_return REAL,
-                enter_prob REAL,
-                exit_prob REAL,
-                model TEXT
-            )
-        """)
+        # legacy trading_model_predictions removed
         conn.execute("""
             CREATE TABLE IF NOT EXISTS backtest_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -7,7 +7,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import backtrader as bt
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
 
 from backend.domain.trading import ExecutionConfig, OrderIntent, TargetAllocation
@@ -69,14 +69,19 @@ def _decision_markers_from_signal_execution(execution: Dict[str, Any]) -> List[D
         if reason:
             row["reason"] = reason
         out.append(row)
-    return out[:500]
+    # Return all markers; frontend controls any thinning if desired.
+    out.sort(key=lambda r: str(r.get("date", ""))[:10])
+    return out
 
 
 def _normalize_bt_decision_markers(raw: Any) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     if not isinstance(raw, list):
         return []
-    for m in raw[:500]:
+    # Return all markers; frontend controls any thinning if desired.
+    raw_sorted = list(raw)
+    raw_sorted.sort(key=lambda r: str(r.get("date", ""))[:10] if isinstance(r, dict) else "")
+    for m in raw_sorted:
         if not isinstance(m, dict):
             continue
         d = m.get("date")
@@ -106,6 +111,26 @@ def _build_execution_config(parameters: Dict[str, Any]) -> ExecutionConfig:
         max_gross_exposure=float(parameters.get("max_gross_exposure", 1.0)),
         rebalance_frequency=str(parameters.get("rebalance_frequency", "daily")),
     )
+
+
+def _should_rebalance_signal(
+    current_day: date,
+    last_rebalance_day: Optional[date],
+    frequency: str,
+) -> bool:
+    if last_rebalance_day is None:
+        return True
+    freq = (frequency or "daily").strip().lower()
+    if freq == "daily":
+        return True
+    if freq == "weekly":
+        return current_day.isocalendar()[:2] != last_rebalance_day.isocalendar()[:2]
+    if freq == "monthly":
+        return (current_day.year, current_day.month) != (
+            last_rebalance_day.year,
+            last_rebalance_day.month,
+        )
+    return True
 
 
 def _run_signal_execution_backtest(
@@ -142,8 +167,10 @@ def _run_signal_execution_backtest(
     signal_records: List[TargetAllocation] = []
     order_intents: List[OrderIntent] = []
     order_fills: List[Dict[str, Any]] = []
+    last_rebalance_day: Optional[date] = None
 
     for date_str in all_dates:
+        current_day = datetime.fromisoformat(date_str).date()
         current_prices: Dict[str, float] = {}
         symbols: List[str] = []
         for ticker in price_frames.keys():
@@ -155,6 +182,16 @@ def _run_signal_execution_backtest(
         if not symbols:
             continue
         as_of = datetime.fromisoformat(date_str)
+        if not _should_rebalance_signal(
+            current_day,
+            last_rebalance_day,
+            exec_config.rebalance_frequency,
+        ):
+            mtm_value = cash + sum(
+                (positions.get(t, 0.0) * current_prices.get(t, 0.0)) for t in current_prices
+            )
+            equity_curve.append({"date": date_str, "value": mtm_value})
+            continue
         allocations = strategy.generate_target_allocations(
             parameters=parameters,
             symbols=symbols,
@@ -162,6 +199,13 @@ def _run_signal_execution_backtest(
             current_prices=current_prices,
             db_conn=signal_db_conn,
         )
+        gross_target = float(
+            np.sum([abs(float(getattr(alloc, "target_pct", 0.0) or 0.0)) for alloc in allocations])
+        )
+        if gross_target > 0 and exec_config.max_gross_exposure > 0 and gross_target > exec_config.max_gross_exposure:
+            scale = exec_config.max_gross_exposure / gross_target
+            for alloc in allocations:
+                alloc.target_pct = float(alloc.target_pct) * scale
         signal_records.extend(allocations)
 
         total_value = cash + sum((positions.get(t, 0.0) * current_prices.get(t, 0.0)) for t in current_prices)
@@ -237,6 +281,7 @@ def _run_signal_execution_backtest(
             )
         mtm_value = cash + sum((positions.get(t, 0.0) * current_prices.get(t, 0.0)) for t in current_prices)
         equity_curve.append({"date": date_str, "value": mtm_value})
+        last_rebalance_day = current_day
 
     final_value = equity_curve[-1]["value"] if equity_curve else float(initial_capital)
     total_return = (final_value - initial_capital) / initial_capital if initial_capital else 0.0
@@ -468,6 +513,14 @@ def persist_optimizer_evaluation_run(
         decision_markers = _normalize_bt_decision_markers(raw_markers)
     else:
         decision_markers = _decision_markers_from_signal_execution(execution)
+    # #region agent log
+    try:
+        import json as _json, time as _time
+        with open(r"c:\Users\willi\Documents\Python\Trading\backtesting\.cursor\debug-2acb83.log","a",encoding="utf-8") as _f:
+            _f.write(_json.dumps({"sessionId":"2acb83","runId":"post-fix","hypothesisId":"H6","location":"backtest_engine.py:persist_optimizer_evaluation_run","message":"Persisting optimizer decision_markers length","data":{"strategy":strategy_name,"markers":len(decision_markers) if isinstance(decision_markers,list) else None,"first":decision_markers[0]["date"][:10] if isinstance(decision_markers,list) and decision_markers else None,"last":decision_markers[-1]["date"][:10] if isinstance(decision_markers,list) and decision_markers else None}, "timestamp":int(_time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
 
     conn = sqlite3.connect(database_path)
     try:
@@ -721,8 +774,20 @@ async def run_backtest_background(
                 db_path, pending_run_id, {"phase": "loading_data"}, conn=metrics_conn
             )
 
-        strategy_class = strategy.create_backtrader_strategy(parameters)
-        execution_mode = str(parameters.get("execution_mode", "backtrader")).lower()
+        strategy_parameters = {
+            **parameters,
+            # Preserve indicator warmup history while blocking pre-window trading in strategies
+            # that declare this optional parameter.
+            "backtest_start_date": start_date.date().isoformat(),
+        }
+        strategy_class = strategy.create_backtrader_strategy(strategy_parameters)
+        requested_execution_mode = str(parameters.get("execution_mode", "backtrader")).lower()
+        execution_mode = "backtrader"
+        if requested_execution_mode == "signal":
+            logger.warning(
+                "Signal execution mode requested for %s but is disabled; forcing backtrader",
+                strategy_name,
+            )
 
         # Add data feeds for tickers that have predictions
         min_bars_required = max(
@@ -744,24 +809,18 @@ async def run_backtest_background(
                     db_path, pending_run_id, {"phase": "loading_prices"}, conn=metrics_conn
                 )
 
-            # Prefer tickers with predictions in-range.
-            cur.execute("""
+            # Universe selection (predictions-free): use available price history directly.
+            cur.execute(
+                """
                 SELECT DISTINCT ticker
-                FROM trading_model_predictions
-                WHERE dt >= ? AND dt <= ?
-            """, (start_date.date().isoformat(), end_date.date().isoformat()))
-
+                FROM price_daily
+                WHERE date >= ? AND date <= ?
+                ORDER BY ticker ASC
+                LIMIT 10
+                """,
+                (start_date.date().isoformat(), end_date.date().isoformat()),
+            )
             tickers = [row[0] for row in cur.fetchall()]
-            if not tickers:
-                # Fallback for non-ML strategies: use available price history directly.
-                cur.execute("""
-                    SELECT DISTINCT ticker
-                    FROM price_daily
-                    WHERE date >= ? AND date <= ?
-                    ORDER BY ticker ASC
-                    LIMIT 10
-                """, (start_date.date().isoformat(), end_date.date().isoformat()))
-                tickers = [row[0] for row in cur.fetchall()]
 
             for ticker in tickers[:10]:  # Limit to 10 tickers for performance
                 # Get price data with a lookback window so indicators can warm up.
@@ -826,62 +885,29 @@ async def run_backtest_background(
                 db_path, pending_run_id, {"phase": "executing"}, conn=metrics_conn
             )
 
-        if execution_mode == "signal":
-            logger.info(f"Starting signal execution for {strategy_name}")
-            sig_conn = sqlite3.connect(app_state["database_path"])
-            try:
-                execution = _run_signal_execution_backtest(
-                    strategy=strategy,
-                    strategy_name=strategy_name,
-                    start_date=start_date,
-                    end_date=end_date,
-                    initial_capital=initial_capital,
-                    parameters=parameters,
-                    price_frames=price_frames,
-                    signal_db_conn=sig_conn,
-                )
-            finally:
-                sig_conn.close()
-            final_value = execution["final_value"]
-            total_return = execution["total_return"]
-            annualized_return = execution["annualized_return"]
-            sharpe_ratio = execution["sharpe_ratio"]
-            max_drawdown = execution["max_drawdown"]
-            win_rate = execution["win_rate"]
-            total_trades = execution["total_trades"]
-            avg_trade_return = execution["avg_trade_return"]
-            volatility = execution["volatility"]
-            equity_curve = execution["equity_curve"]
-            trades = execution["trades"]
-            execution_summary = execution["execution_summary"]
-            signal_records = execution["signal_records"]
-            order_intents = execution["order_intents"]
-            order_fills = execution["order_fills"]
-            decision_markers = _decision_markers_from_signal_execution(execution)
-        else:
-            logger.info(f"Starting Backtrader execution for {strategy_name}")
-            execution = run_backtrader_once(
-                strategy_class=strategy_class,
-                strategy_kwargs=_backtrader_strategy_kwargs(strategy_class, parameters),
-                price_frames=price_frames,
-                config=build_run_config(initial_capital=initial_capital, parameters=parameters),
-            )
-            final_value = execution["final_value"]
-            total_return = execution["total_return"]
-            annualized_return = execution["annualized_return"]
-            sharpe_ratio = execution["sharpe_ratio"]
-            max_drawdown = execution["max_drawdown"]
-            win_rate = execution["win_rate"]
-            total_trades = execution["total_trades"]
-            avg_trade_return = execution["avg_trade_return"]
-            volatility = execution["volatility"]
-            equity_curve = execution["equity_curve"]
-            trades = execution["trades"]
-            execution_summary = execution["execution_summary"]
-            signal_records = []
-            order_intents = []
-            order_fills = []
-            decision_markers = execution.get("decision_markers") or []
+        logger.info(f"Starting Backtrader execution for {strategy_name}")
+        execution = run_backtrader_once(
+            strategy_class=strategy_class,
+            strategy_kwargs=_backtrader_strategy_kwargs(strategy_class, strategy_parameters),
+            price_frames=price_frames,
+            config=build_run_config(initial_capital=initial_capital, parameters=strategy_parameters),
+        )
+        final_value = execution["final_value"]
+        total_return = execution["total_return"]
+        annualized_return = execution["annualized_return"]
+        sharpe_ratio = execution["sharpe_ratio"]
+        max_drawdown = execution["max_drawdown"]
+        win_rate = execution["win_rate"]
+        total_trades = execution["total_trades"]
+        avg_trade_return = execution["avg_trade_return"]
+        volatility = execution["volatility"]
+        equity_curve = execution["equity_curve"]
+        trades = execution["trades"]
+        execution_summary = execution["execution_summary"]
+        signal_records = []
+        order_intents = []
+        order_fills = []
+        decision_markers = execution.get("decision_markers") or []
 
         # Store results in database
         params_hash = compute_params_hash(parameters)
@@ -909,6 +935,14 @@ async def run_backtest_background(
             "params_hash": params_hash,
             "decision_markers": decision_markers,
         }
+        # #region agent log
+        try:
+            import json as _json, time as _time
+            with open(r"c:\Users\willi\Documents\Python\Trading\backtesting\.cursor\debug-2acb83.log","a",encoding="utf-8") as _f:
+                _f.write(_json.dumps({"sessionId":"2acb83","runId":"post-fix","hypothesisId":"H6","location":"backtest_engine.py:run_backtest_background","message":"Completed run decision_markers length","data":{"strategy":strategy_name,"markers":len(decision_markers) if isinstance(decision_markers,list) else None,"first":decision_markers[0]["date"][:10] if isinstance(decision_markers,list) and decision_markers else None,"last":decision_markers[-1]["date"][:10] if isinstance(decision_markers,list) and decision_markers else None}, "timestamp":int(_time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
 
         if pending_run_id is not None:
             cur.execute(

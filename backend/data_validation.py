@@ -658,7 +658,7 @@ class DataQualityMonitor:
         """Run quality checks on specified tables."""
         if tables is None:
             # Default tables to check
-            tables = ['tickers', 'articles', 'price_daily', 'sentiment_predictions', 'trading_model_predictions']
+            tables = ['tickers', 'articles', 'price_daily', 'sentiment_predictions']
         
         reports = {}
         

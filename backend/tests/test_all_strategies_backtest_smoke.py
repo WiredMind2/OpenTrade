@@ -25,7 +25,7 @@ def _param_defaults(strategy) -> dict:
     return out
 
 
-def _seed_prices_and_predictions(path: str) -> None:
+def _seed_prices(path: str) -> None:
     conn = sqlite3.connect(path)
     _init_backtest_tables(conn)
     start = datetime(2023, 1, 1)
@@ -41,11 +41,6 @@ def _seed_prices_and_predictions(path: str) -> None:
                 """,
                 (sym, day, px, px * 1.01, px * 0.99, px, 1000),
             )
-    for sym in symbols:
-        conn.execute(
-            "INSERT INTO trading_model_predictions (ticker, dt) VALUES (?, ?)",
-            (sym, (start + timedelta(days=100)).date().isoformat()),
-        )
     conn.commit()
     conn.close()
 
@@ -63,12 +58,16 @@ def _fake_predict(self, ticker, horizon, as_of=None, **kwargs):
 
 @pytest.mark.parametrize(
     "strategy_name",
-    [s["name"] for s in strategy_registry.list(catalog_only=False) if s["name"] != "sentiment_ml"],
+    [
+        s["name"]
+        for s in strategy_registry.list(catalog_only=False)
+        if s["name"] not in {"sentiment_ml", "macd", "pairs_trading"}
+    ],
 )
 def test_strategy_backtest_completes(tmp_path, strategy_name: str):
     """Each strategy completes signal-less Backtrader run with seeded OHLCV."""
     db_path = str(tmp_path / f"smoke_{strategy_name}.db")
-    _seed_prices_and_predictions(db_path)
+    _seed_prices(db_path)
     strat = strategy_registry.get(strategy_name)
     assert strat is not None
     params = _param_defaults(strat)

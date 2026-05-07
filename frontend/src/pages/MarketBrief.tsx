@@ -298,18 +298,6 @@ export default function MarketBrief() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-tv-text-primary">Market Brief</h1>
-          <p className="mt-1 text-sm text-tv-text-secondary">
-            A plain-English view of direction, risk, signals, headlines, and strategy evidence.
-          </p>
-        </div>
-        <Button type="button" variant="outline" onClick={loadBrief}>
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Refresh
-        </Button>
-      </div>
 
       <div className="grid gap-3 md:grid-cols-3">
         <Card>

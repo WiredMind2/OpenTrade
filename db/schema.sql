@@ -101,21 +101,6 @@ CREATE TABLE IF NOT EXISTS features (
 );
 CREATE INDEX IF NOT EXISTS idx_features_ticker_dt ON features(ticker, dt);
 
--- Trading-model predictions / decisions (one row per ticker per decision timestamp)
-CREATE TABLE IF NOT EXISTS trading_model_predictions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticker TEXT,
-  dt TEXT,
-  model TEXT,
-  predicted_return REAL,
-  enter_prob REAL,
-  suggested_position_pct REAL,
-  exit_prob REAL,
-  produced_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY(ticker) REFERENCES tickers(ticker) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_trading_pred_ticker_dt ON trading_model_predictions(ticker, dt);
-
 -- Backtest runs metadata
 CREATE TABLE IF NOT EXISTS backtest_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

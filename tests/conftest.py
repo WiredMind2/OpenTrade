@@ -208,19 +208,6 @@ CREATE TABLE IF NOT EXISTS sentiment_predictions (
   FOREIGN KEY(ticker) REFERENCES tickers(ticker) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS trading_model_predictions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticker TEXT,
-  dt TEXT,
-  model TEXT,
-  predicted_return REAL,
-  enter_prob REAL,
-  suggested_position_pct REAL,
-  exit_prob REAL,
-  produced_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY(ticker) REFERENCES tickers(ticker) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS backtest_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT,

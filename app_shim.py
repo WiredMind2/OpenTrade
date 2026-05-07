@@ -42,12 +42,6 @@ except Exception:
         pass
 
     try:
-        from backend.routes.predictions import router as predictions_router
-        app.include_router(predictions_router)
-    except Exception:
-        pass
-
-    try:
         from backend.routes.backtests import router as backtests_router
         app.include_router(backtests_router)
     except Exception:

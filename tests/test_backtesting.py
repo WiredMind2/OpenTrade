@@ -23,18 +23,7 @@ class TestBacktesting:
 
     def test_backtest_basic_functionality(self, populated_test_db):
         """Test basic backtest execution."""
-        # This would test the backtest_runner.py functionality
-        import sys
-        from pathlib import Path
-        sys.path.append(str(Path(__file__).parent.parent / 'scripts'))
-
-        # Mock the backtest runner functions
-        def load_trading_predictions(conn, date_str):
-            """Mock function to load trading predictions for a given date."""
-            cur = conn.cursor()
-            cur.execute('SELECT ticker, suggested_position_pct FROM trading_model_predictions WHERE dt = ?', (date_str,))
-            return cur.fetchall()
-
+        # Legacy trading_model_predictions-based runner was removed; basic DB sanity only.
         def get_open_price(conn, ticker, date_str):
             """Mock function to get opening price for a ticker on a date."""
             cur = conn.cursor()
@@ -43,10 +32,6 @@ class TestBacktesting:
             return r[0] if r else None
 
         conn = sqlite3.connect(populated_test_db)
-
-        # Test loading predictions (should return empty since we don't have trading predictions)
-        predictions = load_trading_predictions(conn, '2024-01-01')
-        assert isinstance(predictions, list)
 
         # Test getting price data
         price = get_open_price(conn, 'AAPL', '2024-01-01')
@@ -433,178 +418,6 @@ class TestBacktesting:
         # Simple introspection to ensure functions exist
         assert inspect.isclass(fe_mod.FeatureEngineer)
 
-    # Tests for backend/scripts/backtest_runner.py
-    def test_load_trading_predictions(self, populated_test_db):
-        """Test loading trading predictions from database."""
-        from backend.scripts.backtest_runner import load_trading_predictions
-
-        conn = sqlite3.connect(populated_test_db)
-
-        # Test with no predictions
-        preds = load_trading_predictions(conn, '2024-01-01')
-        assert isinstance(preds, list)
-        assert len(preds) == 0
-
-        # Insert test prediction
-        conn.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
-            VALUES (?, ?, ?)
-        """, ('AAPL', 0.1, '2024-01-01'))
-        conn.commit()
-
-        # Test loading predictions
-        preds = load_trading_predictions(conn, '2024-01-01')
-        assert len(preds) == 1
-        assert preds[0] == ('AAPL', 0.1)
-
-        conn.close()
-
-    def test_get_open_price(self, populated_test_db):
-        """Test getting opening price for a ticker on a date."""
-        from backend.scripts.backtest_runner import get_open_price
-
-        conn = sqlite3.connect(populated_test_db)
-
-        # Test existing price
-        price = get_open_price(conn, 'AAPL', '2024-01-01')
-        assert price is not None
-        assert isinstance(price, (int, float))
-
-        # Test non-existent ticker
-        price = get_open_price(conn, 'NONEXISTENT', '2024-01-01')
-        assert price is None
-
-        # Test non-existent date
-        price = get_open_price(conn, 'AAPL', '2025-01-01')
-        assert price is None
-
-        conn.close()
-
-    def test_run_backtest_execution(self, populated_test_db, capsys):
-        """Test the main backtest execution logic."""
-        from backend.scripts.backtest_runner import run_backtest
-
-        # Insert trading predictions
-        conn = sqlite3.connect(populated_test_db)
-        conn.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
-            VALUES (?, ?, ?)
-        """, ('AAPL', 0.1, '2024-01-01'))
-        conn.commit()
-        conn.close()
-
-        # Run backtest
-        run_backtest(populated_test_db, '2024-01-01', '2024-01-05', initial_capital=10000.0)
-
-        # Check output
-        captured = capsys.readouterr()
-        assert 'total_value=' in captured.out
-
-    def test_run_backtest_no_predictions(self, populated_test_db):
-        """Test backtest execution with no predictions."""
-        from backend.scripts.backtest_runner import run_backtest
-
-        # Ensure there are dates in price_daily
-        conn = sqlite3.connect(populated_test_db)
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM price_daily WHERE date >= '2024-01-01' AND date <= '2024-01-05'")
-        count = cur.fetchone()[0]
-        assert count > 0, "Test database should have price data for the date range"
-        conn.close()
-
-        # Run backtest with no predictions - should complete without error
-        run_backtest(populated_test_db, '2024-01-01', '2024-01-05')
-
-    def test_run_backtest_exposure_cap(self, populated_test_db):
-        """Test exposure cap enforcement in backtest."""
-        from backend.scripts.backtest_runner import run_backtest
-
-        # Insert multiple predictions exceeding exposure cap
-        conn = sqlite3.connect(populated_test_db)
-        predictions = [
-            ('AAPL', 0.4, '2024-01-01'),
-            ('MSFT', 0.4, '2024-01-01'),
-            ('GOOGL', 0.3, '2024-01-01')
-        ]
-        conn.executemany("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
-            VALUES (?, ?, ?)
-        """, predictions)
-        conn.commit()
-        conn.close()
-
-        # Run backtest with exposure cap of 0.5
-        # This should scale down the allocations
-        run_backtest(populated_test_db, '2024-01-01', '2024-01-01', exposure_cap=0.5)
-
-        # Verify the logic works (positions should be scaled)
-        # The function prints output, but we can check it doesn't crash
-
-    def test_run_backtest_insufficient_capital(self, populated_test_db):
-        """Test backtest execution with insufficient capital for trades."""
-        from backend.scripts.backtest_runner import run_backtest
-
-        # Insert prediction that would require more capital than available
-        conn = sqlite3.connect(populated_test_db)
-        conn.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
-            VALUES (?, ?, ?)
-        """, ('AAPL', 1.0, '2024-01-01'))  # 100% allocation
-        conn.commit()
-        conn.close()
-
-        # Run backtest with very low capital
-        run_backtest(populated_test_db, '2024-01-01', '2024-01-01', initial_capital=10.0)
-
-        # Should skip the trade due to insufficient capital
-
-    # Database integration tests
-    def test_database_connection_handling(self, populated_test_db):
-        """Test proper database connection handling."""
-        # Test that connections are properly opened and closed
-        conn = sqlite3.connect(populated_test_db)
-        cur = conn.cursor()
-
-        # Test basic queries work
-        cur.execute("SELECT COUNT(*) FROM price_daily")
-        count = cur.fetchone()[0]
-        assert isinstance(count, int)
-
-        cur.execute("SELECT COUNT(*) FROM trading_model_predictions")
-        pred_count = cur.fetchone()[0]
-        assert isinstance(pred_count, int)
-
-        conn.close()
-
-    def test_database_transaction_integrity(self, populated_test_db):
-        """Test database transaction integrity."""
-        conn = sqlite3.connect(populated_test_db)
-        cur = conn.cursor()
-
-        # Start transaction
-        cur.execute("BEGIN")
-
-        # Insert test data
-        cur.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
-            VALUES (?, ?, ?)
-        """, ('TEST', 0.05, '2024-01-01'))
-
-        # Check it exists in transaction
-        cur.execute("SELECT COUNT(*) FROM trading_model_predictions WHERE ticker = 'TEST'")
-        count = cur.fetchone()[0]
-        assert count == 1
-
-        # Rollback
-        conn.rollback()
-
-        # Check it's gone
-        cur.execute("SELECT COUNT(*) FROM trading_model_predictions WHERE ticker = 'TEST'")
-        count = cur.fetchone()[0]
-        assert count == 0
-
-        conn.close()
-
     # Core execution logic tests
     def test_position_sizing_edge_cases(self):
         """Test position sizing with edge cases."""
@@ -673,33 +486,21 @@ class TestBacktesting:
 
         active_connections.clear()
 
-    # Error handling tests
-    def test_database_error_handling(self, tmp_path):
-        """Test error handling for database issues."""
-        from backend.scripts.backtest_runner import run_backtest
-
-        # Test with invalid database path
-        invalid_db = str(tmp_path / "nonexistent.db")
-
-        # Should not crash, but may not do much
-        try:
-            run_backtest(invalid_db, '2024-01-01', '2024-01-05')
-        except Exception:
-            # Expected to potentially fail, but should handle gracefully
-            pass
-
     def test_missing_data_error_handling(self, populated_test_db):
         """Test error handling when required data is missing."""
-        from backend.scripts.backtest_runner import get_open_price
-
         conn = sqlite3.connect(populated_test_db)
 
         # Test with valid data
-        price = get_open_price(conn, 'AAPL', '2024-01-01')
+        cur = conn.cursor()
+        cur.execute('SELECT open FROM price_daily WHERE ticker = ? AND date = ?', ('AAPL', '2024-01-01'))
+        r = cur.fetchone()
+        price = r[0] if r else None
         assert price is not None
 
         # Test with missing data - should return None gracefully
-        price = get_open_price(conn, 'AAPL', '2099-01-01')
+        cur.execute('SELECT open FROM price_daily WHERE ticker = ? AND date = ?', ('AAPL', '2099-01-01'))
+        r2 = cur.fetchone()
+        price = r2[0] if r2 else None
         assert price is None
 
         conn.close()
@@ -710,15 +511,6 @@ class TestBacktesting:
         """Test full backtest engine execution to cover more lines."""
         from backend.routes.backtest_engine import run_backtest_background
         from backend.strategies.moving_average import MovingAverageStrategy
-
-        # Insert test predictions
-        conn = sqlite3.connect(populated_test_db)
-        conn.execute("""
-            INSERT INTO trading_model_predictions (ticker, suggested_position_pct, dt)
-            VALUES (?, ?, ?)
-        """, ('AAPL', 0.1, '2024-01-01'))
-        conn.commit()
-        conn.close()
 
         class _Registry:
             def get(self, strategy_name):

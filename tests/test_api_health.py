@@ -39,15 +39,6 @@ class TestAPIHealthEndpoints:
             )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS trading_model_predictions (
-                id INTEGER PRIMARY KEY,
-                ticker TEXT,
-                suggested_position_pct REAL,
-                dt TEXT,
-                confidence REAL
-            )
-        """)
-        conn.execute("""
             CREATE TABLE IF NOT EXISTS backtest_runs (
                 id TEXT PRIMARY KEY,
                 name TEXT,

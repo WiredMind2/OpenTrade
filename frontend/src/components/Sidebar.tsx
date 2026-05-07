@@ -10,27 +10,52 @@ import {
   LineChart,
   BookOpen,
   Newspaper,
+  Sparkles,
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
 import { ThemeToggle } from './ThemeToggle'
+import { prefetchRoute } from '../routes'
 
 interface SidebarProps {
   className?: string
+  collapsed?: boolean
+  onCollapsedChange?: (collapsed: boolean) => void
 }
 
 const navigation = [
-  { name: 'Market Brief', href: '/brief', icon: Newspaper },
   { name: 'Predictions', href: '/predictions', icon: TrendingUp },
+  { name: 'Market Brief', href: '/brief', icon: Newspaper },
   { name: 'Backtests', href: '/backtests', icon: BarChart3 },
-  { name: 'Strategy Performance', href: '/strategy-performance', icon: LineChart },
+  { name: 'Performance', href: '/strategy-performance', icon: LineChart },
   { name: 'Scripts', href: '/scripts', icon: Settings },
   { name: 'Recommendations', href: '/recommendations', icon: BookOpen },
 ]
 
-export function Sidebar({ className }: SidebarProps) {
+function usePrefetchOnIntent() {
+  const lastPrefetchedRef = React.useRef<string | null>(null)
+
+  return React.useCallback((path: string) => {
+    if (lastPrefetchedRef.current === path) return
+    lastPrefetchedRef.current = path
+    prefetchRoute(path)
+  }, [])
+}
+
+export function Sidebar({
+  className,
+  collapsed: collapsedProp,
+  onCollapsedChange,
+}: SidebarProps) {
   const location = useLocation()
-  const [collapsed, setCollapsed] = useState(false)
+  const [uncontrolledCollapsed, setUncontrolledCollapsed] = useState(false)
+  const prefetch = usePrefetchOnIntent()
+
+  const collapsed = collapsedProp ?? uncontrolledCollapsed
+  const setCollapsed = (next: boolean) => {
+    if (collapsedProp === undefined) setUncontrolledCollapsed(next)
+    onCollapsedChange?.(next)
+  }
 
   return (
     <aside
@@ -76,6 +101,8 @@ export function Sidebar({ className }: SidebarProps) {
               <Link
                 key={item.name}
                 to={item.href}
+                onMouseEnter={() => prefetch(item.href)}
+                onFocus={() => prefetch(item.href)}
                 className={cn(
                   'flex items-center gap-2 rounded px-2 py-1.5 text-sm font-medium transition-tv',
                   isActive
@@ -112,6 +139,7 @@ export function Sidebar({ className }: SidebarProps) {
 export function MobileSidebar() {
   const [open, setOpen] = useState(false)
   const location = useLocation()
+  const prefetch = usePrefetchOnIntent()
 
   // Close sidebar when route changes
   React.useEffect(() => {
@@ -167,6 +195,8 @@ export function MobileSidebar() {
                 <Link
                   key={item.name}
                   to={item.href}
+                onMouseEnter={() => prefetch(item.href)}
+                onFocus={() => prefetch(item.href)}
                   className={cn(
                     'flex items-center gap-2 rounded px-2 py-1.5 text-sm font-medium transition-tv',
                     isActive

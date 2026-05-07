@@ -31,7 +31,6 @@ setup_logging()
 # Import route modules (package-relative)
 from backend.routes.health import router as health_router
 from backend.routes.monitoring import router as monitoring_router
-from backend.routes.predictions import router as predictions_router
 from backend.routes.backtests import router as backtests_router
 from backend.routes.models_endpoints import router as models_router
 from backend.routes.portfolio import router as portfolio_router
@@ -182,8 +181,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Include route modules
 app.include_router(health_router)
 app.include_router(monitoring_router)
-app.include_router(predictions_router)
-logger.info(f"Predictions router included, routes: {[route.path for route in predictions_router.routes]}")
 app.include_router(backtests_router)
 app.include_router(models_router, prefix="/api")
 app.include_router(strategies_router, prefix="/api", tags=["strategies"])

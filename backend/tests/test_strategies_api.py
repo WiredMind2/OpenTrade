@@ -345,13 +345,14 @@ class TestStrategyProjectionLogic:
 
     def test_sentiment_ml_project_method(self):
         """Test the project method of SentimentMLStrategy."""
-        from backend.strategies.sentiment_ml import SentimentMLStrategy
+        pytest.skip("sentiment_ml strategy module removed from backend/strategies")
 
         # Mock database connection to simulate missing table (fallback behavior)
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         # Simulate table not existing
+        # predictions table was removed; this legacy query should no longer exist
         mock_cursor.execute.side_effect = Exception("no such table: trading_model_predictions")
 
         with patch('backend.main.app_state', {'database_path': 'data/backtest.db'}), \
@@ -419,7 +420,7 @@ class TestStrategyProjectionLogic:
 
     def test_sentiment_ml_project_with_mock_data(self):
         """Test sentiment ML projection with mocked database data."""
-        from backend.strategies.sentiment_ml import SentimentMLStrategy
+        pytest.skip("sentiment_ml strategy module removed from backend/strategies")
 
         # Mock database connection and data
         mock_conn = MagicMock()
@@ -450,9 +451,7 @@ class TestStrategyProjectionLogic:
     def test_projection_response_format(self):
         """Test that projection responses have consistent format."""
         from backend.strategies.moving_average import MovingAverageStrategy
-        from backend.strategies.sentiment_ml import SentimentMLStrategy
-
-        strategies = [MovingAverageStrategy(), SentimentMLStrategy()]
+        strategies = [MovingAverageStrategy()]
 
         for strategy in strategies:
             result = strategy.project(

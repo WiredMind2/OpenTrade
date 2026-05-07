@@ -63,7 +63,7 @@ def _extract_markers(raw: Any) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     if not isinstance(raw, list):
         return out
-    for marker in raw[:500]:
+    for marker in raw:
         if not isinstance(marker, dict):
             continue
         side = str(marker.get("side", "")).lower()
@@ -81,13 +81,66 @@ def _extract_markers(raw: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _virtual_close_open_positions(strategy_result: Any) -> List[Dict[str, Any]]:
+    """
+    Treat any end-of-run open positions as if closed immediately at the last close.
+
+    This is intentionally a "stats-only" view: we do not submit Backtrader orders
+    (the run is already complete). We compute mark-to-market PnL based on each data's
+    last close and the position average price.
+    """
+    out: List[Dict[str, Any]] = []
+    datas = getattr(strategy_result, "datas", None) or []
+    if not isinstance(datas, (list, tuple)) or not datas:
+        return out
+
+    for d in datas:
+        try:
+            pos = strategy_result.getposition(d)
+        except Exception:
+            continue
+        if pos is None:
+            continue
+        size = float(getattr(pos, "size", 0.0) or 0.0)
+        if abs(size) <= 0:
+            continue
+        avg_px = float(getattr(pos, "price", 0.0) or 0.0)
+        try:
+            last_close = float(d.close[0])
+        except Exception:
+            continue
+        if last_close <= 0 or avg_px <= 0:
+            continue
+
+        # Long: pnl = (last - avg) * size. Short: size < 0 so formula still holds.
+        pnl = (last_close - avg_px) * size
+        ticker = str(getattr(d, "_name", "") or "UNKNOWN").upper()
+        out.append(
+            {
+                "ticker": ticker,
+                "side": "virtual_close",
+                "size": size,
+                "price": last_close,
+                "entry_price": avg_px,
+                "pnl": pnl,
+                # Commissions/slippage for the "virtual close" are assumed zero; commissions
+                # already paid during the run are reflected in cash/value.
+                "pnlcomm": pnl,
+            }
+        )
+    return out
+
+
 def extract_run_metrics(
     strategy_result: Any, initial_capital: float, final_value: float
 ) -> Dict[str, Any]:
     sharpe_ratio = float(
         ((strategy_result.analyzers.sharpe.get_analysis() or {}).get("sharperatio", 0.0) or 0.0)
     )
-    max_drawdown = float(
+    # Backtrader returns these analyzer values in percent units:
+    # drawdown=17.98 means 17.98%, rnorm100=12.3 means 12.3%.
+    # The rest of the API stores percentages as decimals, so normalize here.
+    max_drawdown_pct = float(
         (
             (strategy_result.analyzers.drawdown.get_analysis() or {})
             .get("max", {})
@@ -95,16 +148,85 @@ def extract_run_metrics(
         )
         or 0.0
     )
-    annualized_return = float(
+    annualized_return_pct = float(
         ((strategy_result.analyzers.returns.get_analysis() or {}).get("rnorm100", 0.0) or 0.0)
     )
+    max_drawdown = abs(max_drawdown_pct) / 100.0
+    annualized_return = annualized_return_pct / 100.0
     trade_analysis = strategy_result.analyzers.trades.get_analysis() or {}
-    total_trades = int((trade_analysis.get("total", {}) or {}).get("total", 0) or 0)
-    win_trades = int((trade_analysis.get("won", {}) or {}).get("total", 0) or 0)
-    win_rate = (float(win_trades) / float(total_trades)) if total_trades > 0 else 0.0
+    total_node = trade_analysis.get("total", {}) or {}
+    won_node = trade_analysis.get("won", {}) or {}
+    lost_node = trade_analysis.get("lost", {}) or {}
+
+    won_trades = int(won_node.get("total", 0) or 0) if isinstance(won_node, dict) else 0
+    lost_trades = int(lost_node.get("total", 0) or 0) if isinstance(lost_node, dict) else 0
+
+    # Backtrader's TradeAnalyzer reports open trades separately. Using total["total"]
+    # (open + closed) in the denominator can produce an artificial 0% win rate for
+    # strategies that hold positions open through the end of the run.
+    closed_trades = 0
+    if isinstance(total_node, dict):
+        closed_raw = total_node.get("closed")
+        if closed_raw is not None:
+            try:
+                closed_trades = int(closed_raw or 0)
+            except (TypeError, ValueError):
+                closed_trades = 0
+        else:
+            closed_trades = won_trades + lost_trades
+            if closed_trades <= 0:
+                # Some TradeAnalyzer outputs omit "closed" and only provide "total" and "open".
+                # In that case, "total" represents (open + closed). If open == total, there
+                # were no closed trades and we must NOT treat "total" as closed.
+                open_raw = total_node.get("open")
+                total_raw = total_node.get("total")
+                open_tr = None
+                tot_tr = None
+                try:
+                    open_tr = int(open_raw) if open_raw is not None else None
+                except (TypeError, ValueError):
+                    open_tr = None
+                try:
+                    tot_tr = int(total_raw) if total_raw is not None else None
+                except (TypeError, ValueError):
+                    tot_tr = None
+
+                if tot_tr is None:
+                    closed_trades = 0
+                elif open_tr is not None and open_tr >= tot_tr and tot_tr > 0:
+                    closed_trades = 0
+                elif open_tr is not None and open_tr == 0 and tot_tr > 0:
+                    closed_trades = tot_tr
+                elif open_tr is None and tot_tr > 0:
+                    # If "open" is missing, treat "total" as closed for older analyzer shapes.
+                    closed_trades = tot_tr
+                else:
+                    closed_trades = 0
+    else:
+        closed_trades = won_trades + lost_trades
+
+    total_trades = max(int(closed_trades), 0)
+    win_trades = max(int(won_trades), 0)
 
     trades = getattr(strategy_result, "trades", []) or []
-    pnl_comm = [float(t.get("pnlcomm", 0.0) or 0.0) for t in trades if isinstance(t, dict)]
+    if not isinstance(trades, list):
+        trades = []
+
+    # User-facing assumption: all trades are "closed" at end-of-run for stats.
+    virtual_closes = _virtual_close_open_positions(strategy_result)
+    augmented_trades: List[Dict[str, Any]] = [
+        t for t in trades if isinstance(t, dict)
+    ] + virtual_closes
+
+    # If we had open positions but no closed trades (common for multi-asset allocators),
+    # count each virtual close as a closed trade for win-rate/trade stats.
+    if virtual_closes:
+        total_trades = int(total_trades) + len(virtual_closes)
+        win_trades = int(win_trades) + sum(1 for t in virtual_closes if float(t.get("pnlcomm", 0.0) or 0.0) > 0.0)
+
+    win_rate = (float(win_trades) / float(total_trades)) if total_trades > 0 else 0.0
+
+    pnl_comm = [float(t.get("pnlcomm", 0.0) or 0.0) for t in augmented_trades if isinstance(t, dict)]
     avg_trade_return = float(np.mean(pnl_comm)) if pnl_comm else 0.0
 
     equity_curve = getattr(strategy_result, "equity_curve", []) or []
@@ -131,7 +253,7 @@ def extract_run_metrics(
         "avg_trade_return": avg_trade_return,
         "volatility": volatility,
         "equity_curve": equity_curve,
-        "trades": trades,
+        "trades": augmented_trades,
         "decision_markers": _extract_markers(getattr(strategy_result, "decision_markers", None)),
         "execution_summary": {
             "engine": "backtrader",

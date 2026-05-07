@@ -75,8 +75,6 @@ class StrategyPreflightService:
     ) -> PreflightResult:
         profile = strategy.get_capability_profile() if hasattr(strategy, "get_capability_profile") else {}
         min_history_bars = int(profile.get("min_history_bars", 30) or 30)
-        requires_predictions = bool(profile.get("requires_predictions", False))
-        required_horizons = list(profile.get("required_prediction_horizons", []))
 
         issues: List[PreflightIssue] = []
         warnings: List[PreflightIssue] = []
@@ -107,42 +105,6 @@ class StrategyPreflightService:
                         details={"required": min_history_bars, "available": price_count},
                     )
                 )
-
-            if requires_predictions:
-                pred_total = int(
-                    cur.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM trading_model_predictions
-                        WHERE ticker = ? AND dt >= ? AND dt <= ?
-                        """,
-                        (ticker.upper(), start_date.date().isoformat(), end_date.date().isoformat()),
-                    ).fetchone()[0]
-                    or 0
-                )
-                diagnostics["prediction_rows"] = pred_total
-                if pred_total <= 0:
-                    issues.append(
-                        PreflightIssue(
-                            code="PREDICTION_GAP",
-                            severity="error",
-                            message=(
-                                f"No predictions found for {ticker.upper()} in requested period. "
-                                "Run ML prediction pipeline first."
-                            ),
-                            details={"required_horizons": required_horizons},
-                        )
-                    )
-                    suggestions.append("Run prediction generation pipeline before backtesting/training this strategy.")
-                elif pred_total < max(20, min_history_bars // 2):
-                    warnings.append(
-                        PreflightIssue(
-                            code="LOW_PREDICTION_COVERAGE",
-                            severity="warning",
-                            message=f"Prediction coverage is low ({pred_total} rows).",
-                            details={"rows": pred_total},
-                        )
-                    )
         finally:
             conn.close()
 
